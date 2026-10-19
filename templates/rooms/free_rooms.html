@@ -1,0 +1,152 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'rooms/_ui.html' as rm with context %}
+{# Свободные аудитории (владелец — CONFLICTS): день + пара (или своё время) + неделя → свободные и занятые. #}
+{% block title %}Свободные аудитории{% endblock %}
+{% block styles %}{{ ui.css('rooms') }}{% endblock %}
+{% block scripts %}{{ ui.js('rooms') }}{% endblock %}
+
+{% block content %}
+{% call ui.page_header('Свободные аудитории', 'Найдите аудиторию на пару: выберите день, время и неделю', icon='door-closed') %}
+    {{ rm.week_now(current_week, week_number) }}
+    <button type="button" class="btn btn-light" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать</span></button>
+{% endcall %}
+
+{{ rm.tabs('free', tab_counts) }}
+
+<section class="cc-card fr-picker cc-no-print" aria-label="Выбор времени">
+    <div class="fr-picker__row">
+        <span class="fr-picker__label">День</span>
+        <div class="fr-chips" role="group" aria-label="День недели">
+            {% for d in range(6) %}
+            <a class="cc-chip{{ ' active' if d == day }}" href="{{ url_with(day=d, slot=None, **{'from': None, 'to': None}) }}"{% if d == day %} aria-current="true"{% endif %}>{{ day_names[d] }}{% if d == today_wd %} <span class="fr-today">сегодня</span>{% endif %}</a>
+            {% endfor %}
+            {% if day == 6 %}<a class="cc-chip active" aria-current="true" href="{{ url_with(day=6) }}">{{ day_names[6] }}</a>{% endif %}
+        </div>
+    </div>
+    <div class="fr-picker__row">
+        <span class="fr-picker__label">Пара</span>
+        <div class="fr-chips fr-chips--slots" role="group" aria-label="Пара по сетке звонков">
+            {% for label, title, s, e in slots %}
+            <a class="cc-chip cc-num{{ ' active' if label == slot }}{{ ' fr-chip--now' if day == today_wd and s <= now_minutes < e }}" href="{{ url_with(slot=label, **{'from': None, 'to': None}) }}"{% if label == slot %} aria-current="true"{% endif %}>{{ title }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    <form class="fr-picker__row fr-custom" method="get" action="{{ url_for('schedule_free_rooms') }}">
+        <span class="fr-picker__label">Своё время</span>
+        <input type="hidden" name="day" value="{{ day }}"><input type="hidden" name="week" value="{{ week }}">
+        {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
+        <label class="visually-hidden" for="fr-from">С</label>
+        <input class="form-control form-control-sm" type="time" id="fr-from" name="from" value="{{ from_value }}" step="300">
+        <span aria-hidden="true">—</span>
+        <label class="visually-hidden" for="fr-to">По</label>
+        <input class="form-control form-control-sm" type="time" id="fr-to" name="to" value="{{ to_value }}" step="300">
+        {{ ui.button('Найти', type='submit', icon='search', size='sm') }}
+    </form>
+    <div class="fr-picker__row">
+        <span class="fr-picker__label">Неделя</span>
+        {{ ui.tabs([
+            {'key': 'current', 'label': 'Текущая (' ~ current_week_label|lower ~ ')', 'href': url_with(week='current')},
+            {'key': 'numerator', 'label': 'Числитель', 'href': url_with(week='numerator')},
+            {'key': 'denominator', 'label': 'Знаменатель', 'href': url_with(week='denominator')},
+            {'key': 'both', 'label': 'Обе недели', 'href': url_with(week='both')},
+        ], week, pills=True, label='Неделя') }}
+    </div>
+</section>
+
+<div class="cc-stats">
+    {{ ui.stat_card('Свободно', free|length, 'door-open', tone='success', meta='из %d аудиторий'|format(total)) }}
+    {{ ui.stat_card('Занято', busy|length, 'door-closed', tone=('warning' if busy else None), meta='в это время') }}
+    {{ ui.stat_card('Время', interval, 'clock', meta=day_names[day] ~ (' · идёт сейчас' if is_now else '')) }}
+    {{ ui.stat_card('Неделя', {'current': current_week_label, 'numerator': 'Числитель', 'denominator': 'Знаменатель', 'both': 'Обе'}[week], 'calendar-week', meta=({'current': 'текущая · ' ~ week_number ~ '-я неделя', 'both': 'свободна и в числитель, и в знаменатель'}.get(week, 'занятия «каждую неделю» учитываются'))) }}
+</div>
+
+<div class="fr-layout">
+    <section class="cc-card fr-free">
+        <div class="cc-card__head">
+            <div class="min-w-0">
+                <h2 class="cc-card__title"><i class="bi bi-door-open" aria-hidden="true"></i>Свободны · {{ free|length }}</h2>
+                <p class="cc-card__sub">{{ day_names[day] }}, {{ interval }} · {{ week_label }}</p>
+            </div>
+            <div class="d-flex gap-2 cc-no-print">
+                <form class="fr-search" method="get" action="{{ url_for('schedule_free_rooms') }}" role="search">
+                    {% for k in ('day', 'slot', 'week') %}<input type="hidden" name="{{ k }}" value="{{ {'day': day, 'slot': slot, 'week': week}[k] }}">{% endfor %}
+                    {% if custom %}<input type="hidden" name="from" value="{{ from_value }}"><input type="hidden" name="to" value="{{ to_value }}">{% endif %}
+                    <div class="cc-search"><i class="bi bi-search" aria-hidden="true"></i><input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="Аудитория" aria-label="Поиск аудитории"></div>
+                </form>
+                {% if free %}<button type="button" class="btn btn-light btn-sm" data-copy="{{ copy_text }}" data-copy-message="Список свободных аудиторий скопирован"><i class="bi bi-clipboard" aria-hidden="true"></i><span>Копировать</span></button>{% endif %}
+            </div>
+        </div>
+        <div class="cc-card__body">
+            {% if free %}
+            <ul class="fr-rooms">
+                {% for r in free %}
+                <li class="fr-room{{ ' fr-room--all-day' if r.all_day }}">
+                    <a href="{{ url_for('schedule_rooms', room=r.name) }}" class="fr-room__name">{{ r.name }}</a>
+                    <span class="fr-room__window">{{ r.window }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            {{ ui.empty_state('door-closed', 'Свободных аудиторий нет', 'Попробуйте другую пару или неделю — или посмотрите шахматку ниже.') }}
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="cc-card fr-busy">
+        <div class="cc-card__head"><div><h2 class="cc-card__title"><i class="bi bi-door-closed" aria-hidden="true"></i>Заняты · {{ busy|length }}</h2><p class="cc-card__sub">Кто занимает аудиторию в это время</p></div></div>
+        <div class="cc-card__body--flush">
+            {% if busy %}
+            <ul class="fr-busy__list">
+                {% for r in busy %}
+                <li>
+                    <a class="fr-busy__room" href="{{ url_for('schedule_rooms', room=r.name) }}">{{ r.name }}</a>
+                    <div class="fr-busy__lessons">
+                        {% for l in r.lessons %}
+                        <span class="fr-busy__lesson"><b class="cc-num">{{ l.time_label }}</b> {{ l.groupId or '—' }} · {{ l.subject or 'без дисциплины' }}{% if l.teacher_name or l.teacher %} · {{ l.teacher_name or l.teacher }}{% endif %}{% if l.week != 'always' %} {{ ui.week_badge(l.week, short=True) }}{% endif %}</span>
+                        {% endfor %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="cc-muted px-3 py-3 mb-0">В это время все аудитории свободны.</p>
+            {% endif %}
+        </div>
+    </section>
+</div>
+
+{% if grid_rows %}
+<section class="cc-card fr-grid-card">
+    <div class="cc-card__head">
+        <div class="min-w-0">
+            <h2 class="cc-card__title"><i class="bi bi-grid-3x3" aria-hidden="true"></i>Шахматка: {{ day_names[day]|lower }}</h2>
+            <p class="cc-card__sub">Аудитории × пары сетки звонков · {{ week_label }} · нажмите на свободную клетку, чтобы выбрать пару</p>
+        </div>
+    </div>
+    <div class="fr-grid-wrap">
+        <table class="fr-grid">
+            <thead><tr>
+                <th scope="col" class="fr-grid__room">Аудитория</th>
+                {% for s in grid_slots %}<th scope="col" class="cc-num{{ ' is-selected' if s.label == slot }}{{ ' is-now' if day == today_wd and s.start <= now_minutes < s.end }}">{{ s.title|replace('–', '–​') }}</th>{% endfor %}
+            </tr></thead>
+            <tbody>
+            {% for row in grid_rows %}
+            <tr>
+                <th scope="row" class="fr-grid__room"><a href="{{ url_for('schedule_rooms', room=row.name) }}">{{ row.name }}</a></th>
+                {% for cell in row.cells %}{% set s = grid_slots[loop.index0] %}
+                {% if cell %}
+                <td class="fr-grid__busy{{ ' is-selected' if s.label == slot }}" title="{% for l in cell %}{{ l.time_label }} {{ l.groupId }} · {{ l.subject }}{{ ' · ' ~ (l.teacher_name or l.teacher) if (l.teacher_name or l.teacher) }}{{ '; ' if not loop.last }}{% endfor %}"><span>{{ cell[0].groupId or '•' }}</span>{% if cell|length > 1 %}<b>+{{ cell|length - 1 }}</b>{% endif %}</td>
+                {% else %}
+                <td class="fr-grid__free{{ ' is-selected' if s.label == slot }}"><a href="{{ url_with(slot=s.label, **{'from': None, 'to': None}) }}" aria-label="{{ row.name }}, {{ s.title }} — свободна, выбрать эту пару"></a></td>
+                {% endif %}
+                {% endfor %}
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+<p class="cc-subtle small mt-3">Аудитории — все, что встречаются в расписании (онлайн и пустые не учитываются). Пересечение строгое: пара, которая заканчивается ровно в начале выбранной, не мешает. Обновлено {{ update_time }}.</p>
+{% endblock %}

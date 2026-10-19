@@ -1,0 +1,248 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'rooms/_ui.html' as rm with context %}
+{# Накладки в расписании (владелец — CONFLICTS): Преподаватели | Аудитории | Группы | Качество данных. #}
+{% block title %}Накладки в расписании{% endblock %}
+{% block styles %}{{ ui.css('rooms') }}{% endblock %}
+{% block scripts %}{{ ui.js('rooms') }}{% endblock %}
+
+{% block content %}
+{% set keep = {'q': f.q or None, 'week': f.week or None, 'teacher': f.teacher or None, 'day': f.day, 'room': f.room or None,
+               'group': f.group or None, 'acked': '1' if f.acked else None, 'info': '1' if f.info else None} %}
+{% set export_args = dict(request.args.to_dict(), page=None) %}
+{% call ui.page_header('Накладки в расписании', 'Пересечения преподавателей, аудиторий и групп с учётом числителя и знаменателя', icon='exclamation-diamond') %}
+    {{ rm.week_now(current_week, week_number) }}
+    <form method="post" action="{{ url_for('schedule_conflicts_refresh') }}" class="m-0">
+        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here }}">
+        {{ ui.button('Пересчитать', type='submit', icon='arrow-repeat', variant='light', attrs={'data-loading': 'Считаем…', 'title': 'Перечитать расписание из базы (например, после правок в приложении)'}) }}
+    </form>
+    <div class="dropdown">
+        <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{{ url_for('schedule_conflicts_export', **dict(export_args, format='xlsx')) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel: все вкладки и сводка</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('schedule_conflicts_export', **dict(export_args, format='csv', dim=f.dim)) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV: вкладка «{{ dim_labels[f.dim] }}»</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><button type="button" class="dropdown-item" data-print><i class="bi bi-printer" aria-hidden="true"></i>Печать</button></li>
+        </ul>
+    </div>
+{% endcall %}
+
+{{ rm.tabs('conflicts', tab_counts) }}
+
+<div class="cf-print-head">Накладки в расписании · {{ dim_labels[f.dim] }} · {{ update_time }} · {{ current_week_label|lower }}, {{ week_number }}-я неделя</div>
+
+{% if analysis is none %}
+<section class="cc-card">{{ ui.empty_state('cloud-slash', 'Расписание недоступно', 'Не удалось загрузить занятия. Обновите страницу через минуту.', {'label': 'Обновить', 'href': here, 'icon': 'arrow-repeat'}) }}</section>
+{% else %}
+
+<div class="cc-stats">
+    {{ ui.stat_card('Критичные', summary.critical, 'exclamation-octagon', tone=('danger' if summary.critical else 'success'), href=url_for('schedule_conflicts', dim=f.dim, severity='critical'), meta=('нужно исправить' if summary.critical else 'не найдено')) }}
+    {{ ui.stat_card('Предупреждения', summary.warning, 'exclamation-triangle', tone='warning', href=url_for('schedule_conflicts', dim=f.dim, severity='warning'), meta='подгруппы, дубли, неточные данные') }}
+    {{ ui.stat_card('Преподавателей с накладками', summary.teachers, 'person-exclamation', tone='violet', href=url_for('schedule_conflicts', dim='teacher')) }}
+    {{ ui.stat_card('Проблемы в данных', summary.quality, 'clipboard-x', tone='info', href=url_for('schedule_conflicts', dim='quality'), meta=('критичных — %d'|format(summary.quality_critical) if summary.quality_critical else 'время, дни, преподаватели')) }}
+</div>
+
+<div class="cf-dimbar">
+    {{ ui.tabs([
+        {'key': 'teacher', 'label': 'Преподаватели', 'href': url_for('schedule_conflicts', dim='teacher', **keep), 'icon': 'person-workspace', 'count': tabs_counts.teacher},
+        {'key': 'room', 'label': 'Аудитории', 'href': url_for('schedule_conflicts', dim='room', **keep), 'icon': 'door-open', 'count': tabs_counts.room},
+        {'key': 'group', 'label': 'Группы', 'href': url_for('schedule_conflicts', dim='group', **keep), 'icon': 'people', 'count': tabs_counts.group},
+        {'key': 'quality', 'label': 'Качество данных', 'href': url_for('schedule_conflicts', dim='quality', q=f.q or None, day=f.day, acked='1' if f.acked else None), 'icon': 'clipboard-check', 'count': tabs_counts.quality},
+    ], f.dim, pills=True, label='Вид накладок') }}
+    <div class="cf-quick">
+        {% if f.dim != 'quality' %}
+        <a class="cc-chip{{ ' active' if f.day == today_wd and f.week == 'current' }}" href="{{ url_for('schedule_conflicts', dim=f.dim, day=today_wd, week='current') }}"><i class="bi bi-lightning-charge" aria-hidden="true"></i>Сегодня</a>
+        <a class="cc-chip{{ ' active' if f.day is none and f.week == 'current' }}" href="{{ url_for('schedule_conflicts', dim=f.dim, week='current') }}">Эта неделя</a>
+        {% endif %}
+        {% if summary.accepted %}<a class="cf-accepted-link" href="{{ url_with(acked=None if f.acked else '1', page=None) }}"><i class="bi bi-{{ 'eye-slash' if f.acked else 'check2-circle' }}" aria-hidden="true"></i>{{ 'Скрыть принятые' if f.acked else 'Принято: %d'|format(summary.accepted) }}</a>{% endif %}
+    </div>
+</div>
+
+{% call ui.filters_bar(reset=url_for('schedule_conflicts', dim=f.dim)) %}
+    <input type="hidden" name="dim" value="{{ f.dim }}">
+    {{ ui.filter_search('q', 'Поиск', f.q, 'ФИО, группа, аудитория, дисциплина') }}
+    {% if f.dim != 'quality' %}{{ ui.filter_select('teacher', 'Преподаватель', teacher_options, f.teacher, 'Все преподаватели') }}{% endif %}
+    {{ ui.filter_select('day', 'День', day_options, f.day, 'Все дни') }}
+    {% if f.dim != 'quality' %}{{ ui.filter_select('week', 'Неделя', week_filters, f.week, 'Обе недели') }}{% endif %}
+    {{ ui.filter_select('severity', 'Критичность', [('critical', 'Критично'), ('warning', 'Внимание'), ('info', 'Инфо')], f.severity, 'Все') }}
+    <div class="cc-filters__field cf-toggles">
+        <span class="form-label">Показать</span>
+        <div class="d-flex flex-wrap gap-3">
+            <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="flt-acked" name="acked" value="1"{{ ' checked' if f.acked }} data-autosubmit><label class="form-check-label" for="flt-acked">принятые</label></div>
+            {% if f.dim != 'quality' %}<div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="flt-info" name="info" value="1"{{ ' checked' if f.info }} data-autosubmit><label class="form-check-label" for="flt-info">потоки</label></div>
+            {% else %}<div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="flt-info" name="info" value="1"{{ ' checked' if f.info }} data-autosubmit><label class="form-check-label" for="flt-info">мелочи (инфо)</label></div>{% endif %}
+        </div>
+    </div>
+    {% for k in ('hour', 'room', 'group', 'code') %}{% if f[k] is not none and f[k] != '' %}<input type="hidden" name="{{ k }}" value="{{ f[k] }}">{% endif %}{% endfor %}
+{% endcall %}
+
+{% set chips = [] %}
+{% if f.hour is not none %}{% set _ = chips.append(('hour', '%s%02d:00–%02d:00'|format((day_short[f.day] ~ ', ') if f.day is not none else '', f.hour, f.hour + 1))) %}{% endif %}
+{% if f.room %}{% set _ = chips.append(('room', 'Аудитория ' ~ f.room)) %}{% endif %}
+{% if f.group %}{% set _ = chips.append(('group', 'Группа ' ~ f.group)) %}{% endif %}
+{% if chips %}
+<div class="cf-active cc-no-print" aria-label="Дополнительные фильтры">
+    {% for k, label in chips %}<a class="cc-chip active" href="{{ url_with(**{k: None, 'page': None}) }}" aria-label="Убрать фильтр: {{ label }}">{{ label }} <i class="bi bi-x" aria-hidden="true"></i></a>{% endfor %}
+</div>
+{% endif %}
+
+{% if f.dim == 'quality' %}
+{# ============================== КАЧЕСТВО ДАННЫХ ============================== #}
+{% if fixable %}
+<section class="cc-card cf-fix cc-no-print">
+    <div class="cf-fix__text"><i class="bi bi-magic" aria-hidden="true"></i><div><b>Можно исправить одним нажатием</b><span class="cc-subtle small d-block">Изменения пишутся пачкой с журналом расписания, без уведомлений на каждую пару.</span></div></div>
+    <div class="cf-fix__actions">
+        {% for code, label, n in fixable %}
+        <form method="post" action="{{ url_for('schedule_conflicts_fix') }}" class="m-0"
+              data-confirm="{{ label }}: {{ n }} {{ n|plural('занятие', 'занятия', 'занятий') }}. Изменения попадут в журнал расписания." data-confirm-ok="Исправить" data-confirm-variant="primary" data-confirm-title="Исправить данные">
+            {{ ui.csrf_field() }}<input type="hidden" name="code" value="{{ code }}"><input type="hidden" name="next" value="{{ here }}">
+            {{ ui.button(label ~ ' · ' ~ n, type='submit', icon='wrench-adjustable', variant='outline-primary', size='sm') }}
+        </form>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<nav class="cf-chips cc-no-print" aria-label="Типы проблем">
+    <a class="cc-chip{{ ' active' if not f.code }}" href="{{ url_with(code=None, page=None) }}">Все <span class="cc-chip__count">{{ quality_chips|sum(attribute=3) }}</span></a>
+    {% for code, title, sev, n in quality_chips %}
+    <a class="cc-chip cf-chip--{{ sev }}{{ ' active' if f.code == code }}" href="{{ url_with(code=code, page=None) }}"><span class="cc-dot" aria-hidden="true"></span>{{ title }} <span class="cc-chip__count">{{ n }}</span></a>
+    {% endfor %}
+</nav>
+{% if f.code %}<p class="cf-code-hint"><i class="bi bi-info-circle" aria-hidden="true"></i>{{ quality[f.code][2] }}</p>{% endif %}
+
+{% if not page.items %}
+<section class="cc-card">
+    {% if filtered %}{{ ui.empty_state('search', 'Ничего не найдено', 'Измените поиск или фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('schedule_conflicts', dim='quality'), 'icon': 'x-lg', 'variant': 'light'}) }}
+    {% else %}{{ ui.empty_state('clipboard-check', 'Проблем с данными не найдено', 'У всех занятий есть день, понятное время, группа и преподаватель из справочника.') }}{% endif %}
+</section>
+{% else %}
+{{ rm.bulk_bar(f, here) }}
+{% call ui.data_table('cfQuality') %}
+<table class="cc-table cf-qtable" id="cfQuality">
+    <thead><tr>
+        <th class="cf-qtable__check cc-no-print"><input type="checkbox" class="form-check-input" data-cf-select-all aria-label="Выбрать все на странице"></th>
+        <th>Проблема</th><th>Занятие</th><th>Преподаватель</th><th>Аудитория</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+    </tr></thead>
+    <tbody>
+    {% for item, ack in page.items %}{% set l = item.lesson %}
+    <tr class="{{ 'is-accepted' if ack }}">
+        <td class="cc-no-print"><input type="checkbox" class="form-check-input" name="hash" value="{{ item.hash }}" form="cfBulk" data-cf-select aria-label="Выбрать: {{ item.title }}, {{ l.groupId }}"></td>
+        <td>
+            <div class="cf-qtable__problem">{{ ui.badge(item.severity) }}<span class="cc-cell-main">{{ item.title }}</span></div>
+            {% if item.detail %}<div class="cc-cell-sub">{{ item.detail }}</div>{% endif %}
+            {% if ack %}<div class="cc-cell-sub"><i class="bi bi-check2-circle" aria-hidden="true"></i> принято{% if ack.note %} — «{{ ack.note }}»{% endif %}</div>{% endif %}
+        </td>
+        <td>
+            <div class="cc-cell-main">{{ l.groupId or 'без группы' }} · {{ l.subject or 'без дисциплины' }}</div>
+            <div class="cc-cell-sub">{{ l.day_name }} · {{ l.time_label or l.time or 'без времени' }} {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}</div>
+        </td>
+        <td>{{ l.teacher_name or '—' }}</td>
+        <td>{{ l.room or '—' }}</td>
+        <td class="cc-actions cc-no-print">
+            <a class="btn btn-ghost btn-sm cc-btn-icon" href="{{ nav_url('schedule_edit', schedule_id=l.id, next=here) }}" aria-label="Изменить занятие" title="Изменить занятие"><i class="bi bi-pencil" aria-hidden="true"></i></a>
+            <form method="post" action="{{ url_for('schedule_conflicts_unack' if ack else 'schedule_conflicts_ack') }}" class="d-inline-block m-0">
+                {{ ui.csrf_field() }}<input type="hidden" name="hash" value="{{ item.hash }}"><input type="hidden" name="next" value="{{ here }}">
+                {{ ui.button('Вернуть' if ack else 'Игнорировать', type='submit', icon=('arrow-counterclockwise' if ack else 'eye-slash'), variant='ghost', size='sm', icon_only=True) }}
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endcall %}
+{{ ui.pagination(page) }}
+{% endif %}
+
+{% else %}
+{# ============================== НАКЛАДКИ ============================== #}
+{% if heat and heat.total %}
+<details class="cc-card cf-heat cc-no-print"{{ ' open' if not (f.teacher or f.room or f.group) }}>
+    <summary class="cf-heat__summary">
+        <span class="cc-card__title"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i>Когда случаются накладки</span>
+        <span class="cc-card__sub">день × час начала · нажмите на клетку, чтобы отфильтровать</span>
+    </summary>
+    <div class="cf-heat__wrap">
+        <table class="cf-heat__table">
+            <thead><tr><th scope="col"><span class="visually-hidden">День</span></th>{% for h in heat.hours %}<th scope="col">{{ h }}</th>{% endfor %}</tr></thead>
+            <tbody>
+            {% for d in heat.days %}
+            <tr>
+                <th scope="row">{{ day_short[d] }}</th>
+                {% for h in heat.hours %}{% set n = heat.cells.get((d, h), 0) %}
+                <td>{% if n %}{% set level = [((n * 4) / heat.peak)|round(0, 'ceil')|int, 1]|max %}<a class="cf-heat__cell cf-heat__cell--{{ level }}{{ ' is-active' if f.day == d and f.hour == h }}" href="{{ url_with(day=d, hour=h, page=None) }}" title="{{ day_names[d] }}, {{ h }}:00–{{ h + 1 }}:00 — {{ n }}" aria-label="{{ day_names[d] }}, {{ h }}:00–{{ h + 1 }}:00: {{ n }} — показать">{{ n }}</a>{% else %}<span class="cf-heat__cell"></span>{% endif %}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</details>
+{% endif %}
+
+{% if not entities %}
+<section class="cc-card">
+    {% if filtered or f.acked %}{{ ui.empty_state('search', 'Ничего не найдено', 'По этим фильтрам накладок нет.', {'label': 'Сбросить фильтры', 'href': url_for('schedule_conflicts', dim=f.dim), 'icon': 'x-lg', 'variant': 'light'}) }}
+    {% else %}
+    {{ ui.empty_state('check2-circle', {'teacher': 'Преподаватели не ведут две пары одновременно', 'room': 'Аудитории не заняты дважды', 'group': 'У групп нет пересекающихся пар'}[f.dim],
+        'Проверены все занятия с днём и временем (%d из %d). Потоки и принятые накладки скрыты.'|format(analysis.lessons_checked, analysis.lessons_total)) }}
+    {% endif %}
+</section>
+{% else %}
+{{ rm.bulk_bar(f, here) }}
+{% for g in entities %}
+<section class="cf-entity" aria-labelledby="ent-{{ loop.index }}" data-cf-group>
+    <header class="cf-entity__head">
+        {% if f.dim == 'teacher' %}{{ ui.avatar(g.name) }}{% else %}<span class="cf-entity__icon" aria-hidden="true"><i class="bi bi-{{ 'door-open' if f.dim == 'room' else 'people' }}"></i></span>{% endif %}
+        <div class="min-w-0 flex-grow-1">
+            <h2 class="cf-entity__name" id="ent-{{ loop.index }}">{{ g.name }}</h2>
+            <div class="cf-entity__counts">
+                {% if g.critical %}<span class="cc-badge cc-badge--danger">{{ g.critical }} {{ g.critical|plural('критичная', 'критичные', 'критичных') }}</span>{% endif %}
+                {% if g.warning %}<span class="cc-badge cc-badge--warning">{{ g.warning }} {{ g.warning|plural('предупреждение', 'предупреждения', 'предупреждений') }}</span>{% endif %}
+                {% if g.info %}<span class="cc-badge cc-badge--info">{{ g.info }} {{ g.info|plural('поток', 'потока', 'потоков') }}</span>{% endif %}
+                {% if g.accepted %}<span class="cc-badge cc-badge--neutral">{{ g.accepted }} принято</span>{% endif %}
+                <span class="cc-subtle small">{% for d in g.days %}{{ day_short[d] }}{{ ', ' if not loop.last }}{% endfor %}</span>
+            </div>
+        </div>
+        <div class="cf-entity__actions cc-no-print">
+            {% if f.dim == 'teacher' %}<a class="btn btn-ghost btn-sm" href="{{ nav_url('schedule_teachers', teacher=g.key) }}"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>Расписание</span></a>
+            {% elif f.dim == 'room' %}<a class="btn btn-ghost btn-sm" href="{{ url_for('schedule_rooms', room=g.name) }}"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>Неделя аудитории</span></a>
+            {% else %}<a class="btn btn-ghost btn-sm" href="{{ nav_url('schedule', group=g.name) }}"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>Расписание</span></a>{% endif %}
+            <input type="checkbox" class="form-check-input" data-cf-select-group aria-label="Выбрать все накладки: {{ g.name }}" title="Выбрать все накладки">
+        </div>
+    </header>
+    <div class="cf-entity__list">
+        {% for it in g.clusters %}{{ rm.cluster_card(it, kinds, f.dim, here) }}{% endfor %}
+    </div>
+</section>
+{% endfor %}
+{{ ui.pagination(page) }}
+{% endif %}
+{% endif %}
+
+{% if stale %}
+<form method="post" action="{{ url_for('schedule_conflicts_acks_cleanup') }}" class="cf-stale cc-no-print"
+      data-confirm="Удалить {{ stale|length }} {{ stale|length|plural('отметку', 'отметки', 'отметок') }} «принято», которые больше ни к чему не относятся?" data-confirm-ok="Удалить">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here }}">
+    <i class="bi bi-archive" aria-hidden="true"></i>
+    <span>{{ stale|length }} {{ stale|length|plural('устаревшая отметка', 'устаревшие отметки', 'устаревших отметок') }} «принято»: занятия изменились, и накладка либо исчезла, либо всплыла снова.</span>
+    {{ ui.button('Очистить', type='submit', icon='trash', variant='ghost', size='sm') }}
+</form>
+{% endif %}
+
+<details class="cc-card cf-help cc-no-print">
+    <summary class="cf-help__summary"><i class="bi bi-question-circle" aria-hidden="true"></i>Как ищутся накладки</summary>
+    <div class="cc-card__body">
+        <ul class="cf-help__list">
+            <li><b>День</b> — как в приложении: <code>day_index</code>, иначе день недели из <code>date</code>. Время — «08.30-09.50» или «08:30–09:50»; касание пар (10:55–11:45 и 11:45–12:05) накладкой не считается.</li>
+            <li><b>Недели</b>: «каждую неделю» пересекается с любой; числитель со знаменателем — нет. Разовое занятие (<code>one_off</code>) — только в свою дату.</li>
+            <li><b>Преподаватель</b> — по uid; записанный ФИО текстом сопоставляется со справочником. <b>Аудитория</b> — без «ауд.»/«каб.», регистра и пробелов.</li>
+            {% for k, v in kinds.items() %}<li>{{ ui.badge(v[0]) }} <b>{{ v[1] }}</b> — {{ v[2] }}</li>{% endfor %}
+            <li>Критичная накладка понижается до «Внимание», если данные неточны (нет времени окончания, неизвестный тип недели, однофамильцы).</li>
+            <li><b>Принять</b> — скрыть накладку, которая не ошибка (например, согласованный поток). Если занятия изменятся, она снова появится.</li>
+        </ul>
+    </div>
+</details>
+<p class="cc-subtle small mt-3">Проверено {{ analysis.lessons_checked }} из {{ analysis.lessons_total }} занятий за {{ (analysis.duration * 1000)|round|int }} мс · обновлено {{ update_time }}.</p>
+{% endif %}
+{% endblock %}

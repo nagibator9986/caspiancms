@@ -1,0 +1,150 @@
+{#
+  rooms/_ui.html — макросы раздела «Аудиторный фонд | Накладки | Свободные аудитории» (владелец — CONFLICTS).
+      {% import 'rooms/_ui.html' as rm with context %}
+  tabs()      — общая полоса вкладок трёх страниц (counts: {'conflicts': n});
+  week_now()  — «Сейчас числитель · 8-я неделя»;
+  legend()    — легенда типов недели;
+  lesson()    — плитка занятия в сетке аудитории;
+  now_status()— что сейчас в аудитории.
+#}
+{% import '_ui.html' as ui with context %}
+
+{% macro tabs(active, counts={}) -%}
+{{ ui.tabs([
+    {'key': 'rooms', 'label': 'Аудиторный фонд', 'href': nav_url('schedule_rooms'), 'icon': 'door-open'},
+    {'key': 'conflicts', 'label': 'Накладки', 'href': nav_url('schedule_conflicts'), 'icon': 'exclamation-diamond', 'count': counts.get('conflicts')},
+    {'key': 'free', 'label': 'Свободные аудитории', 'href': nav_url('schedule_free_rooms'), 'icon': 'door-closed'},
+], active, label='Разделы аудиторного фонда') }}
+{%- endmacro %}
+
+{% macro week_now(current_week, week_number) -%}
+<span class="cc-week-pill cc-week-pill--{{ current_week }}" title="Тип недели считается как в приложении (по Алматы)">
+    <i class="bi bi-calendar-week" aria-hidden="true"></i>Сейчас {{ 'числитель' if current_week == 'numerator' else 'знаменатель' }} · {{ week_number }}-я неделя
+</span>
+{%- endmacro %}
+
+{% macro legend() -%}
+<div class="rm-legend" aria-label="Обозначения">
+    <span><i class="rm-legend__swatch rm-legend__swatch--always" aria-hidden="true"></i>Каждую неделю</span>
+    <span><i class="rm-legend__swatch rm-legend__swatch--numerator" aria-hidden="true"></i>Числитель</span>
+    <span><i class="rm-legend__swatch rm-legend__swatch--denominator" aria-hidden="true"></i>Знаменатель</span>
+    <span><i class="rm-legend__swatch rm-legend__swatch--conflict" aria-hidden="true"></i>Накладка</span>
+    <span><i class="rm-legend__swatch rm-legend__swatch--now" aria-hidden="true"></i>Идёт сейчас</span>
+</div>
+{%- endmacro %}
+
+{# Плитка занятия: detailed=True — с дисциплиной и преподавателем (одна аудитория на странице) #}
+{% macro lesson(l, conflict=False, is_now=False, detailed=False, next_url=None) -%}
+{%- set who = l.teacher_name or l.teacher -%}
+<a class="rm-lesson rm-lesson--{{ l.week }}{{ ' is-conflict' if conflict }}{{ ' is-now' if is_now }}{{ ' is-invalid' if not l.time_ok }}"
+   href="{{ nav_url('schedule_edit', schedule_id=l.id, next=next_url) }}"
+   title="{{ l.time_label or l.time }} · {{ l.groupId or '—' }} · {{ l.subject or 'без дисциплины' }}{{ ' · ' ~ who if who }}{{ ' · ' ~ ({'numerator': 'числитель', 'denominator': 'знаменатель'}[l.week]) if l.week != 'always' }}{{ ' · накладка' if conflict }}{{ ' · время некорректно' if not l.time_ok }}">
+    <span class="rm-lesson__time cc-num">{{ l.time_label or l.time or '—' }}{% if l.week != 'always' %} <b class="rm-lesson__week">{{ 'Ч' if l.week == 'numerator' else 'З' }}</b>{% endif %}</span>
+    <span class="rm-lesson__group">{{ l.groupId or '—' }}{% if conflict %} <i class="bi bi-exclamation-triangle-fill" aria-label="накладка"></i>{% endif %}{% if is_now %} <span class="rm-lesson__live">сейчас</span>{% endif %}</span>
+    <span class="rm-lesson__subject">{{ l.subject or 'без дисциплины' }}</span>
+    {% if detailed and who %}<span class="rm-lesson__who">{{ who|short_name }}</span>{% endif %}
+</a>
+{%- endmacro %}
+
+{% macro now_status(st) -%}
+{%- if st.state == 'busy' -%}
+<span class="rm-now rm-now--busy" title="{{ st.lesson.subject }} · {{ st.lesson.teacher_name or st.lesson.teacher }}"><span class="rm-now__dot" aria-hidden="true"></span>Занята до {{ st.until }} · {{ st.lesson.groupId }}</span>
+{%- elif st.state == 'free' -%}
+<span class="rm-now rm-now--free"><span class="rm-now__dot" aria-hidden="true"></span>Свободна до {{ st.until }}</span>
+{%- else -%}
+<span class="rm-now rm-now--idle"><span class="rm-now__dot" aria-hidden="true"></span>Сегодня больше пар нет</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# Полоса загрузки аудитории (0..100) #}
+{% macro load_bar(pct) -%}
+{%- set tone = 'high' if pct >= 70 else ('mid' if pct >= 35 else 'low') -%}
+<div class="rm-load rm-load--{{ tone }}">
+    <div class="cc-bar" role="progressbar" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100" aria-label="Загрузка текущей недели"><span style="width: {{ [pct, 100]|min }}%"></span></div>
+    <span class="rm-load__value cc-num">{{ pct|round|int }}%</span>
+</div>
+{%- endmacro %}
+
+{# Подпись/цвет набора недель накладки #}
+{% macro weeks_badge(c) -%}
+{%- set w = c.weeks -%}
+{%- set v = 'week-all' if 'every' in w else ('week-num' if 'numerator' in w and 'denominator' not in w else ('week-den' if 'denominator' in w and 'numerator' not in w else ('info' if not ('numerator' in w or 'denominator' in w) else 'week-all'))) -%}
+<span class="cc-badge cc-badge--{{ v }}" title="Когда занятия пересекаются">{{ c.weeks_label }}</span>
+{%- endmacro %}
+
+{# Карточка накладки (кластер пересекающихся занятий). it = {'c': кластер, 'ack': отметка|None, 'this_week', 'today'};
+   kinds — conflicts.KINDS; dim — текущая вкладка (не повторять её поле в строках); here — URL для возврата. #}
+{% macro cluster_card(it, kinds, dim, here) -%}
+{%- set c = it.c -%}{%- set ack = it.ack -%}
+<article class="cf-cluster cf-cluster--{{ c.severity }}{{ ' is-accepted' if ack }}" id="c-{{ c.hash }}">
+    <div class="cf-cluster__head">
+        <input class="form-check-input cf-cluster__check cc-no-print" type="checkbox" name="hash" value="{{ c.hash }}" form="cfBulk" data-cf-select aria-label="Выбрать накладку: {{ c.day_name }}, {{ c.time_label }}">
+        <div class="cf-cluster__when"><span class="cf-cluster__day">{{ c.day_short }}</span><span class="cc-num">{{ c.time_label }}</span></div>
+        <div class="cf-cluster__main min-w-0">
+            <div class="cf-cluster__title">{{ ui.badge(c.severity) }}<b>{{ c.title }}</b>{% for k in c.kinds[1:] %}<span class="cc-badge cc-badge--outline">{{ kinds[k][1] }}</span>{% endfor %}</div>
+            <div class="cf-cluster__tags">
+                {{ weeks_badge(c) }}
+                {% if it.today %}<span class="cc-badge cc-badge--brand"><i class="bi bi-lightning-charge" aria-hidden="true"></i>сегодня</span>
+                {% elif it.this_week %}<span class="cc-badge cc-badge--brand">на этой неделе</span>
+                {% else %}<span class="cc-badge cc-badge--neutral">не на этой неделе</span>{% endif %}
+                <span class="cf-cluster__overlap cc-num" title="Наибольшее пересечение пары занятий"><i class="bi bi-intersect" aria-hidden="true"></i>{{ c.overlap_min }} мин</span>
+                {% if c.uncertain %}<span class="cc-badge cc-badge--neutral" title="Конец времени угадан по сетке или неизвестный тип недели — проверьте данные">данные неточны</span>{% endif %}
+            </div>
+        </div>
+    </div>
+    <ul class="cf-lessons">
+        {% for l in c.lessons %}
+        <li class="cf-lesson{{ ' cf-lesson--partial' if 'partial' in c.lesson_flags.get(l.id, []) }}">
+            <span class="cf-lesson__time cc-num">{{ l.time_label or l.time }}</span>
+            {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}
+            <a class="cf-lesson__group" href="{{ nav_url('schedule', group=l.groupId) }}">{{ l.groupId or '—' }}</a>
+            <span class="cf-lesson__subject">{{ l.subject or 'без дисциплины' }}</span>
+            {% if dim != 'teacher' %}<span class="cf-lesson__meta"><i class="bi bi-person" aria-hidden="true"></i>{{ l.teacher_name or 'без преподавателя' }}</span>{% endif %}
+            {% if dim != 'room' or l.room != c.entity %}<span class="cf-lesson__meta"{% if dim == 'room' %} title="Так аудитория записана в занятии"{% endif %}><i class="bi bi-door-open" aria-hidden="true"></i>{{ l.room or 'без аудитории' }}</span>{% endif %}
+            {% if l.end_assumed %}<span class="cc-badge cc-badge--neutral" title="Время окончания не указано — взято по сетке звонков">конец угадан</span>{% endif %}
+            {% if 'by_name' in l.teacher_flags %}<span class="cc-badge cc-badge--neutral" title="Преподаватель записан ФИО текстом, а не выбран из справочника">ФИО текстом</span>{% endif %}
+            {% if l.one_off %}<span class="cc-badge cc-badge--info">разово {{ l.date }}</span>{% endif %}
+            <a class="btn btn-ghost btn-sm cc-btn-icon cf-lesson__edit cc-no-print" href="{{ nav_url('schedule_edit', schedule_id=l.id, next=here) }}" aria-label="Изменить занятие {{ l.groupId }} {{ l.time_label }}" title="Изменить занятие"><i class="bi bi-pencil" aria-hidden="true"></i></a>
+        </li>
+        {% endfor %}
+    </ul>
+    {% if c.lessons|length > 2 %}
+    <ul class="cf-cluster__pairs" aria-label="Пары пересечений">{% for p in c.pairs %}<li><b>{{ p.label }}</b> — {{ p.overlap_min }} мин{{ ', ' ~ p.weeks_label|lower if p.weeks != 'every' }}{{ ' · ' ~ kinds[p.kind][1]|lower if p.kind != c.kind }}</li>{% endfor %}</ul>
+    {% endif %}
+    <div class="cf-cluster__foot">
+        {% if ack %}
+        <span class="cf-cluster__accepted"><i class="bi bi-check2-circle" aria-hidden="true"></i>Принято{% if ack.by %} · {{ ack.by }}{% endif %}{% if ack.at %} · {{ ack.at|dt }}{% endif %}{% if ack.note %} — «{{ ack.note }}»{% endif %}</span>
+        <form method="post" action="{{ nav_url('schedule_conflicts_unack') }}" class="m-0 cc-no-print">
+            {{ ui.csrf_field() }}<input type="hidden" name="hash" value="{{ c.hash }}"><input type="hidden" name="next" value="{{ here }}">
+            {{ ui.button('Вернуть в список', type='submit', icon='arrow-counterclockwise', variant='light', size='sm') }}
+        </form>
+        {% else %}
+        <span class="cf-cluster__hint">{{ kinds[c.kind][2] }}</span>
+        <details class="cf-ack cc-no-print">
+            <summary class="btn btn-light btn-sm"><i class="bi bi-check2" aria-hidden="true"></i><span class="cf-ack__open">Принять</span><span class="cf-ack__close">Отмена</span></summary>
+            <form method="post" action="{{ nav_url('schedule_conflicts_ack') }}" class="cf-ack__form">
+                {{ ui.csrf_field() }}<input type="hidden" name="hash" value="{{ c.hash }}"><input type="hidden" name="next" value="{{ here }}">
+                <input class="form-control form-control-sm" name="note" maxlength="300" placeholder="Почему это не ошибка — например, согласованный поток (необязательно)" aria-label="Комментарий к принятой накладке">
+                {{ ui.button('Принять накладку', type='submit', icon='check2-circle', size='sm') }}
+            </form>
+        </details>
+        {% endif %}
+    </div>
+</article>
+{%- endmacro %}
+
+{# Панель массовых действий (форма cfBulk; чекбоксы карточек ссылаются на неё через form="cfBulk") #}
+{% macro bulk_bar(f, here) -%}
+<form id="cfBulk" method="post" action="{{ url_for('schedule_conflicts_ack') }}" class="cf-bulk cc-no-print" data-cf-bulk>
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here }}">
+    {% if f.dim == 'quality' and f.code in ('teacher_by_name', 'day_mismatch', 'date_timestamp') %}<input type="hidden" name="code" value="{{ f.code }}">{% endif %}
+    <label class="cf-bulk__all"><input class="form-check-input" type="checkbox" data-cf-select-all> Все на странице</label>
+    <span class="cf-bulk__count" data-cf-count aria-live="polite">{{ 'Отметьте проблемы, чтобы скрыть или исправить их разом' if f.dim == 'quality' else 'Отметьте накладки, чтобы принять их разом' }}</span>
+    <input class="form-control form-control-sm cf-bulk__note" name="note" maxlength="300" placeholder="Комментарий (необязательно)" aria-label="Комментарий">
+    <div class="cf-bulk__actions">
+        {{ ui.button('Игнорировать' if f.dim == 'quality' else 'Принять', type='submit', icon='check2-all', size='sm', attrs={'data-cf-bulk-btn': ''}) }}
+        {% if f.acked %}{{ ui.button('Вернуть', type='submit', icon='arrow-counterclockwise', variant='light', size='sm', attrs={'data-cf-bulk-btn': '', 'formaction': url_for('schedule_conflicts_unack')}) }}{% endif %}
+        {% if f.dim == 'quality' and f.code in ('teacher_by_name', 'day_mismatch', 'date_timestamp') %}{{ ui.button('Исправить выбранные', type='submit', icon='wrench-adjustable', variant='outline-primary', size='sm', attrs={'data-cf-bulk-btn': '', 'formaction': url_for('schedule_conflicts_fix')}) }}{% endif %}
+    </div>
+</form>
+{%- endmacro %}
