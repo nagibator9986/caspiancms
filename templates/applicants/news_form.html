@@ -1,0 +1,59 @@
+{# Публикация для абитуриентов: заголовок, кратко, текст, категория, до 10 фото; живой предпросмотр карточки (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% set editing = news is not none %}
+{% block title %}{{ 'Новость абитуриентов' if editing else 'Новая публикация' }}{% endblock %}
+{% block page_title %}{{ 'Новость абитуриентов' if editing else 'Новая публикация' }}{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+{{ ui.page_header(values.title if editing else 'Новая публикация', 'Появится в ленте вкладки «Абитуриент». ' ~ ('Правка не отправляет повторный пуш.' if editing else 'После публикации абитуриенты получат уведомление.'), [
+    {'label': 'К ленте', 'href': url_for('applicant_news'), 'icon': 'arrow-left', 'variant': 'light'},
+], icon='megaphone') }}
+
+<div class="cn-form-layout">
+    <form method="post" enctype="multipart/form-data" class="cn-form-main" data-dirty-guard novalidate>
+        {{ ui.csrf_field() }}
+        {% call ui.card('Текст', icon='card-text') %}
+            {{ ui.field('title', 'Заголовок', value=values.title, required=True, error=errors.title, attrs={'maxlength': 200, 'data-cn-preview': 'title'}, placeholder='Старт приёма документов 2026') }}
+            {{ ui.field('description', 'Кратко', value=values.description, error=errors.description, attrs={'maxlength': 300, 'data-cn-preview': 'description'}, help='Строка под заголовком в ленте (до 300 символов)') }}
+            {{ ui.field('content', 'Текст новости', 'textarea', value=values.content, error=errors.content, rows=10, attrs={'maxlength': 20000}) }}
+            {{ ui.field('category', 'Категория', 'select', value=values.category, error=errors.category, options=categories, attrs={'data-cn-preview': 'category'}, classes='mb-0') }}
+        {% endcall %}
+        {% call ui.card('Фото', icon='images', subtitle='До ' ~ max_images ~ ' фото — в приложении это карусель; первое — обложка') %}
+            {{ ui.image_uploader('images', news if editing else [], max=max_images, label=None) }}
+            {% if errors.images %}<div class="invalid-feedback d-block">{{ errors.images }}</div>{% endif %}
+        {% endcall %}
+        <div class="cn-savebar cn-savebar--sticky">
+            {{ ui.button('Отмена', href=url_for('applicant_news'), variant='light') }}
+            {{ ui.button('Сохранить' if editing else 'Опубликовать', type='submit', icon='send' if not editing else 'check2', attrs={'data-loading': 'Сохраняем…'}) }}
+        </div>
+    </form>
+
+    <aside class="cn-form-side">
+        <section class="cc-card cn-preview" aria-label="Предпросмотр в приложении">
+            <div class="cc-card__head"><h2 class="cc-card__title"><i class="bi bi-phone" aria-hidden="true"></i>Как увидит абитуриент</h2></div>
+            <div class="cc-card__body">
+                {% set imgs = news|images_of if editing else [] %}
+                <article class="cn-app-news">
+                    <div class="cn-app-news__media" data-cn-preview-media {{ 'hidden' if not imgs }}>
+                        <img {% if imgs %}src="{{ imgs[0].url|safe_url }}"{% endif %} alt="" data-cn-preview-img>
+                    </div>
+                    <div class="cn-app-news__body">
+                        <div class="cn-app-news__meta"><span class="cn-cat cn-cat--{{ values.category }}" data-cn-preview-category>{{ dict(categories).get(values.category, '') }}</span><span><i class="bi bi-calendar3" aria-hidden="true"></i>{{ (news.createdAt|dateonly) if editing else 'сегодня' }}</span></div>
+                        <div class="cn-app-news__title" data-cn-preview-title>{{ values.title or 'Заголовок новости' }}</div>
+                        <div class="cn-app-news__text" data-cn-preview-description>{{ values.description }}</div>
+                    </div>
+                </article>
+                <p class="cc-subtle small mt-3 mb-0">Карточка в ленте; по нажатию открывается полный текст и все фото.</p>
+            </div>
+        </section>
+        {% if editing %}
+        {% call ui.card('Удаление', icon='trash') %}
+            <p class="cc-muted small">Новость пропадёт из приложения, фото удалятся из хранилища.</p>
+            {{ ui.confirm_button(url_for('applicant_news_delete', news_id=news.id), 'Удалить новость', 'Удалить «' ~ values.title ~ '» вместе с фото?', size=None, title='Удалить новость', fields={'next': url_for('applicant_news')}) }}
+        {% endcall %}
+        {% endif %}
+    </aside>
+</div>
+{% endblock %}

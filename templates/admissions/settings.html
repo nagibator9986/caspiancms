@@ -1,0 +1,208 @@
+{# Настройки приёмной комиссии (app_config/admissions, SPEC §2.8): контакты, о колледже, ссылки, дедлайн, квесты,
+   каталог специальностей, документы, FAQ. Повторяемые строки — добавление/удаление/перетаскивание (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% block title %}Приёмная комиссия{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.lib('sortable') }}{{ ui.js('coins') }}{% endblock %}
+
+{% macro row_tools(label) -%}
+<div class="cn-row__tools">
+    <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-cn-row-up aria-label="{{ label }}: выше" title="Выше"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+    <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-cn-row-down aria-label="{{ label }}: ниже" title="Ниже"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
+    <button type="button" class="btn btn-ghost btn-sm cc-btn-icon cn-row__remove" data-cn-row-remove aria-label="{{ label }}: удалить" title="Удалить"><i class="bi bi-trash" aria-hidden="true"></i></button>
+</div>
+{%- endmacro %}
+
+{% macro cat_row(r, n) -%}
+{%- set k = r.key or '__KEY__' -%}
+<div class="cn-row" data-cn-row>
+    <div class="cn-row__head">
+        <span class="cn-row__drag" data-cn-row-drag title="Перетащите, чтобы изменить порядок" aria-hidden="true"><i class="bi bi-grip-vertical"></i></span>
+        <span class="cn-row__num" data-cn-row-num>{{ n }}</span>
+        <input type="hidden" name="cat_key" value="{{ k }}">
+        <input type="hidden" name="cat_id" value="{{ r.id or '' }}">
+        <input type="hidden" name="cat_imageUrl" value="{{ r.imageUrl or '' }}">
+        <div class="cn-row__fields cn-row__fields--2">
+            <div><label class="form-label cc-required" for="cat-title-{{ k }}">Название</label><input class="form-control" id="cat-title-{{ k }}" name="cat_title" value="{{ r.title or '' }}" maxlength="120" placeholder="Программное обеспечение"></div>
+            <div><label class="form-label" for="cat-titleKk-{{ k }}">Название (KZ)</label><input class="form-control" id="cat-titleKk-{{ k }}" name="cat_titleKk" value="{{ r.titleKk or '' }}" maxlength="120" lang="kk"></div>
+        </div>
+        {{ row_tools('Специальность') }}
+    </div>
+    <details class="cn-row__more" {{ 'open' if not r.title }}>
+        {%- set meta = [] -%}
+        {%- if r.duration %}{% set _ = meta.append(r.duration) %}{% endif -%}
+        {%- if r.base %}{% set _ = meta.append('база ' ~ r.base) %}{% endif -%}
+        {%- if r.places %}{% set _ = meta.append(r.places ~ ' мест') %}{% endif -%}
+        {%- if r.price %}{% set _ = meta.append(r.price) %}{% endif -%}
+        {%- if r.imageUrl %}{% set _ = meta.append('фото') %}{% endif %}
+        <summary>Подробнее{% if meta %}<span class="cn-row__meta"> · {{ meta|join(' · ') }}</span>{% else %}: срок, база, места, стоимость, описание, фото{% endif %}</summary>
+        <div class="cn-row__fields cn-row__fields--3">
+            <div><label class="form-label" for="cat-duration-{{ k }}">Срок обучения</label><input class="form-control" id="cat-duration-{{ k }}" name="cat_duration" value="{{ r.duration or '' }}" maxlength="40" placeholder="3 г. 10 мес."></div>
+            <div><label class="form-label" for="cat-base-{{ k }}">База</label>
+                <select class="form-select" id="cat-base-{{ k }}" name="cat_base">{% for bv, bl in bases %}<option value="{{ bv }}" {{ 'selected' if (r.base or '') == bv }}>{{ bl }}</option>{% endfor %}</select></div>
+            <div><label class="form-label" for="cat-places-{{ k }}">Мест</label><input class="form-control" id="cat-places-{{ k }}" name="cat_places" value="{{ r.places if r.places is not none else '' }}" inputmode="numeric" maxlength="6" placeholder="25"></div>
+            <div><label class="form-label" for="cat-form-{{ k }}">Форма обучения</label><input class="form-control" id="cat-form-{{ k }}" name="cat_form" value="{{ r.form or '' }}" maxlength="40" placeholder="очная"></div>
+            <div><label class="form-label" for="cat-language-{{ k }}">Язык обучения</label><input class="form-control" id="cat-language-{{ k }}" name="cat_language" value="{{ r.language or '' }}" maxlength="40" placeholder="рус/каз"></div>
+            <div><label class="form-label" for="cat-price-{{ k }}">Стоимость</label><input class="form-control" id="cat-price-{{ k }}" name="cat_price" value="{{ r.price or '' }}" maxlength="60" placeholder="600 000 ₸/год"></div>
+        </div>
+        <div class="cn-row__fields cn-row__fields--2">
+            <div><label class="form-label" for="cat-description-{{ k }}">Описание</label><textarea class="form-control" id="cat-description-{{ k }}" name="cat_description" rows="3" maxlength="2000" placeholder="Чему учат, кем работают выпускники">{{ r.description or '' }}</textarea></div>
+            <div><label class="form-label" for="cat-descriptionKk-{{ k }}">Описание (KZ)</label><textarea class="form-control" id="cat-descriptionKk-{{ k }}" name="cat_descriptionKk" rows="3" maxlength="2000" lang="kk">{{ r.descriptionKk or '' }}</textarea></div>
+        </div>
+        <div class="cn-row__image">
+            {% if r.imageUrl %}<img class="cc-thumb" src="{{ r.imageUrl|safe_url }}" alt="" width="56" height="56" loading="lazy">{% endif %}
+            <div class="min-w-0">
+                <label class="form-label" for="cat-image-{{ k }}">{{ 'Заменить фото' if r.imageUrl else 'Фото специальности' }}</label>
+                <input class="form-control form-control-sm" type="file" id="cat-image-{{ k }}" name="cat_image__{{ k }}" accept="image/jpeg,image/png,image/webp">
+                {% if r.imageUrl %}<div class="form-check mt-1"><input class="form-check-input" type="checkbox" id="cat-rm-{{ k }}" name="cat_image_remove" value="{{ k }}"><label class="form-check-label small" for="cat-rm-{{ k }}">Убрать фото</label></div>{% endif %}
+            </div>
+        </div>
+    </details>
+</div>
+{%- endmacro %}
+
+{% macro doc_row(r, n) -%}
+<div class="cn-row" data-cn-row>
+    <div class="cn-row__head">
+        <span class="cn-row__drag" data-cn-row-drag aria-hidden="true"><i class="bi bi-grip-vertical"></i></span>
+        <span class="cn-row__num" data-cn-row-num>{{ n }}</span>
+        <div class="cn-row__fields cn-row__fields--doc">
+            <div><label class="form-label"><span class="cc-required">Документ</span><input class="form-control mt-1" name="doc_title" value="{{ r.title or '' }}" maxlength="200" placeholder="Аттестат или свидетельство"></label></div>
+            <div><label class="form-label">На казахском<input class="form-control mt-1" name="doc_titleKk" value="{{ r.titleKk or '' }}" maxlength="200" lang="kk"></label></div>
+            <div><label class="form-label">Примечание<input class="form-control mt-1" name="doc_note" value="{{ r.note or '' }}" maxlength="300" placeholder="например: оригинал + копия"></label></div>
+        </div>
+        {{ row_tools('Документ') }}
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro faq_row(r, n) -%}
+<div class="cn-row" data-cn-row>
+    <div class="cn-row__head">
+        <span class="cn-row__drag" data-cn-row-drag aria-hidden="true"><i class="bi bi-grip-vertical"></i></span>
+        <span class="cn-row__num" data-cn-row-num>{{ n }}</span>
+        <div class="cn-row__fields cn-row__fields--2">
+            <div><label class="form-label"><span class="cc-required">Вопрос</span><input class="form-control mt-1" name="faq_q" value="{{ r.q or '' }}" maxlength="300" placeholder="Есть ли общежитие?"></label></div>
+            <div><label class="form-label">Вопрос (KZ)<input class="form-control mt-1" name="faq_qKk" value="{{ r.qKk or '' }}" maxlength="300" lang="kk"></label></div>
+            <div><label class="form-label"><span class="cc-required">Ответ</span><textarea class="form-control mt-1" name="faq_a" rows="2" maxlength="3000">{{ r.a or '' }}</textarea></label></div>
+            <div><label class="form-label">Ответ (KZ)<textarea class="form-control mt-1" name="faq_aKk" rows="2" maxlength="3000" lang="kk">{{ r.aKk or '' }}</textarea></label></div>
+        </div>
+        {{ row_tools('Вопрос') }}
+    </div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+{{ ui.page_header('Приёмная комиссия', 'Всё, что абитуриент видит в приложении во вкладке «Абитуриент»: контакты, каталог специальностей, документы, частые вопросы, дедлайн и награды за квесты.', [
+    {'label': 'Новости абитуриентов', 'href': url_for('applicant_news'), 'icon': 'megaphone', 'variant': 'light'},
+], icon='building-gear') }}
+
+{% if load_failed %}
+{% call ui.card() %}{{ ui.empty_state('cloud-slash', 'Настройки не загрузились', 'Обновите страницу через минуту. Сохранять сейчас нельзя, чтобы не затереть данные.') }}{% endcall %}
+{% else %}
+<div class="cn-adm">
+    <aside class="cn-adm__nav">
+        <nav class="cn-adm__toc" aria-label="Разделы настроек">
+            {% set toc = [('sec-contacts', 'Контакты', 'telephone'), ('sec-about', 'О колледже', 'info-circle'), ('sec-links', 'Регистрация и приложения', 'link-45deg'), ('sec-deadline', 'Дедлайн', 'calendar-event'), ('sec-quests', 'Награды за квесты', 'trophy'), ('sec-catalog', 'Специальности', 'mortarboard'), ('sec-documents', 'Документы', 'file-earmark-text'), ('sec-faq', 'Частые вопросы', 'question-circle')] %}
+            {% for anchor, label, icon in toc %}<a href="#{{ anchor }}" class="cn-adm__toc-link"><i class="bi bi-{{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>{% if errors and ((anchor == 'sec-catalog' and errors.catalog) or (anchor == 'sec-documents' and errors.documents) or (anchor == 'sec-faq' and errors.faq)) %}<i class="bi bi-exclamation-circle-fill cn-adm__toc-err" aria-label="есть ошибки"></i>{% endif %}</a>{% endfor %}
+        </nav>
+        {% if checklist %}
+        {% set done = checklist|selectattr(0)|list|length %}
+        <section class="cc-card cn-ready">
+            <div class="cc-card__body">
+                <div class="d-flex justify-content-between align-items-baseline mb-2"><b>Готовность</b><span class="cc-num small">{{ done }} / {{ checklist|length }}</span></div>
+                {{ ui.progress_bar(done, checklist|length, 'success' if done == checklist|length else None, 'Готовность настроек') }}
+                <ul class="cn-ready__list">
+                    {% for ok, text, anchor in checklist %}<li class="{{ 'is-ok' if ok }}"><i class="bi bi-{{ 'check-circle-fill' if ok else 'circle' }}" aria-hidden="true"></i><a href="#{{ anchor }}">{{ text }}</a><span class="visually-hidden">{{ ' — готово' if ok else ' — не заполнено' }}</span></li>{% endfor %}
+                </ul>
+            </div>
+        </section>
+        {% endif %}
+        {% if updated %}<p class="cc-subtle small px-1">Сохранено {{ updated|dt }}{% if updated_by %} · {{ updated_by }}{% endif %}</p>{% endif %}
+    </aside>
+
+    <form method="post" enctype="multipart/form-data" class="cn-adm__form" data-dirty-guard novalidate data-cn-adm-form>
+        {{ ui.csrf_field() }}
+        {% call ui.card('Контакты', icon='telephone', id='sec-contacts', subtitle='Кнопки «Позвонить», «Написать в WhatsApp» и «Забыли пароль?» в приложении') %}
+            <div class="cc-grid cc-grid-2 cn-grid-tight">
+                {{ ui.field('phone', 'Телефон приёмной', 'tel', value=v.phone, error=errors.phone, attrs={'maxlength': 40, 'autocomplete': 'off'}, placeholder='+7 7292 30-30-30') }}
+                {{ ui.field('whatsapp', 'WhatsApp', 'tel', value=v.whatsapp, error=errors.whatsapp, attrs={'maxlength': 40, 'autocomplete': 'off'}, placeholder='+7 701 555 01 99') }}
+                {{ ui.field('email', 'Email', 'email', value=v.email, error=errors.email, attrs={'maxlength': 120}) }}
+                {{ ui.field('address', 'Адрес', value=v.address, error=errors.address, attrs={'maxlength': 200}, placeholder='г. Актау, 32 мкр., здание 1') }}
+            </div>
+            {{ ui.field('privacyUrl', 'Политика обработки персональных данных (ссылка)', 'url', value=v.privacyUrl, error=errors.privacyUrl, attrs={'maxlength': 500}, placeholder='https://…', help='Показывается при регистрации рядом с согласием на обработку данных', classes='mb-0') }}
+        {% endcall %}
+
+        {% call ui.card('О колледже', icon='info-circle', id='sec-about') %}
+            <div class="cc-grid cc-grid-2 cn-grid-tight">
+                {{ ui.field('about', 'На русском', 'textarea', value=v.about, error=errors.about, rows=6, attrs={'maxlength': 4000}, classes='mb-0') }}
+                {{ ui.field('aboutKk', 'На казахском', 'textarea', value=v.aboutKk, error=errors.aboutKk, rows=6, attrs={'maxlength': 4000, 'lang': 'kk'}, help='Если пусто — покажем русский текст', classes='mb-0') }}
+            </div>
+        {% endcall %}
+
+        {% call ui.card('Регистрация и приложения', icon='link-45deg', id='sec-links') %}
+            {{ ui.field('registerUrl', 'Страница регистрации', 'url', value=v.registerUrl, error=errors.registerUrl, attrs={'maxlength': 500}, help='По умолчанию — ' ~ default_register ~ '. Реферальная ссылка абитуриента = эта ссылка + ?ref=КОД') }}
+            <div class="cc-grid cc-grid-2 cn-grid-tight">
+                {{ ui.field('appStoreUrl', 'App Store', 'url', value=v.appStoreUrl, error=errors.appStoreUrl, attrs={'maxlength': 500}, placeholder='https://apps.apple.com/…', classes='mb-0') }}
+                {{ ui.field('playStoreUrl', 'Google Play', 'url', value=v.playStoreUrl, error=errors.playStoreUrl, attrs={'maxlength': 500}, placeholder='https://play.google.com/…', classes='mb-0') }}
+            </div>
+            <p class="form-text mb-0 mt-2">Кнопки сторов показываются на странице успешной регистрации по QR.</p>
+        {% endcall %}
+
+        {% call ui.card('Дедлайн', icon='calendar-event', id='sec-deadline', subtitle='Карточка с обратным отсчётом на главной абитуриента') %}
+            <div class="cc-grid cc-grid-3 cn-grid-tight">
+                {{ ui.field('deadline', 'Дата и время', 'datetime-local', value=v.deadline, error=errors.deadline, help='Время Алматы. Пусто — карточки не будет', attrs={'data-cn-deadline': ''}) }}
+                {{ ui.field('deadlineTitle', 'Подпись', value=v.deadlineTitle, error=errors.deadlineTitle, attrs={'maxlength': 120}, placeholder='Приём документов до') }}
+                {{ ui.field('deadlineTitleKk', 'Подпись (KZ)', value=v.deadlineTitleKk, error=errors.deadlineTitleKk, attrs={'maxlength': 120, 'lang': 'kk'}) }}
+            </div>
+            <p class="cn-deadline-preview" data-cn-deadline-preview data-days="{{ days_left if days_left is not none else '' }}">{% if days_left is not none %}{% if days_left >= 0 %}Осталось {{ days_left }} {{ days_left|plural('день', 'дня', 'дней') }}{% else %}Дедлайн прошёл — карточка показывает «приём завершён»{% endif %}{% endif %}</p>
+        {% endcall %}
+
+        {% call ui.card('Награды за квесты', icon='trophy', id='sec-quests', subtitle='Начисляет сервер; изменения действуют для новых наград') %}
+            <div class="cc-grid cc-grid-3 cn-grid-tight">
+                {{ ui.field('quest_profile', 'Заполнил профиль', 'number', value=v.quest_profile, error=errors.quest_profile, attrs={'min': 0, 'max': 100000, 'step': 1}, help='Коинов за полностью заполненный профиль', classes='mb-0') }}
+                {{ ui.field('quest_referral', 'Пригласил друга', 'number', value=v.quest_referral, error=errors.quest_referral, attrs={'min': 0, 'max': 100000, 'step': 1}, help='Когда друг заполнил профиль', classes='mb-0') }}
+                {{ ui.field('quest_referralCap', 'Лимит приглашений', 'number', value=v.quest_referralCap, error=errors.quest_referralCap, attrs={'min': 0, 'max': 100000, 'step': 1}, help='Сколько друзей максимум принесут награду. 0 — без лимита', classes='mb-0') }}
+            </div>
+        {% endcall %}
+
+        {% call ui.card('Каталог специальностей', icon='mortarboard', id='sec-catalog', subtitle='Порядок = порядок в приложении. Абитуриент отмечает интересные специальности в профиле') %}
+            {{ cn.error_list(errors.catalog) }}
+            <div class="cn-rows" data-cn-repeater="cat" data-cn-repeater-max="50">
+                {% for r in v.catalog %}{{ cat_row(r, loop.index) }}{% endfor %}
+            </div>
+            <template data-cn-row-template="cat">{{ cat_row({}, 0) }}</template>
+            <div class="cn-rows__foot">
+                {{ ui.button('Добавить специальность', icon='plus-lg', variant='light', size='sm', attrs={'data-cn-row-add': 'cat'}) }}
+                <span class="cc-subtle small">Переименование не меняет выбор уже зарегистрированных абитуриентов — у них останется старое название.</span>
+            </div>
+        {% endcall %}
+
+        {% call ui.card('Документы для поступления', icon='file-earmark-text', id='sec-documents', subtitle='Чек-лист в приложении: абитуриент отмечает, что уже собрал') %}
+            {{ cn.error_list(errors.documents) }}
+            <div class="cn-rows" data-cn-repeater="doc" data-cn-repeater-max="50">
+                {% for r in v.documents %}{{ doc_row(r, loop.index) }}{% endfor %}
+            </div>
+            <template data-cn-row-template="doc">{{ doc_row({}, 0) }}</template>
+            <div class="cn-rows__foot">{{ ui.button('Добавить документ', icon='plus-lg', variant='light', size='sm', attrs={'data-cn-row-add': 'doc'}) }}</div>
+        {% endcall %}
+
+        {% call ui.card('Частые вопросы', icon='question-circle', id='sec-faq') %}
+            {{ cn.error_list(errors.faq) }}
+            <div class="cn-rows" data-cn-repeater="faq" data-cn-repeater-max="50">
+                {% for r in v.faq %}{{ faq_row(r, loop.index) }}{% endfor %}
+            </div>
+            <template data-cn-row-template="faq">{{ faq_row({}, 0) }}</template>
+            <div class="cn-rows__foot">{{ ui.button('Добавить вопрос', icon='plus-lg', variant='light', size='sm', attrs={'data-cn-row-add': 'faq'}) }}</div>
+        {% endcall %}
+
+        <div class="cn-savebar cn-savebar--sticky">
+            <span class="cc-subtle small me-auto">Приложение подхватит изменения в течение нескольких минут.</span>
+            {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+        </div>
+    </form>
+</div>
+{% endif %}
+{% endblock %}

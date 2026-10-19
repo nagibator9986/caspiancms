@@ -1,0 +1,70 @@
+{# Новости абитуриентов (applicant_news): лента во вкладке «Абитуриент», фото, поиск, фильтры, массовое удаление (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% block title %}Новости абитуриентов{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.js('coins') }}{% endblock %}
+{% set here = request.full_path.rstrip('?') %}
+{% block content %}
+{{ ui.page_header('Новости абитуриентов', 'Лента приёмной комиссии во вкладке «Абитуриент» приложения. Студенты и преподаватели её не видят. При публикации абитуриенты получают пуш.', [
+    {'label': 'Новости колледжа', 'href': nav_url('news'), 'icon': 'newspaper', 'variant': 'light'},
+    {'label': 'Новая публикация', 'href': url_for('applicant_news_form'), 'icon': 'plus-lg'},
+], icon='megaphone') }}
+
+<div class="cc-stats">
+    {{ ui.stat_card('Публикаций', stats.total, 'megaphone') }}
+    {{ ui.stat_card('За 30 дней', stats.month, 'calendar-check', tone='success') }}
+    {{ ui.stat_card('С фото', stats.with_photo, 'images', tone='info', href=url_with(photo='with', page=None)) }}
+    {{ ui.stat_card('Последняя', (stats.last|ago) if stats.last else '—', 'clock-history', meta=(stats.last|dt) if stats.last else 'ещё нет публикаций') }}
+</div>
+
+{% call ui.filters_bar() %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Заголовок или текст') }}
+    {{ ui.filter_select('category', 'Категория', categories, category, all_label='Все') }}
+    {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], photo, all_label='Неважно') }}
+{% endcall %}
+
+<section class="cc-card">
+    {% if page.items %}
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">{{ filtered|num }} {{ filtered|plural('публикация', 'публикации', 'публикаций') }}</h2>
+        <form method="post" action="{{ url_for('applicant_news_bulk') }}" id="cnNewsBulk" class="cn-bulk" data-cn-bulk data-confirm="Удалить отмеченные новости вместе с фото? Это нельзя отменить." data-confirm-title="Удаление новостей" data-confirm-ok="Удалить">
+            <input type="hidden" name="next" value="{{ here }}">
+            <span class="cn-bulk__count" data-cn-bulk-count>Отмечено: 0</span>
+            <button type="submit" class="btn btn-outline-danger btn-sm" name="action" value="delete" disabled data-cn-bulk-btn><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+        </form>
+    </div>
+    <ul class="cn-news" id="cnNews">
+        {% for n in page.items %}
+        <li class="cn-news__item" id="n-{{ n.id }}">
+            <input class="form-check-input cn-news__check" type="checkbox" name="ids" value="{{ n.id }}" form="cnNewsBulk" data-cn-bulk-item aria-label="Отметить «{{ n.title }}»">
+            <a class="cn-news__cover" href="{{ url_for('applicant_news_form', news_id=n.id) }}" tabindex="-1" aria-hidden="true">
+                {% if n.cover %}<img src="{{ n.cover|safe_url }}" alt="" loading="lazy" decoding="async">{% else %}<i class="bi bi-megaphone"></i>{% endif %}
+                {% if n.photos > 1 %}<span class="cn-news__photos"><i class="bi bi-images"></i>{{ n.photos }}</span>{% endif %}
+            </a>
+            <div class="cn-news__body">
+                <div class="cn-news__meta">
+                    {% if n.category_label %}<span class="cn-cat cn-cat--{{ n.category }}">{{ n.category_label }}</span>{% endif %}
+                    <span><i class="bi bi-calendar3" aria-hidden="true"></i>{{ n.created|dt }}</span>
+                    {% if n.updated and n.created and (n.updated - n.created).total_seconds() > 300 %}<span class="cc-subtle">изменено {{ n.updated|ago }}</span>{% endif %}
+                </div>
+                <h3 class="cn-news__title"><a href="{{ url_for('applicant_news_form', news_id=n.id) }}">{{ n.title }}</a></h3>
+                {% if n.summary %}<p class="cn-news__text">{{ n.summary }}</p>{% endif %}
+            </div>
+            <div class="cn-news__actions">
+                {{ ui.button('Изменить', href=url_for('applicant_news_form', news_id=n.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
+                {{ ui.confirm_button(url_for('applicant_news_delete', news_id=n.id), 'Удалить', 'Удалить «' ~ n.title ~ '» вместе с фото? Новость пропадёт из приложения.', icon_only=True, title='Удалить новость', fields={'next': here}) }}
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    <div class="cc-card__body pt-0">{{ ui.pagination(page) }}</div>
+    {% elif q or category or photo %}
+    {{ ui.empty_state('search', 'Ничего не найдено', 'Измените поиск или сбросьте фильтры.', {'label': 'Сбросить', 'href': url_for('applicant_news'), 'variant': 'light'}) }}
+    {% else %}
+    {{ ui.empty_state('megaphone', 'Публикаций пока нет', 'Расскажите абитуриентам о старте приёма, Дне открытых дверей или новой специальности — до 10 фото в одной публикации.', {'label': 'Новая публикация', 'href': url_for('applicant_news_form'), 'icon': 'plus-lg'}) }}
+    {% endif %}
+</section>
+{% if truncated %}<p class="cn-hint mt-3"><i class="bi bi-info-circle" aria-hidden="true"></i>Показаны последние 500 публикаций.</p>{% endif %}
+{% endblock %}

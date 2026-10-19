@@ -1,0 +1,105 @@
+{# Товар магазина коинов: создание и правка, фото (до 10), варианты, склад, лимит, предпросмотр (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% set editing = product is not none %}
+{% block title %}{{ 'Товар: ' ~ values.title if editing else 'Новый товар' }}{% endblock %}
+{% block page_title %}{{ 'Товар' if editing else 'Новый товар' }}{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+{{ ui.page_header(values.title if editing else 'Новый товар', 'Цена — в Caspian Coin. Списание, резерв и склад при заказе ведёт сервер; здесь — витрина и остаток.', [
+    {'label': 'К магазину', 'href': url_for('coins_shop'), 'icon': 'arrow-left', 'variant': 'light'},
+], icon='bag') }}
+
+<div class="cn-form-layout">
+    <form method="post" enctype="multipart/form-data" class="cn-form-main" id="cnProductForm" data-dirty-guard novalidate>
+        {{ ui.csrf_field() }}
+        {% call ui.card('Описание', icon='card-text') %}
+            {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, attrs={'maxlength': 120, 'data-cn-preview': 'title', 'autocomplete': 'off'}, placeholder='Например: Худи Caspian College') }}
+            {{ ui.field('titleKk', 'Название на казахском', value=values.titleKk, error=errors.titleKk, attrs={'maxlength': 120, 'lang': 'kk'}, help='Если пусто — в казахской версии приложения покажем русское название') }}
+            <div class="cc-grid cc-grid-2 cn-grid-tight">
+                {{ ui.field('description', 'Описание', 'textarea', value=values.description, error=errors.description, rows=4, attrs={'maxlength': 2000, 'data-cn-preview': 'description'}, placeholder='Материал, размерная сетка, где забрать…') }}
+                {{ ui.field('descriptionKk', 'Описание на казахском', 'textarea', value=values.descriptionKk, error=errors.descriptionKk, rows=4, attrs={'maxlength': 2000, 'lang': 'kk'}) }}
+            </div>
+        {% endcall %}
+
+        {% call ui.card('Фото', icon='images', subtitle='Первое фото — обложка в магазине') %}
+            {{ ui.image_uploader('images', product if editing else [], max=10, label=None) }}
+            {% if errors.images %}<div class="invalid-feedback d-block">{{ errors.images }}</div>{% endif %}
+        {% endcall %}
+
+        {% call ui.card('Цена и склад', icon='coin') %}
+            <div class="cc-grid cc-grid-3 cn-grid-tight">
+                {{ ui.field('price', 'Цена, коинов', 'number', value=values.price, required=True, error=errors.price, attrs={'min': 1, 'max': max_price, 'step': 1, 'inputmode': 'numeric', 'data-cn-preview': 'price'}) }}
+                <div class="mb-3">
+                    <label class="form-label" for="f-stock">Остаток, шт.</label>
+                    <input class="form-control{{ ' is-invalid' if errors.stock }}" type="number" id="f-stock" name="stock" value="{{ values.stock }}" min="0" max="{{ max_stock }}" step="1" inputmode="numeric" data-cn-preview="stock" {{ 'disabled' if values.unlimited }} aria-describedby="f-stock-help">
+                    <input type="hidden" name="stock_orig" value="{{ values.stock_orig }}">
+                    {% if errors.stock %}<div class="invalid-feedback d-block">{{ errors.stock }}</div>{% endif %}
+                    <div class="form-check form-switch mt-2">
+                        <input class="form-check-input" type="checkbox" role="switch" id="f-unlimited" name="unlimited" value="1" {{ 'checked' if values.unlimited }} data-cn-unlimited="#f-stock">
+                        <label class="form-check-label" for="f-unlimited">Без лимита</label>
+                    </div>
+                    <div class="form-text" id="f-stock-help">{% if editing and not values.unlimited %}Заказы, оформленные пока открыта форма, сервер учтёт — мы применим только вашу разницу.{% else %}При 0 товар показывается как «нет в наличии».{% endif %}</div>
+                </div>
+                {{ ui.field('limitPerUser', 'В одни руки', 'number', value=values.limitPerUser, error=errors.limitPerUser, attrs={'min': 0, 'max': max_limit, 'step': 1, 'inputmode': 'numeric'}, help='Сколько раз один абитуриент может заказать товар. 0 — без лимита') }}
+            </div>
+            {{ ui.field('active', 'Показывать в магазине приложения', 'switch', value=values.active, classes='mb-0', attrs={'data-cn-preview': 'active'}) }}
+        {% endcall %}
+
+        {% call ui.card('Варианты', icon='ui-checks-grid', subtitle='Размеры, цвета — абитуриент выберет при заказе') %}
+            {{ ui.field('variants', 'Варианты — по одному в строке', 'textarea', value=values.variants, error=errors.variants, rows=4, attrs={'data-cn-variants': '', 'spellcheck': 'false'}, placeholder='S, M, L', help='Не больше 30 вариантов, каждый до 40 символов. Пусто — товар без вариантов.', classes='mb-2') }}
+            <div class="cn-chips" aria-label="Шаблоны вариантов">
+                {% for label, items in presets %}
+                <button type="button" class="cc-chip" data-cn-variant-preset="{{ items|join('\n') }}"><i class="bi bi-magic" aria-hidden="true"></i>{{ label }}</button>
+                {% endfor %}
+                <button type="button" class="cc-chip" data-cn-variant-preset=""><i class="bi bi-x-lg" aria-hidden="true"></i>Очистить</button>
+            </div>
+            <div class="cn-variants mt-2" data-cn-variants-preview aria-live="polite"></div>
+        {% endcall %}
+
+        <div class="cn-savebar cn-savebar--sticky">
+            {{ ui.button('Отмена', href=url_for('coins_shop'), variant='light') }}
+            {{ ui.button('Сохранить' if editing else 'Добавить товар', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+        </div>
+    </form>
+
+    <aside class="cn-form-side">
+        <section class="cc-card cn-preview" aria-label="Предпросмотр в приложении">
+            <div class="cc-card__head"><h2 class="cc-card__title"><i class="bi bi-phone" aria-hidden="true"></i>Как увидит абитуриент</h2></div>
+            <div class="cc-card__body">
+                <div class="cn-app-card" data-cn-preview-card>
+                    <div class="cn-app-card__media">
+                        {% set imgs = product|images_of if editing else [] %}
+                        <img {% if imgs %}src="{{ imgs[0].url|safe_url }}"{% endif %} alt="" data-cn-preview-img {{ 'hidden' if not imgs }}>
+                        <span class="cn-app-card__ph" data-cn-preview-ph {{ 'hidden' if imgs }}><i class="bi bi-image" aria-hidden="true"></i></span>
+                        <span class="cn-app-card__badge" data-cn-preview-badge hidden></span>
+                    </div>
+                    <div class="cn-app-card__body">
+                        <div class="cn-app-card__title" data-cn-preview-title>{{ values.title or 'Название товара' }}</div>
+                        <div class="cn-app-card__row">
+                            <span class="cn-coins"><i class="bi bi-coin" aria-hidden="true"></i><span data-cn-preview-price>{{ values.price or '0' }}</span></span>
+                            <span class="cn-app-card__stock" data-cn-preview-stock></span>
+                        </div>
+                    </div>
+                </div>
+                <p class="cc-subtle small mt-3 mb-0">Так карточка выглядит в сетке магазина. В карточке товара — описание, варианты и кнопка «Обменять».</p>
+            </div>
+        </section>
+
+        {% if editing %}
+        {% call ui.card('Заказы товара', icon='box-seam') %}
+            {{ ui.kv([('Ждут выдачи', stats.reserved or 0), ('Выдано', stats.issued or 0), ('Обновлён', product.updatedAt|dt)]) }}
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                {{ ui.button('Заказы товара', href=url_for('coins_orders', product=product.id, status='all'), icon='list-ul', variant='light', size='sm') }}
+            </div>
+        {% endcall %}
+        {% call ui.card('Удаление', icon='trash') %}
+            <p class="cc-muted small">Товар с заказами удалить нельзя — история заказов ссылается на него. Чтобы убрать товар из магазина, выключите «Показывать в магазине».</p>
+            {{ ui.confirm_button(url_for('coins_product_delete', product_id=product.id), 'Удалить товар', 'Удалить «' ~ values.title ~ '» вместе с фото? Это нельзя отменить.', size=None, title='Удалить товар') }}
+        {% endcall %}
+        {% endif %}
+    </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,75 @@
+{# Кампания с кодом: создание (код можно сгенерировать) и правка (код и счётчик вводов не меняются) (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% set editing = campaign is not none %}
+{% block title %}{{ 'Кампания ' ~ campaign.id if editing else 'Новая кампания' }}{% endblock %}
+{% block page_title %}{{ 'Кампания ' ~ campaign.id if editing else 'Новая кампания' }}{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+{{ ui.page_header(('Кампания ' ~ campaign.id) if editing else 'Новая кампания', 'Абитуриент вводит код в приложении (вкладка «Коины») и получает награду — один раз. Проверку срока и лимита делает сервер.', [
+    {'label': 'К кампаниям', 'href': url_for('coins_campaigns'), 'icon': 'arrow-left', 'variant': 'light'},
+], icon='ticket-perforated') }}
+
+<div class="cn-form-layout">
+    <form method="post" class="cn-form-main" data-dirty-guard novalidate data-cn-campaign-form>
+        {{ ui.csrf_field() }}
+        {% call ui.card('Код', icon='upc') %}
+            {% if editing %}
+            <div class="cn-code-fixed">
+                <span class="cn-code cn-code--lg">{{ campaign.id }}</span>
+                <p class="cc-muted small mb-0">Код нельзя изменить: его уже могли напечатать и вводить. Нужен другой — создайте новую кампанию.</p>
+            </div>
+            {% else %}
+            <label class="form-label" for="f-code">Код</label>
+            <div class="input-group cn-code-input">
+                <input class="form-control{{ ' is-invalid' if errors.code }}" type="text" id="f-code" name="code" value="{{ values.code }}" maxlength="24" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="{{ suggestion }}" aria-describedby="f-code-help" data-cn-code data-alphabet="{{ alphabet }}">
+                <button type="button" class="btn btn-light" data-cn-code-generate aria-label="Сгенерировать код"><i class="bi bi-shuffle" aria-hidden="true"></i><span>Сгенерировать</span></button>
+            </div>
+            {% if errors.code %}<div class="invalid-feedback d-block">{{ errors.code }}</div>{% endif %}
+            <div class="form-text" id="f-code-help">4–16 латинских букв и цифр. Пусто — сгенерируем сами (без похожих символов O/0 и I/1). Русские буквы-двойники (А, В, Е, К…) заменим на латинские.</div>
+            {% endif %}
+        {% endcall %}
+
+        {% call ui.card('Награда и сроки', icon='coin') %}
+            {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, attrs={'maxlength': 120, 'data-cn-preview': 'title'}, placeholder='Например: День открытых дверей', help='Абитуриент увидит его в истории коинов') }}
+            <div class="cc-grid cc-grid-2 cn-grid-tight">
+                {{ ui.field('amount', 'Сколько коинов за ввод', 'number', value=values.amount, required=True, error=errors.amount, attrs={'min': 1, 'max': max_coins, 'step': 1, 'inputmode': 'numeric', 'data-cn-preview': 'amount'}) }}
+                {{ ui.field('maxClaims', 'Лимит участников', 'number', value=values.maxClaims, error=errors.maxClaims, attrs={'min': 0, 'step': 1, 'inputmode': 'numeric'}, help='0 — без лимита. Счётчик вводов ведёт сервер' ~ ((': сейчас ' ~ (campaign.claimsCount or 0)) if editing else '')) }}
+                {{ ui.field('startsAt', 'Начало', 'datetime-local', value=values.startsAt, required=True, error=errors.startsAt, help='Время Алматы') }}
+                {{ ui.field('endsAt', 'Окончание', 'datetime-local', value=values.endsAt, required=True, error=errors.endsAt, attrs={'data-cn-preview': 'ends'}, help='После этого код перестанет приниматься') }}
+            </div>
+            {{ ui.field('place', 'Где проходит', value=values.place, error=errors.place, attrs={'maxlength': 120}, placeholder='Актовый зал, стенд в ТРЦ…') }}
+            {{ ui.field('active', 'Код принимается (кампания включена)', 'switch', value=values.active, classes='mb-0') }}
+        {% endcall %}
+
+        <div class="cn-savebar">
+            {{ ui.button('Отмена', href=url_for('coins_campaign_detail', code=campaign.id) if editing else url_for('coins_campaigns'), variant='light') }}
+            {{ ui.button('Сохранить' if editing else 'Создать кампанию', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+        </div>
+    </form>
+
+    <aside class="cn-form-side">
+        <section class="cc-card" aria-label="Предпросмотр экрана">
+            <div class="cc-card__head"><h2 class="cc-card__title"><i class="bi bi-display" aria-hidden="true"></i>На экране</h2></div>
+            <div class="cc-card__body">
+                <div class="cn-mini-present">
+                    <div class="cn-mini-present__title" data-cn-preview-title>{{ values.title or 'Название кампании' }}</div>
+                    <div class="cn-mini-present__hint">Введите код в приложении → «Коины»</div>
+                    <div class="cn-mini-present__code" data-cn-preview-code>{{ values.code or (campaign.id if editing else suggestion) }}</div>
+                    <div class="cn-mini-present__amount"><i class="bi bi-coin" aria-hidden="true"></i>+<span data-cn-preview-amount>{{ values.amount or 0 }}</span> Caspian Coin</div>
+                </div>
+                <p class="cc-subtle small mt-3 mb-0">После сохранения откройте «На экран» — крупный код и QR на регистрацию для тех, у кого ещё нет аккаунта.</p>
+            </div>
+        </section>
+        {% call ui.card('Как это работает', icon='lightbulb') %}
+            <ol class="cn-steps">
+                <li>Абитуриент открывает вкладку «Коины» и вводит код.</li>
+                <li>Сервер проверяет срок, лимит и что код не вводили с этого аккаунта.</li>
+                <li>Коины начисляются сразу, абитуриент получает уведомление.</li>
+            </ol>
+        {% endcall %}
+    </aside>
+</div>
+{% endblock %}

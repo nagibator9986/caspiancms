@@ -1,0 +1,56 @@
+{#
+  Общие макросы раздела «Caspian Coin» и приёмной (COINS).
+      {% import 'coins/_macros.html' as cn with context %}
+#}
+{% import '_ui.html' as ui with context %}
+
+{# Вкладки раздела: Магазин | Заказы | Кампании | Журнал (бейдж заказов — из сайдбара) #}
+{% macro section_tabs(active) -%}
+{%- set ns = namespace(orders=None) -%}
+{%- for sec in nav_sections or [] -%}{%- for it in sec['items'] -%}{%- if it.endpoint == 'coins_orders' and it.badge -%}{%- set ns.orders = it.badge -%}{%- endif -%}{%- endfor -%}{%- endfor -%}
+{{ ui.tabs([
+    {'key': 'shop', 'label': 'Магазин', 'href': url_for('coins_shop'), 'icon': 'bag'},
+    {'key': 'orders', 'label': 'Заказы', 'href': url_for('coins_orders'), 'icon': 'box-seam', 'count': ns.orders},
+    {'key': 'campaigns', 'label': 'Кампании', 'href': url_for('coins_campaigns'), 'icon': 'ticket-perforated'},
+    {'key': 'journal', 'label': 'Журнал', 'href': url_for('coins_journal'), 'icon': 'journal-text'},
+], active, label='Разделы Caspian Coin') }}
+{%- endmacro %}
+
+{# Сумма в коинах: coins(800) → «🪙 800»; signed=True → «+50» / «−20» с цветом #}
+{% macro coins(n, signed=False, size=None) -%}
+{%- set v = n if n is number else 0 -%}
+<span class="cn-coins{{ ' cn-coins--plus' if signed and v > 0 }}{{ ' cn-coins--minus' if signed and v < 0 }}{{ ' cn-coins--' ~ size if size }}"><i class="bi bi-coin" aria-hidden="true"></i><span>{% if signed and v > 0 %}+{% elif signed and v < 0 %}−{% endif %}{{ (v|abs if signed else v)|num }}</span><span class="visually-hidden"> {{ v|abs|plural('коин', 'коина', 'коинов') }}</span></span>
+{%- endmacro %}
+
+{# Человек в таблице: аватар, ФИО/логин (ссылка на карточку абитуриента), логин и телефон #}
+{% macro person_cell(p, filter_url=None) -%}
+<div class="cn-person">
+    {% if p.name %}{{ ui.avatar(p.name, size='sm') }}{% else %}<span class="cc-avatar cc-avatar--sm" aria-hidden="true"><i class="bi bi-person"></i></span>{% endif %}
+    <div class="min-w-0">
+        <div class="cn-person__line">
+            {% if p.link %}<a class="cn-person__name cc-truncate" href="{{ p.link }}">{{ p.title }}</a>{% else %}<span class="cn-person__name cc-truncate">{{ p.title }}</span>{% endif %}
+            {% if filter_url %}<a class="cn-person__filter" href="{{ filter_url }}" title="Только операции этого человека" aria-label="Только операции: {{ p.title }}"><i class="bi bi-funnel" aria-hidden="true"></i></a>{% endif %}
+        </div>
+        {% set sub = [] %}
+        {% if p.login and p.login != p.title %}{% set _ = sub.append(p.login) %}{% endif %}
+        {% if p.phone and (p.phone|phone) != p.login and (p.phone|phone) != p.title %}{% set _ = sub.append(p.phone|phone) %}{% endif %}
+        {% if not p.known and p.uid %}{% set _ = sub.append('аккаунт удалён') %}{% endif %}
+        {% if sub %}<div class="cc-cell-sub cc-truncate">{{ sub|join(' · ') }}</div>{% endif %}
+    </div>
+</div>
+{%- endmacro %}
+
+{# Миниатюра товара/заказа (или заглушка) #}
+{% macro thumb(url, size=44) -%}
+{% if url %}<img class="cc-thumb cn-thumb" src="{{ url|safe_url }}" alt="" width="{{ size }}" height="{{ size }}" loading="lazy" decoding="async">{% else %}<span class="cn-thumb cn-thumb--empty" aria-hidden="true"><i class="bi bi-bag"></i></span>{% endif %}
+{%- endmacro %}
+
+{# Сообщения об ошибках списка (повторяемые строки форм) #}
+{% macro error_list(errors) -%}
+{% if errors %}
+<div class="cn-errors" role="alert">
+    <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+    <ul>{% for e in (errors if errors is not string else [errors]) %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{%- endmacro %}

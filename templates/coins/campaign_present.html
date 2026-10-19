@@ -1,0 +1,42 @@
+{# «Показать на экране»: крупный код кампании, награда, срок и QR на регистрацию для новых абитуриентов (COINS).
+   Каркас админки скрыт (body_class), страница рассчитана на проектор/телевизор и полноэкранный режим. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}{{ c.code }} — на экран{% endblock %}
+{% block body_class %}cn-present-page{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.lib('qrcode') }}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+<div class="cn-present" data-cn-present>
+    <div class="cn-present__controls cc-no-print">
+        <a class="cn-present__btn" href="{{ url_for('coins_campaign_detail', code=c.code) }}"><i class="bi bi-arrow-left" aria-hidden="true"></i><span>Назад</span></a>
+        {% if sources %}
+        <form method="get" class="cn-present__src">
+            <label class="visually-hidden" for="cnPresentSrc">QR ведёт на регистрацию</label>
+            <select class="form-select form-select-sm" id="cnPresentSrc" name="src" data-autosubmit title="Какому QR-источнику засчитать регистрации">
+                <option value="">QR: общая регистрация</option>
+                {% for code, title in sources %}<option value="{{ code }}" {{ 'selected' if code == src }}>QR: {{ title }}</option>{% endfor %}
+            </select>
+        </form>
+        {% endif %}
+        <button type="button" class="cn-present__btn" data-cn-fullscreen><i class="bi bi-fullscreen" aria-hidden="true"></i><span>Во весь экран</span></button>
+    </div>
+
+    <div class="cn-present__main">
+        <div class="cn-present__left">
+            <h1 class="cn-present__title">{{ c.title }}</h1>
+            <p class="cn-present__hint">Введите код в приложении колледжа → вкладка «Коины»</p>
+            <div class="cn-present__code" style="--cn-len: {{ c.code|length }}" aria-label="Код: {{ c.code|list|join(' ') }}">{{ c.code }}</div>
+            <div class="cn-present__amount"><i class="bi bi-coin" aria-hidden="true"></i>+{{ c.amount|num }} Caspian Coin</div>
+            {% if c.ends %}<p class="cn-present__period">Код действует до {{ c.ends|dt }}{% if c.max %} · для первых {{ c.max|num }} участников{% endif %}</p>{% endif %}
+            {% if c.state != 'live' %}<p class="cn-present__warn"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Сейчас код не принимается: {{ c.state_label|lower }}</p>{% endif %}
+        </div>
+        <div class="cn-present__qr-card">
+            <div class="cn-present__qr" data-cn-qr="{{ join_url }}" role="img" aria-label="QR-код регистрации"></div>
+            <p class="cn-present__qr-title">Ещё нет аккаунта?</p>
+            <p class="cn-present__qr-text">Наведите камеру — регистрация за минуту, без анкеты</p>
+            <p class="cn-present__qr-url">{{ join_url|replace('https://', '')|replace('http://', '') }}</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

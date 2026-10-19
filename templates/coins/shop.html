@@ -1,0 +1,131 @@
+{# Магазин мерча за Caspian Coin: витрина (порядок — перетаскиванием), склад, видимость (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% block title %}Магазин коинов{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{% if can_sort %}{{ ui.lib('sortable') }}{% endif %}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+{{ ui.page_header('Магазин мерча', 'Товары, которые абитуриенты обменивают на Caspian Coin в приложении. Списание коинов и склад ведёт сервер — здесь вы управляете витриной.', [
+    {'label': 'Заказы', 'href': url_for('coins_orders'), 'icon': 'box-seam', 'variant': 'light'},
+    {'label': 'Добавить товар', 'href': url_for('coins_product_form'), 'icon': 'plus-lg'},
+], icon='bag') }}
+{{ cn.section_tabs('shop') }}
+
+<div class="cc-stats">
+    {{ ui.stat_card('В продаже', totals.active, 'shop', meta='из ' ~ totals.products ~ ' ' ~ totals.products|plural('товара', 'товаров', 'товаров'), href=url_with(state='active')) }}
+    {{ ui.stat_card('Ждут выдачи', totals.reserved, 'hourglass-split', tone='warning', href=url_for('coins_orders'), meta='зарезервировано') }}
+    {{ ui.stat_card('Выдано', totals.issued, 'bag-check', tone='success', meta='по последним заказам') }}
+    {{ ui.stat_card('Заканчиваются', totals.low + totals.soldout, 'exclamation-triangle', tone='danger' if totals.soldout else 'warning', meta=(totals.soldout ~ ' нет в наличии') if totals.soldout else 'осталось 3 шт. и меньше', href=url_with(state='soldout') if totals.soldout else None) }}
+</div>
+
+{% if total %}
+<section class="cc-card">
+    <div class="cc-table-toolbar cn-toolbar">
+        <nav class="cn-chips" aria-label="Фильтр товаров">
+            <a class="cc-chip {{ 'active' if not state }}" href="{{ url_with(state=None) }}">Все <span class="cc-chip__count">{{ total }}</span></a>
+            {% for k, label in states %}
+            <a class="cc-chip {{ 'active' if state == k }}" href="{{ url_with(state=k) }}">{{ label }} <span class="cc-chip__count">{{ counts[k] }}</span></a>
+            {% endfor %}
+        </nav>
+        <div class="cc-search cn-toolbar__search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="form-control form-control-sm" type="search" placeholder="Найти товар" aria-label="Найти товар" data-cn-filter="#cnProducts">
+        </div>
+        <form method="post" action="{{ url_for('coins_shop_bulk') }}" id="cnShopBulk" class="cn-bulk" data-cn-bulk>
+            <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+            <span class="cn-bulk__count" data-cn-bulk-count>Отмечено: 0</span>
+            <button type="submit" class="btn btn-light btn-sm" name="action" value="show" disabled data-cn-bulk-btn><i class="bi bi-eye" aria-hidden="true"></i><span>Показать</span></button>
+            <button type="submit" class="btn btn-light btn-sm" name="action" value="hide" disabled data-cn-bulk-btn><i class="bi bi-eye-slash" aria-hidden="true"></i><span>Скрыть</span></button>
+        </form>
+    </div>
+    {% if can_sort %}<p class="cn-hint"><i class="bi bi-arrows-move" aria-hidden="true"></i><span>Порядок карточек = порядок в приложении. Перетащите товар за значок <i class="bi bi-grip-vertical" aria-hidden="true"></i> — порядок сохранится сразу.</span></p>{% endif %}
+
+    {% if products %}
+    <div class="cn-products" id="cnProducts" {% if can_sort %}data-cn-sortable="{{ url_for('coins_shop_reorder') }}"{% endif %}>
+        {% for p in products %}
+        <article class="cn-product cn-product--{{ p.state }}" id="p-{{ p.id }}" data-id="{{ p.id }}" data-search="{{ p.search }}">
+            <div class="cn-product__media">
+                {% if p.cover %}<img src="{{ p.cover|safe_url }}" alt="" loading="lazy" decoding="async">{% else %}<span class="cn-product__ph" aria-hidden="true"><i class="bi bi-image"></i><small>Нет фото</small></span>{% endif %}
+                <div class="cn-product__flags">
+                    {% if p.state == 'hidden' %}{{ ui.badge('inactive', 'Скрыт', icon='eye-slash') }}
+                    {% elif p.state == 'soldout' %}{{ ui.badge('x', 'Нет в наличии', 'danger', 'x-circle') }}
+                    {% elif p.low %}{{ ui.badge('x', 'Осталось ' ~ p.stock, 'warning', 'exclamation-triangle') }}{% endif %}
+                </div>
+                <label class="cn-product__check" title="Отметить"><input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}" form="cnShopBulk" data-cn-bulk-item aria-label="Отметить «{{ p.title }}»"></label>
+                {% if p.photos > 1 %}<span class="cn-product__photos"><i class="bi bi-images" aria-hidden="true"></i>{{ p.photos }}</span>{% endif %}
+                {% if can_sort %}<button type="button" class="cn-drag" data-cn-drag aria-label="Перетащить «{{ p.title }}»" title="Перетащите, чтобы изменить порядок"><i class="bi bi-grip-vertical" aria-hidden="true"></i></button>{% endif %}
+            </div>
+            <div class="cn-product__body">
+                <h3 class="cn-product__title"><a href="{{ url_for('coins_product_form', product_id=p.id) }}">{{ p.title }}</a></h3>
+                {% if p.title_kk and p.title_kk != p.title %}<div class="cn-product__kk cc-truncate" lang="kk">{{ p.title_kk }}</div>{% endif %}
+                <div class="cn-product__price">{{ cn.coins(p.price, size='lg') }}</div>
+                <ul class="cn-product__meta">
+                    <li><i class="bi bi-box-seam" aria-hidden="true"></i>{% if p.unlimited %}Без лимита{% else %}<b>{{ p.stock|num }}</b>&nbsp;шт.{% endif %}</li>
+                    <li><i class="bi bi-person" aria-hidden="true"></i>{{ 'Без лимита на человека' if p.limit == 0 else ('до ' ~ p.limit ~ ' в одни руки') }}</li>
+                </ul>
+                {% if p.variants %}
+                <div class="cn-variants" aria-label="Варианты">{% for v in p.variants[:6] %}<span class="cn-variant">{{ v }}</span>{% endfor %}{% if p.variants|length > 6 %}<span class="cn-variant cn-variant--more">+{{ p.variants|length - 6 }}</span>{% endif %}</div>
+                {% endif %}
+                <div class="cn-product__stats">
+                    <a href="{{ url_for('coins_orders', product=p.id) }}"><i class="bi bi-hourglass-split" aria-hidden="true"></i>ждут: <b>{{ p.reserved }}</b></a>
+                    <a href="{{ url_for('coins_orders', product=p.id, status='issued') }}"><i class="bi bi-bag-check" aria-hidden="true"></i>выдано: <b>{{ p.issued }}</b></a>
+                </div>
+            </div>
+            <div class="cn-product__actions">
+                {{ ui.button('Изменить', href=url_for('coins_product_form', product_id=p.id), icon='pencil', variant='light', size='sm') }}
+                {{ ui.button('Склад', icon='boxes', variant='light', size='sm', icon_only=True, attrs={'data-cn-stock': url_for('coins_product_stock', product_id=p.id), 'data-title': p.title, 'data-stock': '' if p.unlimited else p.stock}) }}
+                {{ ui.confirm_button(url_for('coins_product_toggle', product_id=p.id), 'Скрыть' if p.active else 'Показать',
+                    ('Скрыть «' ~ p.title ~ '» из магазина? Новые заказы станут невозможны, уже оформленные останутся.') if p.active else ('Вернуть «' ~ p.title ~ '» в магазин?'),
+                    variant='light', icon='eye-slash' if p.active else 'eye', icon_only=True, ok='Скрыть' if p.active else 'Показать',
+                    fields={'next': request.full_path.rstrip('?') ~ '#p-' ~ p.id}) }}
+                {% if not p.reserved and not p.issued %}
+                {{ ui.confirm_button(url_for('coins_product_delete', product_id=p.id), 'Удалить', 'Удалить «' ~ p.title ~ '» вместе с фото? Это нельзя отменить. Если товар уже заказывали, удаление не пройдёт — его можно только скрыть.', icon_only=True, title='Удалить товар') }}
+                {% endif %}
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    <div class="cc-empty is-hidden" data-cn-filter-empty><p class="cc-empty__title">Ничего не найдено</p><p class="cc-empty__text">Измените запрос поиска.</p></div>
+    {% else %}
+    {{ ui.empty_state('funnel', 'В этом фильтре пусто', 'Выберите другой фильтр или посмотрите все товары.', {'label': 'Все товары', 'href': url_with(state=None), 'variant': 'light'}) }}
+    {% endif %}
+</section>
+{% else %}
+{% call ui.card() %}
+    {{ ui.empty_state('bag-plus', 'Магазин пока пуст', 'Добавьте первый товар: фото, цену в коинах, остаток и варианты (размеры, цвета). Абитуриенты увидят его во вкладке «Магазин» приложения.', {'label': 'Добавить товар', 'href': url_for('coins_product_form'), 'icon': 'plus-lg'}) }}
+{% endcall %}
+{% endif %}
+
+{# Модалка «Склад»: пополнить/списать или «без лимита» #}
+<div class="modal fade" id="cnStockModal" tabindex="-1" aria-labelledby="cnStockTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="#" data-cn-stock-form>
+            <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+            <div class="modal-header">
+                <h2 class="modal-title" id="cnStockTitle">Склад: <span data-cn-stock-name></span></h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                <p class="cn-stock-now">Сейчас: <b data-cn-stock-now>—</b></p>
+                <label class="form-label" for="cnStockDelta">Изменить остаток на</label>
+                <div class="cn-stock-row">
+                    <button type="button" class="btn btn-light" data-cn-stock-step="-1" aria-label="Минус один"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
+                    <input class="form-control cc-num text-center" type="number" id="cnStockDelta" name="delta" value="10" step="1" min="-{{ 100000 }}" max="{{ 100000 }}" required>
+                    <button type="button" class="btn btn-light" data-cn-stock-step="1" aria-label="Плюс один"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="cn-chips mt-2" aria-label="Быстрый выбор">
+                    {% for n in [5, 10, 20, 50] %}<button type="button" class="cc-chip" data-cn-stock-set="{{ n }}">+{{ n }}</button>{% endfor %}
+                    <button type="button" class="cc-chip" data-cn-stock-set="-1">−1</button>
+                </div>
+                <p class="form-text mt-2 mb-0">Положительное число — поступление, отрицательное — списание (брак, выдали вне приложения). Остаток не уйдёт ниже нуля. Возвраты при отмене заказа сервер добавляет сам.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="submit" class="btn btn-ghost me-auto" name="mode" value="unlimited" formnovalidate><i class="bi bi-infinity" aria-hidden="true"></i><span>Без лимита</span></button>
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" class="btn btn-primary" name="mode" value="delta"><i class="bi bi-check2" aria-hidden="true"></i><span>Применить</span></button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

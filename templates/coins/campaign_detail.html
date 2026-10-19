@@ -1,0 +1,76 @@
+{# Кампания: статистика вводов, причины отказов, список вводов с экспортом (COINS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'coins/_macros.html' as cn with context %}
+{% block title %}Кампания {{ c.code }}{% endblock %}
+{% block page_title %}Кампания {{ c.code }}{% endblock %}
+{% block styles %}{{ ui.css('coins') }}{% endblock %}
+{% block scripts %}{{ ui.js('coins') }}{% endblock %}
+{% block content %}
+{% call ui.page_header(c.title, 'Код ' ~ c.code ~ ' · ' ~ c.amount ~ ' ' ~ c.amount|plural('коин', 'коина', 'коинов') ~ ' за ввод' ~ ((' · ' ~ c.place) if c.place else ''), icon='ticket-perforated') %}
+    {{ ui.button('К кампаниям', href=url_for('coins_campaigns'), icon='arrow-left', variant='light') }}
+    {{ ui.button('CSV', href=url_for('coins_campaign_export', code=c.code), icon='download', variant='light') }}
+    {{ ui.button('Изменить', href=url_for('coins_campaign_form', code=c.code), icon='pencil', variant='light') }}
+    {{ ui.button('Показать на экране', href=url_for('coins_campaign_present', code=c.code), icon='display', attrs={'target': '_blank', 'rel': 'noopener'}) }}
+{% endcall %}
+
+<div class="cn-campaign-hero cn-campaign--{{ c.state }}">
+    <button type="button" class="cn-code cn-code--xl" data-copy="{{ c.code }}" data-copy-message="Код скопирован" aria-label="Скопировать код {{ c.code }}">{{ c.code }}<i class="bi bi-copy" aria-hidden="true"></i></button>
+    <div class="cn-campaign-hero__info">
+        {{ ui.badge('x', c.state_label, c.state_tone, c.state_icon) }}
+        <span><i class="bi bi-calendar-range" aria-hidden="true"></i>{{ c.starts|dt }} — {{ c.ends|dt }}</span>
+        {% if c.days_left is not none %}<span><i class="bi bi-hourglass" aria-hidden="true"></i>{{ 'последний день' if c.days_left == 0 else ('осталось ' ~ c.days_left ~ ' ' ~ c.days_left|plural('день', 'дня', 'дней')) }}</span>{% endif %}
+    </div>
+    {% if c.max %}
+    <div class="cn-campaign-hero__bar">
+        {{ ui.progress_bar(c.claims, c.max, 'success', 'Вводов: ' ~ c.claims ~ ' из ' ~ c.max) }}
+        <span class="small">{{ c.claims|num }} из {{ c.max|num }} · осталось мест: {{ [c.max - c.claims, 0]|max|num }}</span>
+    </div>
+    {% endif %}
+</div>
+
+<div class="cc-stats">
+    {{ ui.stat_card('Начислено', stats.accepted, 'check2-circle', tone='success', meta='счётчик сервера: ' ~ (c.claims|num), href=url_with(st='accepted', page=None)) }}
+    {{ ui.stat_card('Коинов выдано', stats.coins, 'coin', tone='warning', meta='по этому коду') }}
+    {{ ui.stat_card('Отклонено', stats.rejected, 'x-octagon', tone='danger' if stats.rejected else None, meta='повторы, срок, лимит', href=url_with(st='rejected', page=None) if stats.rejected else None) }}
+    {{ ui.stat_card('Лучший день', (stats.best_day[1] if stats.best_day else 0), 'graph-up-arrow', tone='info', meta=(stats.best_day[0].strftime('%d.%m.%Y') if stats.best_day else 'вводов ещё не было')) }}
+</div>
+
+{% if reasons %}
+{% call ui.card('Почему отклоняли', icon='question-circle') %}
+    <div class="cn-chips">{% for r, n in reasons %}<span class="cc-chip">{{ r }} <span class="cc-chip__count">{{ n }}</span></span>{% endfor %}</div>
+{% endcall %}
+{% endif %}
+
+<section class="cc-card">
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">Вводы кода{% if truncated %} <span class="cc-subtle small">(последние 1000)</span>{% endif %}</h2>
+        <nav class="cn-chips" aria-label="Фильтр вводов">
+            <a class="cc-chip {{ 'active' if not st }}" href="{{ url_with(st=None, page=None) }}">Все <span class="cc-chip__count">{{ total }}</span></a>
+            <a class="cc-chip {{ 'active' if st == 'accepted' }}" href="{{ url_with(st='accepted', page=None) }}">Начислено <span class="cc-chip__count">{{ stats.accepted }}</span></a>
+            <a class="cc-chip {{ 'active' if st == 'rejected' }}" href="{{ url_with(st='rejected', page=None) }}">Отклонено <span class="cc-chip__count">{{ stats.rejected }}</span></a>
+            {% if stats.pending %}<a class="cc-chip {{ 'active' if st == 'pending' }}" href="{{ url_with(st='pending', page=None) }}">В обработке <span class="cc-chip__count">{{ stats.pending }}</span></a>{% endif %}
+        </nav>
+    </div>
+    {% if page.items %}
+    <div class="cc-table-wrap">
+        <table class="cc-table" data-sortable>
+            <thead><tr><th data-sort="text">Абитуриент</th><th data-sort="num">Когда</th><th>Результат</th><th class="text-end" data-sort="num">Коины</th></tr></thead>
+            <tbody>
+            {% for r in page.items %}
+            <tr>
+                <td data-value="{{ r.person.title }}">{{ cn.person_cell(r.person) }}</td>
+                <td class="cc-nowrap" data-value="{{ r.created.timestamp() if r.created else 0 }}"><div>{{ r.created|dt }}</div><div class="cc-cell-sub">{{ r.created|ago }}</div></td>
+                <td>{% if r.status == 'accepted' %}{{ ui.badge('x', 'Начислено', 'success', 'check2') }}{% elif r.status == 'rejected' %}{{ ui.badge('rejected') }}<div class="cc-cell-sub cn-reason">{{ r.reason }}</div>{% else %}{{ ui.badge('pending') }}{% endif %}</td>
+                <td class="text-end" data-value="{{ r.amount }}">{% if r.amount %}{{ cn.coins(r.amount, signed=True) }}{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="cc-card__body pt-0">{{ ui.pagination(page) }}</div>
+    {% else %}
+    {{ ui.empty_state('people', 'Код ещё не вводили', 'Покажите код на экране или раздайте участникам — вводы появятся здесь в реальном времени (обновите страницу).', {'label': 'Показать на экране', 'href': url_for('coins_campaign_present', code=c.code), 'icon': 'display', 'variant': 'light'}) }}
+    {% endif %}
+</section>
+{% endblock %}
