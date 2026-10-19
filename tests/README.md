@@ -152,7 +152,8 @@ from .core import (Routes, admin_required, csrf_exempt, db, bucket, fb_auth, cac
 `safe_url`, `plural(one, few, many)`, `input_dt`, `images_of`. **Глобалы:** `csrf_token()`, `url_with(**changes)`
 (текущий URL с изменёнными query-параметрами, `None` — удалить), `nav_url(endpoint, **kw)` (не падает на
 неизвестном endpoint), `static_url('css/x.css')` (с `?v=mtime`), `pct(part, total)`, `plural(...)`,
-`public_lang()` (`ru`|`kk`), `get_teacher_name(uid)`.
+`public_lang()` (`ru`|`kk`), `get_teacher_name(uid)`, а также UI-хелперы v2 (`here`, `back_url`, `next_target`,
+`view_param`, `pop_toasts`, `filter_state`, `set_nav_active`, фильтр `time_range`) — см. §4.
 
 ### `cms/schedule_model.py` (только чтение)
 
@@ -180,46 +181,190 @@ from .core import (Routes, admin_required, csrf_exempt, db, bucket, fb_auth, cac
 `normalize_phone`, `password_error(password, repeat=None, allow_reset_password=False)`, `DOMAIN`, `RESET_PASSWORD='abiturient123'`.
 `cms/conflicts.py` (заглушка до CONFLICTS): `summary()` → `None|{'critical','warning','teachers'}`, `check_lesson(lesson, exclude_id=None)` → `[]`.
 
-## 4. Шаблоны: `base.html`, `_ui.html`, публичный layout
+## 4. Шаблоны: `base.html`, `_ui.html`, публичный layout (дизайн-система v2)
+
+Живой справочник всех компонентов — **`/ui-kit`** (исходник `templates/_ui_kit.html`, копируйте разметку оттуда).
+Контракт v2 (`UX_SPEC_v2 §4.15`) опубликован: в начале `templates/_ui.html` стоит `{# CONTRACT v2 READY #}`. Сигнатуры
+макросов не меняются — только добавляются необязательные параметры в конец.
 
 ```jinja
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
-{% block title %}Лиды{% endblock %}                       {# <title> #}
+{% block title %}Лиды{% endblock %}                       {# <title> и последняя крошка дочерней страницы #}
 {% block styles %}{{ ui.css('applicants') }}{% endblock %} {# static/css/applicants.css #}
 {% block content %} … {% endblock %}
+{% block peek %} … {% endblock %}                          {# (необяз.) компактная версия для быстрого просмотра #}
 {% block scripts %}{{ ui.lib('chart') }}{{ ui.js('applicants') }}{% endblock %}
 ```
 
-Блоки `base.html`: `title`, `page_title` (заголовок в топбаре; по умолчанию — пункт сайдбара),
-`breadcrumbs`, `page_actions` (кнопки в топбаре), `content`, `styles`, `head` (старый), `scripts`,
-`body_class`. Активный пункт сайдбара определяется сам (endpoint или самый длинный префикс URL).
-Контейнер `.container` в контенте не нужен (у старых шаблонов он обнуляется).
-Публичные страницы: `{% extends 'public/base_public.html' %}` (блоки `title, styles, head, body_class, body,
-header, brand_href, brand_title, brand_subtitle, lang_switch, content, footer, scripts`), язык `public_lang()`
-(`?lang=kk` запоминается в cookie), шрифт полей 16px, карточка `.cc-public__card`, заголовок `.cc-public__hero`.
+**Каркас.** Блоки `base.html`: `title`, `page_title` (последняя крошка), `breadcrumbs`, `crumbs_extra` (доп. уровень:
+`<li><a href="…">ПО 24-1</a></li>`), `page_actions` (кнопки в топбаре), `content`, `peek`, `styles`, `head`, `scripts`,
+`body_class`. Топбар: на ≥ 992 px — крошки «Раздел › Пункт (ссылка) › Текущая страница», на телефоне — раздел или
+«‹ Список» на дочерней странице (заголовок страницы — только h1 в контенте). Справа — «+ Создать», «Поиск Ctrl K», тема.
+Под топбаром — полоса прогресса `#ccProgress` (появляется через 300 мс после перехода/отправки формы).
 
-Макросы `_ui.html` (все примеры — на `/ui-kit`, исходник `templates/_ui_kit.html`):
+**Сайдбар** (`cms/core.py`, правит только FOUNDATION): `NAV_SECTIONS` (порядок = приоритет: Главная → Расписание →
+Контент → Люди → Сервис → Абитуриенты → Caspian Coin), `NAV_COLLAPSED` (свёрнуты по умолчанию: Абитуриенты, Caspian
+Coin; раскрываются сами, если в них текущая страница; выбор запоминается в `localStorage['cc-nav']`), `NAV_EXTRA`
+(только для Ctrl+K: конструктор, свободные аудитории, команды «Новая новость»…, кампании и журнал коинов),
+`NAV_PARENT` (дочерняя страница → пункт сайдбара: подсветка и крошки), `NAV_BADGE_TONES` (`danger` — Накладки,
+`brand` — Обратная связь, остальные бейджи приглушённые). **Новая дочерняя страница** — добавьте её в `NAV_PARENT`
+(запрос FOUNDATION) или вызовите во view `set_nav_active('applicants_leads')`.
+
+**Быстрый просмотр.** Любая страница открывается в правой панели: `<a href="…" data-cc-peek>` / `ui.peek_link(href,
+label)` / `CC.peek(url)`. Запрос идёт с заголовком `X-CC-Partial: 1` (в Python — `is_partial()`, в шаблоне —
+`is_partial`), `base.html` отдаёт только `styles` + `{% block peek %}` (по умолчанию = `content`) без каркаса и
+**не забирает** flash-сообщения. Скрипты из вставленного HTML не выполняются: после вставки `app.js` шлёт
+`cc:content-loaded` (`detail.root`) и сам переинициализирует общие виджеты; модульный JS слушает это событие.
+Формы в панели отправляются обычным POST (с `next` = URL списка). Проверка в тесте:
+`self.client.get(url, headers={'X-CC-Partial': '1'})` — нет `cc-sidebar`, есть форма.
+
+**Хелперы Python (`from .core import …`) и глобалы Jinja:**
+
+| имя | что делает |
+|---|---|
+| `here()` | Jinja-глобал: текущий путь с query (`request.full_path` без `?`). Работает и как `{{ here }}` |
+| `back_url(default_endpoint, **values)` | цель redirect после сохранения: безопасный `next` (форма/query), иначе `url_for(...)`. `return redirect(back_url('news'))`; в шаблоне — `back={'href': back_url('news'), 'label': 'Новости'}` |
+| `next_target()` | безопасный `next` или `None` (его выводит `ui.next_field()`) |
+| `flash_action(message, label, href=None, post=None, fields=None, category='success')` | тост с действием: обычный flash `(category, message)` (старые проверки `('success', '…')` работают) + служебный `('cc-action', json)`. `post` — маленькая POST-форма с CSRF (кнопка «Отменить»), `href` — ссылка («Открыть»). Небезопасный URL — действие не показывается |
+| `pop_toasts()` | Jinja-глобал для `_toasts.html`: склеивает пары flash → `[{category, message, action}]` |
+| `view_param(key, allowed, default)` | вид страницы: `?view=` → cookie `cc_view_<key>` (ставит `ui.segmented(remember=key)`) → `default` |
+| `set_nav_active(endpoint)` | подсветить пункт сайдбара (страница не из `NAV_PARENT`) |
+| `is_partial()` | запрос быстрого просмотра (`X-CC-Partial: 1`) |
+| `filter_state(ignore, search_name)` | для `filters_bar`: число активных фильтров, URL «Сбросить», скрытые поля вкладок |
+| фильтр `time_range` | `'13.00-13.50'`, `'8:30 – 9:50'` → `'13:00–13:50'`, `'08:30–09:50'`; одно время → `'09:20'`; мусор — как есть |
+
+**Сохранение контекста списка.** Источник правды — URL. Ссылки на правку несут `next=here()`:
+`url_for('news_form', news_id=n.id, next=here())`; формы кладут `{{ ui.next_field() }}`; после сохранения —
+`redirect(back_url('news'))`. `app.js` помнит последний URL каждого списка в `sessionStorage['cc-last:<путь>']` и
+подставляет его в ссылки `[data-cc-back]` без query (кнопка «‹ Назад» в шапке, крошка-пункт, «Отмена» в savebar).
+
+### Макросы `_ui.html`
+
+| макрос | сигнатура / назначение |
+|---|---|
+| `page_header` | `(title, subtitle=None, actions=None, icon=None, meta=None, back=None)` + caller. Кнопки `actions` по умолчанию **light**; основную (одну!) помечайте `'variant': 'primary'` (и `'attrs': {'data-cc-hotkey': 'n'}`). `{'menu': [...]}` в `actions` → ⋯. `icon` не рисуется (совместимость). `meta` — разметка рядом с h1 (`ui.week_now(...)`, бейдж). `back` — `{'href', 'label'}` → «‹ Новости» над h1 (на телефоне скрывается, если в топбаре та же ссылка «‹ Новости» — её адрес с фильтрами переходит в топбар). Подзаголовок — одна строка, на телефоне скрыт; на телефоне у второстепенных кнопок видна только иконка |
+| `header_menu` | `(items, label='Ещё действия')` — ⋯ для редких действий. item: `{label, href, icon, attrs}` \| `{label, action, fields, confirm, ok, danger, icon}` (POST с CSRF) \| `{divider: True}` \| `{header: '…'}`. Опасные — последними, после разделителя |
+| `summary_line` | `(items)` — `[{value, label, href, tone, title}]` или `[(value, label)]` → «5 новостей · 4 за 30 дней». Вместо рядов KPI на всех страницах, кроме Обзора, Аналитики приёма и Накладок |
+| `stat_card` / `stat_strip` | `(label, value, icon=None, trend=None, href=None, meta=None, tone=None)` / `(items)` — KPI; иконка нейтральная, `tone` (`danger`/`warning`/`success`/`info`) — только состояние: цвет иконки и полоса слева. На телефоне ряд прокручивается |
+| `list_card` | `(summary=None, title=None, actions=None, id=None, classes='')` + caller — карточка списка: фильтры, таблица, пагинация |
+| `filters_bar` | `(action=None, reset=None, submit='Применить', search=None, inline=False, ignore=(), sheet_title='Фильтры', id=None)` + caller. Новый вид: `search={'name','value','placeholder','label','filter'}` всегда виден (Enter или 600 мс после ввода; с `filter='#css'` — мгновенно на клиенте по `[data-search]`/строкам), остальные поля — пилюли «Курс: Все ▾» (сразу отправляются), на < 768 px — в шторке снизу (кнопки «Сбросить»/«Показать»). `ignore` — параметры вкладок/чипов: не считаются фильтрами, сохраняются скрытыми полями и в «Сбросить». «Сбросить · N» видна только при фильтрах. Старый вызов без `search`/`inline` работает (поля с подписями) |
+| `filter_search` / `filter_select` / `filter_input` | прежние сигнатуры; в новой панели — пилюли |
+| `filter_switch` | `(name, label, value=False)` — булев фильтр (`value=1`), отправляется сразу |
+| `filter_chips` | `(param, items, active, all_label='Все', all_count=None)` — items `[(value, label[, count])]`, ссылки `url_with(param=…, page=None)` |
+| `tabs` | `(items, active, pills=False, label='Вкладки')` — подстраницы; активная видна на телефоне (автопрокрутка + маска) |
+| `segmented` | `(items, active, label='Вид', remember=None)` — вид/период; items — как у `tabs` или `(key, label, href[, icon])`; `remember='key'` → cookie для `view_param` |
+| `row_menu` | `(items, label='Действия', quick=None)` — ⋯ строки (popper `fixed`: не обрезается прокруткой) + одна быстрая иконка `quick` (ссылка или `{action, fields, confirm}`) |
+| `select_all` / `select_row` | `(form_id, label=…)` / `(form_id, value, label)` — чекбоксы `name="ids" form="<id>"` |
+| `bulkbar` | `(form_id, noun=('элемент','элемента','элементов'))` + caller (кнопки с `form=` и `name="action"`). Появляется при выборе ≥ 1, «N выбрано», «Снять выделение», Esc, Shift-диапазон; в `data-confirm` кнопок `{n}` → число, `{items}` → «3 новости» |
+| `savebar` | `(submit='Сохранить', cancel_href=None, form=None, danger=None, note=None, submit_attrs={})` + caller — закреплённая панель сохранения длинной формы: «Есть несохранённые изменения», Ctrl+S. `danger={'label','action','confirm','icon'}` — кнопка с `formaction` (без вложенных форм) |
+| `modal_form` | `(id, title, action, submit='Сохранить', variant='primary', enctype=None, open=False)` + caller (тело). Открывать: `data-bs-toggle="modal" data-bs-target="#id"`; `open=True` — открыть при загрузке (после ошибки) |
+| `form_errors` | `(errors)` — сводка над формой: `{'поле': 'текст' или [...]}` со ссылками `#f-<поле>` (id из `ui.field`) |
+| `next_field` | `()` — `<input type="hidden" name="next">` из безопасного `?next=` |
+| `hint` | `(text=None, icon='info-circle', tone=None, dismiss=None)` + caller — строка-подсказка; `dismiss='key'` — «×», выбор запоминается |
+| `details` | `(title, key=None, open=False, classes='')` + caller — сворачиваемый блок; `key` — открытость запоминается |
+| `legend` | `(items)` — `[(kind, label)]`, kind: `always, numerator, denominator, conflict, now` |
+| `week_now` / `week_badge` | `(current_week, week_number=None)` — нейтральный чип «Знаменатель · 8-я неделя» / `(week_type, short=False)` — нейтральный бейдж, цвет недели — только точка |
+| `role_badge` | `(role)` — роль пользователя: нейтральный outline с иконкой |
+| `badge` | `(status, label=None, variant=None, icon=None)` — таблица `STATUS` (цвет = состояние): новые лиды и типы транзакций — нейтрально, «Ждёт выдачи» — warning, роли — outline |
+| `empty_state` / `empty_filtered` | `(icon, title, text, action)` (кнопка по умолчанию light) / `(reset_href, text=None)` — «Ничего не найдено по фильтрам» + «Сбросить фильтры» |
+| `peek_link` | `(href, label, classes='', title=None)` — ссылка быстрого просмотра |
+| `kbd` | `ui.kbd('Ctrl', 'S')` (на Mac — ⌘) |
+| `skeleton` | `(lines=3)` |
+| прежние | `button`, `card`, `pagination`, `confirm_button`, `field`, `image_uploader`, `data_table`, `kv`, `avatar`, `progress_bar` (полоса нейтральная, `tone='brand'` — выделенная), `section_title`, `lib`, `css`, `js`, `json_data`, `csrf_field` — без изменений API |
+
+Пример страницы-списка:
 
 ```jinja
-{{ ui.page_header('Лиды', 'Абитуриенты и статусы CRM', [{'label': 'Экспорт CSV', 'href': url_with(format='csv'), 'icon': 'download', 'variant': 'light'}], icon='person-lines-fill') }}
-{% call ui.page_header('Магазин') %}{{ ui.button('Добавить товар', href=url_for('coins_shop'), icon='plus-lg') }}{% endcall %}
-{{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': ''}) }}   {# variant: primary|light|outline-primary|ghost|danger|outline-danger; size='sm'; icon_only=True #}
-<div class="cc-stats">{{ ui.stat_card('За 7 дней', 42, 'person-plus', trend=12.5, href=url_for('applicants_leads'), meta='к прошлой неделе', tone='success') }}</div>
-{% call ui.card('Регистрации по дням', icon='graph-up', subtitle='30 дней', actions=[{'label': '90 дней', 'href': url_with(days=90)}]) %}<canvas id="chart"></canvas>{% endcall %}
-{{ ui.empty_state('inbox', 'Заказов нет', 'Подсказка…', {'label': 'Добавить', 'href': '#', 'icon': 'plus-lg'}) }}
-{{ ui.badge('reserved') }} {{ ui.badge(lead.status) }} {{ ui.badge('x', 'Своя подпись', 'success') }} {{ ui.week_badge(lesson.week_type, short=True) }}
-{{ ui.tabs([{'key': 'rooms', 'label': 'Аудиторный фонд', 'href': url_for('schedule_rooms'), 'icon': 'door-open'}, {'key': 'conflicts', 'label': 'Накладки', 'href': url_for('schedule_conflicts'), 'count': 3}], 'conflicts') }}   {# pills=True — сегменты #}
-{% call ui.filters_bar() %}{{ ui.filter_search('q', 'Поиск', request.args.get('q')) }}{{ ui.filter_select('status', 'Статус', [('new', 'Новый')], request.args.get('status')) }}{{ ui.filter_input('from', 'С даты', request.args.get('from'), 'date') }}{% endcall %}
-{% call ui.data_table('leadsTable', search=True, placeholder='Поиск…', title='Лиды', actions=[...]) %}<table class="cc-table" id="leadsTable" data-sortable>…</table>{% endcall %}
-{{ ui.pagination(page) }}                                          {# Page (курсор) или ListPage (номера) #}
-{{ ui.confirm_button(url_for('coins_order_cancel', order_id=o.id), 'Отменить', 'Отменить заказ и вернуть коины?', icon='x-lg', ok='Отменить заказ') }}
-{{ ui.field('title', 'Название', value=p.title, required=True, attrs={'maxlength': 120}) }}   {# type: text|email|number|date|datetime-local|select|textarea|checkbox|switch; options=[(v, label)]; help; error #}
-<form method="post" enctype="multipart/form-data">{{ ui.csrf_field() }}{{ ui.image_uploader('images', product, max=10, label='Фото') }}…</form>
-{{ ui.kv([('Логин', lead.login), ('Телефон', lead.phone|phone)]) }} {{ ui.avatar(name, size='sm') }} {{ ui.progress_bar(37, 100, 'success') }} {{ ui.section_title('Источники') }}
-{{ ui.lib('chart') }} {{ ui.lib('qrcode') }} {{ ui.lib('sortable') }}   {# Chart.js 4.4.1, qrcode-generator 1.4.4, SortableJS 1.15.2 (SRI) #}
-{{ ui.json_data('leadsData', rows) }}                               {# данные для JS без XSS #}
+{% call ui.page_header('Новости', actions=[
+    {'menu': [{'label': 'Экспорт CSV', 'href': url_with(format='csv'), 'icon': 'download'}]},
+    {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) %}{% endcall %}
+{{ ui.summary_line([(stats.total, plural(stats.total, 'новость', 'новости', 'новостей')), (stats.month, 'за 30 дней')]) }}
+<form id="newsBulk" method="post" action="{{ url_for('news_bulk') }}">{{ ui.next_field() }}</form>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Заголовок или текст'}, inline=True) %}
+        {{ ui.filter_select('category', 'Категория', categories, category) }}
+        {{ ui.filter_switch('photo', 'С фото', photo) }}
+    {% endcall %}
+    {% if rows %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+      <table class="cc-table cc-table--stack" data-sortable>
+        <thead><tr><th class="cc-select">{{ ui.select_all('newsBulk') }}</th><th>Новость</th>
+                   <th class="cc-col-md">Категория</th><th class="cc-num-col cc-col-lg">Просмотры</th><th class="cc-actions"></th></tr></thead>
+        <tbody>{% for n in rows %}
+          <tr data-href="{{ url_for('news_form', news_id=n.id, next=here()) }}">
+            <td class="cc-select">{{ ui.select_row('newsBulk', n.id, n.title) }}</td>
+            <td class="cc-cell-primary"><a class="cc-row-link cc-cell-main" href="{{ url_for('news_form', news_id=n.id, next=here()) }}">{{ n.title }}</a></td>
+            <td class="cc-cell-meta cc-col-md">{{ ui.badge('x', n.category_label, 'outline') }}</td>
+            <td class="cc-num-col cc-col-lg" data-label="Просмотры">{{ n.views|num }}</td>
+            <td class="cc-actions">{{ ui.row_menu([
+                {'label': 'Редактировать', 'href': url_for('news_form', news_id=n.id, next=here()), 'icon': 'pencil'},
+                {'divider': True},
+                {'label': 'Удалить', 'action': url_for('news_delete', news_id=n.id), 'icon': 'trash', 'danger': True,
+                 'confirm': 'Удалить новость «' ~ n.title ~ '»? Фото тоже удалятся.'}]) }}</td>
+          </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+    {{ ui.pagination(page) }}
+    {% elif q or category %}{{ ui.empty_filtered(url_for('news')) }}
+    {% else %}{{ ui.empty_state('newspaper', 'Новостей пока нет', 'Первая новость появится в приложении сразу.') }}{% endif %}
+{% endcall %}
+{% call ui.bulkbar('newsBulk', noun=('новость', 'новости', 'новостей')) %}
+    <button class="btn btn-sm btn-outline-danger" name="action" value="delete" form="newsBulk" data-confirm="Удалить {items}?">Удалить</button>
+{% endcall %}
 ```
+
+Пример формы (`.cc-form-layout` + `savebar`; клиентская проверка и Ctrl+S — автоматически):
+
+```jinja
+{% call ui.page_header('Новая новость', back={'href': back_url('news'), 'label': 'Новости'}) %}{{ ui.header_menu([...]) }}{% endcall %}
+<form method="post" enctype="multipart/form-data" data-dirty-guard novalidate>
+  {{ ui.csrf_field() }}{{ ui.next_field() }}
+  <div class="cc-form-layout">
+    <div class="cc-stack">{{ ui.form_errors(errors) }}{% call ui.card('Основное') %}…поля…{% endcall %}</div>
+    <aside class="cc-form-aside">{% call ui.card('Превью') %}…{% endcall %}</aside>
+  </div>
+  {{ ui.savebar('Опубликовать', cancel_href=back_url('news'), submit_attrs={'data-confirm': 'Уведомление получат: студенты', 'data-confirm-variant': 'primary', 'data-confirm-ok': 'Опубликовать'}) }}
+</form>
+```
+Сервер: `flash_action('Новость опубликована', 'Открыть', href=url_for('news_form', news_id=nid)); return redirect(back_url('news'))`.
+
+### Правило: вкладки, сегменты, чипы (§4.6)
+
+| задача | компонент | пример |
+|---|---|---|
+| переключение подстраниц/разделов | `ui.tabs(items, active)` | Coin: Магазин · Заказы · Кампании · Журнал; Аудитории: Фонд · Свободные; измерения накладок; роли пользователей |
+| режим отображения, период | `ui.segmented(items, active, remember=key)` | Неделя / Список; Карточки / Таблица; 7 / 30 / 90 дней |
+| фильтр по статусу/типу внутри списка | `ui.filter_chips(param, items, active)` | статусы обращений, заказов, лидов, транзакций |
+
+### Политика подтверждений (§4.11)
+
+| действие | как |
+|---|---|
+| удаление чего угодно, массовое удаление, очистка расписания группы | модальное подтверждение (красная кнопка): текст называет объект и последствия |
+| сброс пароля, блокировка входа, завершение сеансов | подтверждение (`data-confirm-variant="primary"`), в тексте — новый пароль |
+| публикация с пушем | подтверждение с аудиторией: «Уведомление получат: студенты» |
+| массовая смена группы/курса/преподавателя (> 1 объекта) | подтверждение с числом объектов (`{items}`) |
+| закрыть/вернуть обращение, принять накладку, сменить статус лида, вкл/выкл источник, кампанию, товар | **без подтверждения**, `flash_action('Готово', 'Отменить', post=…, fields={…прежнее значение…})` |
+| выдать заказ | без модалки, тост со ссылкой «Журнал» |
+
+### Чек-лист перевода страницы-списка (§5.0.3)
+
+1. `page_header`: одна основная кнопка (`'variant': 'primary'`, `'attrs': {'data-cc-hotkey': 'n'}`), прочее — light
+   или `header_menu`; иконки в h1 нет; подзаголовок ≤ 1 строки; `back=` вместо «К списку».
+2. Ряд KPI → `summary_line` (кроме Обзора, Аналитики приёма и Накладок).
+3. Фильтры → `list_card` + `filters_bar(search=…, inline=True)`; статусы → `filter_chips` или `tabs` (+ `ignore=`).
+4. Таблица → `.cc-table--stack`, `.cc-cell-primary` / `.cc-cell-meta` / `data-label`, `.cc-col-xl|lg|md` вместо
+   `d-*-table-cell`, `tr[data-href]` + `a.cc-row-link`, действия → `row_menu`, выбор → `select_*` + `bulkbar`.
+5. Пустое: `empty_state` (данных нет) и `empty_filtered` (не нашлось).
+6. Модульный CSS: убрать оранжевый hover, оранжевые числа/ссылки, свои bulk/chips/hint/legend/savebar.
+7. Скриншоты 1440 и 390: первая строка данных ≤ 300 / ≤ 450 px, одна основная кнопка, нет горизонтальной прокрутки.
+
+Публичные страницы: `{% extends 'public/base_public.html' %}` (блоки `title, styles, head, body_class, body, header,
+brand_href, brand_title, brand_subtitle, lang_switch, content, footer, scripts`), язык `public_lang()` (`?lang=kk`
+запоминается в cookie), шрифт полей 16px, шапка — тёмный градиент `--cc-gradient-brand-dark` (мелкий белый текст
+≥ 4.88:1), карточка `.cc-public__card`, заголовок `.cc-public__hero`. Тосты всех страниц — `templates/_toasts.html`.
 
 Сервер для `image_uploader`:
 ```python
@@ -233,30 +378,99 @@ delete_storage_paths(res.removed_paths)
 
 ## 5. CSS (`static/css/app.css`) и JS (`static/js/app.js`)
 
-Токены (не хардкодить цвета; в тёмной теме переопределены): `--cc-brand #FF6200` (акценты, графики),
-`--cc-brand-strong #C24B00` (кнопки, мелкий текст/ссылки — контраст AA), `--cc-brand-deep`, `--cc-brand-light`,
-`--cc-brand-soft`, `--cc-brand-tint`, `--cc-success|warning|danger|info|violet|teal` (+ `-soft`, `-fg`),
-`--cc-bg`, `--cc-surface`, `--cc-surface-2/3`, `--cc-text`, `--cc-text-muted`, `--cc-text-subtle`, `--cc-border`,
-`--cc-border-strong`, `--cc-week-num-bg/fg`, `--cc-week-den-bg/fg`, `--cc-week-all-bg/fg`, радиусы
-`--cc-radius-xs|sm|md|lg|xl|pill` (6/10/14/18/24), отступы `--cc-space-1..7` (4…48), `--cc-shadow-1/2`,
-`--cc-dur-fast|med` (160/260 мс), `--cc-ease`, `--cc-font` (Montserrat), `--cc-gradient-brand`.
-Bootstrap 5.3.3 перекрашен через `--bs-*` (классы Bootstrap можно использовать как есть).
+### Токены (светлая и тёмная тема; не хардкодить цвета)
 
-Классы: `.cc-page-header`, `.cc-card` (`__head/__title/__sub/__body/__body--flush/__foot`), `.cc-grid .cc-grid-2|3|4`,
-`.cc-stack`, `.cc-section`, `.cc-section-title`, `.cc-stats` + `.cc-stat` (`--success|warning|danger|info|violet`),
-`.cc-trend--up|down|flat`, `.cc-badge--brand|success|warning|danger|info|violet|neutral|outline|week-num|week-den|week-all`,
-`.cc-chip(.active)`, `.cc-avatar(--sm|--lg)`, `.cc-tabs(--pills) .cc-tab(.active)`, `.cc-filters`, `.cc-search`,
-`.cc-table-wrap`, `.cc-table(--compact)` (`.cc-cell-main/.cc-cell-sub/.cc-actions/.cc-thumb/.cc-table-empty`),
-`.cc-empty`, `.cc-skeleton`, `.cc-kv`, `.cc-timeline`, `.cc-bar`, `.cc-uploader`, `.cc-week-pill--numerator|denominator`,
-`.cc-public__*`, `.cc-error`, утилиты `.cc-muted .cc-subtle .cc-num .cc-truncate .cc-nowrap .cc-no-print .min-w-0`.
-Модульные стили — `static/css/<модуль>.css` (только токены `--cc-*`, префикс классов модуля, например `.ap-`).
+| токен | роль |
+|---|---|
+| `--cc-brand` `#FF6200` | **только декор**: индикатор активного пункта/вкладки, «сегодня/сейчас», прогресс, фокус, выделенный столбик |
+| `--cc-brand-strong` `#C24B00` (+`-hover`) | основная кнопка, бренд-текст ≥ 14px |
+| `--cc-brand-ink` `#A84100` | текст на `--cc-brand-tint` / `--cc-brand-soft` (бейдж brand, активный чип, счётчик активной вкладки) |
+| `--cc-brand-tint`, `--cc-brand-soft`, `--cc-brand-border` | фон выбранного, рамка активного чипа |
+| `--cc-nav-badge-bg` | бейдж «brand» в сайдбаре (белый 4.88:1) |
+| `--cc-text` / `--cc-text-muted` `#5B6370` / `--cc-text-subtle` `#6B7280` | основной / вторичный (шапки таблиц, подписи) / приглушённый (не на surface-2/3) |
+| `--cc-icon-subtle` `#8A9099` | только иконки и декор (не текст) |
+| `--cc-row-hover`, `--cc-row-selected` | наведение на строку (серое) / выбранная строка (тёплая + полоса 2px бренда) |
+| `--cc-avatar-bg/fg` | нейтральные аватары |
+| `--cc-chart-neutral`, `--cc-chart-neutral-strong`, `--cc-chart-highlight` | столбики/полосы: обычные нейтральные, выделенный — бренд |
+| `--cc-week-num` `#1565C0`, `--cc-week-den` `#B45309` | цвет недели — **только** полоса карточки занятия и свотч легенды (+ старые `--cc-week-*-bg/fg`) |
+| `--cc-success|warning|danger|info|violet|teal` (+`-soft`, `-fg`), `--cc-violet-fg`, `--cc-danger-border` | статусы |
+| `--cc-bg`, `--cc-surface`, `--cc-surface-2/3`, `--cc-border`, `--cc-border-strong` | поверхности |
+| `--cc-radius-xs|sm|md|lg|xl|pill` 6/8/12/16/20 | радиусы (карточки 12, контролы 8, модалки/панели 16) |
+| `--cc-shadow-1` (почти плоско) / `--cc-shadow-2` (оверлеи) | тени: карточки / меню, модалки, панели |
+| `--cc-control-h` 36px (40px на < 576 px), `--cc-row-h` 44px, `--cc-sidebar-w` 248px, `--cc-topbar-h` 56px | геометрия |
+| `--cc-gradient-brand-dark` | градиент под белый текст (вход, публичные страницы) |
+| `--cc-dur-fast|med`, `--cc-ease`, `--cc-font`, `--cc-space-1..7` | движение, шрифт, отступы |
 
-`window.CC`: `CC.toast(text, 'success'|'error'|'warning'|'info')`, `CC.confirm(text, {title, okText, danger}) → Promise<bool>`,
-`CC.fetchJSON(url, {method, body}) → Promise` (JSON + CSRF), `CC.copy(text)`, `CC.qrSvg(text, {cellSize, margin, ecc})`,
-`CC.svgToPng(svg, size) → Promise<Blob>`, `CC.download(filename, blob|string|url, type)`, `CC.chartColors()`,
-`CC.applyChartDefaults()`, `CC.cssVar('--cc-brand')`, `CC.setTheme('dark')`, `CC.store.get/set` (localStorage в try/catch),
-`CC.debounce`, `CC.initUploader(el)`, `CC.openPalette()`. Атрибуты: `form[data-confirm="…"]` / `button[data-confirm]`
-(+ `data-confirm-title`, `data-confirm-ok`, `data-confirm-variant="primary"`), `input[data-table-search="#id"]`,
-`table[data-sortable] th[data-sort="text|num"]` (значение — `data-value` ячейки), `tr[data-href]`, `[data-copy="…"]`,
-`select[data-autosubmit]`, `[data-password-toggle="#id"]`, `form[data-dirty-guard]`, `button[data-loading]`.
-Событие `cc:theme` (смена темы — перерисуйте графики).
+### Классы
+
+Каркас и общие: `.cc-page-header` (`__back`, `__row`, `__title`, `__meta`, `__sub`, `__actions`), `.cc-summary`
+(`__item--danger|warning|success`), `.cc-card` (`__head/__title/__sub/__body/__body--flush/__foot`), `.cc-list`
+(`__summary`, `__foot`), `.cc-grid .cc-grid-2|3|4`, `.cc-stack`, `.cc-stats`, `.cc-stat-strip`, `.cc-stat`
+(`--danger|warning|success|info`), `.cc-badge--success|warning|danger|info|info-outline|neutral|outline|brand|violet|week-num|week-den|week-all|role`,
+`.cc-chips` + `.cc-chip(.active)`, `.cc-tabs .cc-tab(.active)`, `.cc-segmented .cc-segmented__item(.active)`,
+`.cc-day-switch` (сегменты дней на телефоне; `.active`, `.is-today`), `.cc-scroll-x` (горизонтальная прокрутка с маской),
+`.cc-week-chip`, `.cc-legend` + `.cc-legend__swatch--always|numerator|denominator|conflict|now`, `.cc-hint(--info|warning|danger|success)`,
+`.cc-details`, `.cc-avatar(--sm|--lg)`, `.cc-empty`, `.cc-skeleton`, `.cc-skel`, `.cc-kv`, `.cc-timeline`, `.cc-bar(--brand|success|info|warning|danger)`,
+`.cc-uploader`, `.cc-kbd`, `.cc-link-quiet`, `.cc-public__*`, `.cc-error`, утилиты `.cc-muted .cc-subtle .cc-num .cc-truncate .cc-nowrap .cc-no-print .min-w-0`.
+
+Фильтры: `.cc-filters` (старая панель), `.cc-filters--inline`, `.cc-filters__search`, `.cc-fsel(.is-active)` (пилюля),
+`.cc-fswitch`, `.cc-filters__toggle`, `.cc-filters__sheet`, `.cc-filters__reset`, `.cc-filters__submit` (скрыта при JS),
+`.cc-filter-tags` (чипы активных фильтров на телефоне — строит `app.js`).
+
+Таблицы: `.cc-table-wrap(--sticky)`, `.cc-table(--compact|--stack)`, `.cc-cell-main`, `.cc-cell-sub`, `.cc-cell-primary`,
+`.cc-cell-meta`, `td[data-label]`, `.cc-col-optional` (скрыта в стеке), `.cc-col-xl|lg|md` (скрыты, если **таблица** уже
+1100/900/700 px — считает `app.js`; в стеке `.cc-table--stack` на телефоне они **не** скрываются — колонку, которая
+дублирует данные карточки или пуста, помечайте ещё и `.cc-col-optional`), `.cc-num-col`, `.cc-select`, `.cc-sticky-col`, `.cc-row-link`, `.cc-row-menu`,
+`.cc-row-quick`, `.cc-actions` (никогда не скрывать), `tr.is-selected`, `tr[data-href]`, `.cc-truncate-cell`, `.cc-table-empty`.
+
+Действия и формы: `.cc-bulkbar(.is-visible)`, `.cc-savebar(.is-dirty)`, `.cc-form-layout` + `.cc-form-aside`, `.cc-form-errors`,
+`.cc-peek`, `.cc-nav-sep`, `.cc-nav-badge--danger|brand|muted`. Модульные стили — `static/css/<модуль>.css`
+(только токены `--cc-*`, префикс модуля: `sch- rm- cf- fr- ct- pp- ap- cn- hm-`).
+
+### JS API (`window.CC`) и атрибуты
+
+```js
+CC.toast('Сохранено', 'success');                                         // success | error | warning | info
+CC.toast('Обращение закрыто', 'success', {action: {label: 'Отменить', post: '/feedback/status/fb_1', fields: {status: 'new'}}});
+CC.toast('Новость опубликована', 'success', {action: {label: 'Открыть', href: '/news/edit/x'}});
+CC.toast('Готово', 'info', {action: {label: 'Отменить', onClick: function () { … }}});
+CC.confirm('Удалить «Х»?', {title, okText: 'Удалить', danger: true}).then(function (ok) { … });
+CC.peek('/applicants/ap_001?next=' + encodeURIComponent(location.pathname + location.search));
+document.addEventListener('cc:content-loaded', function (e) { initMyWidgets(e.detail.root); });   // после вставки HTML
+CC.onInit(function (root) { … });             // инициализатор для документа и для каждого вставленного фрагмента
+CC.progress.start(); CC.progress.done();
+CC.hotkey('BracketLeft', prevGroup, 'Предыдущая группа', {group: 'Расписание'});   // e.code, работает в RU-раскладке; видно в «?»
+CC.view.remember('schedule_teachers', 'cards');   // cookie cc_view_<key>
+CC.validateForm(form) → bool;  CC.markClean(form);  CC.clearSelection('newsBulk');  CC.selection('newsBulk') → ['id1', …]
+CC.filterItems(targetEl, 'запрос') → число видимых;  CC.plural(3, ['новость', 'новости', 'новостей'])
+CC.chartColors();  CC.chartNeutral();  CC.chartNeutralStrong();  CC.chartHighlight();  CC.applyChartDefaults();
+CC.store.get/set/del(key);  CC.session.get/set/del(key);   // localStorage / sessionStorage в try/catch
+CC.fetchJSON(url, {method, body, signal}) → Promise;  CC.copy(text);  CC.qrSvg(text, opts);  CC.svgToPng(svg, size);  CC.download(name, data, type)
+CC.openPalette();  CC.showHotkeys();  CC.setTheme('dark');  CC.cssVar('--cc-brand');  CC.debounce(fn, ms);  CC.initUploader(el)
+```
+
+| атрибут | поведение |
+|---|---|
+| `a[data-cc-peek]` | быстрый просмотр в правой панели (≥ 768 px; Ctrl/⌘/средняя кнопка — обычный переход) |
+| `[data-cc-select="formId"]`, `[data-cc-select-all="formId"]`, `[data-cc-bulkbar="formId"]` | выбор строк и панель массовых действий (обычно через макросы) |
+| `[data-cc-hotkey="n"]` | основная кнопка «создать» (клавиша `n`) |
+| `[data-cc-hotkey-save]` | что нажимать по Ctrl+S (если на странице не одна `form[data-dirty-guard]`) |
+| `[data-cc-search]` | поле поиска страницы (клавиша `/`) |
+| `input[data-cc-filter="#target"]` + элементы с `data-search` | мгновенный фильтр на клиенте; пусто → `[data-cc-filter-empty]` |
+| `[data-cc-autosubmit-debounce="600"]` | отправка поиска через N мс после ввода; фокус и курсор вернутся после перезагрузки |
+| `[data-cc-back]` | ссылка «назад к списку» — подставляется последний URL списка с фильтрами |
+| `details[data-cc-collapse-key]`, `[data-cc-hint]` | запоминание открытости / скрытой подсказки |
+| `[data-cc-view][data-cc-view-value]` | клик ставит cookie вида (`ui.segmented(remember=…)`) |
+| `textarea[data-cc-ctrl-enter]` | Ctrl/⌘+Enter отправляет форму |
+| `form[novalidate]` (POST) | клиентская проверка перед отправкой (русские тексты под полями, фокус на первое; фото не теряются); `form[data-cc-novalidate]` — отключить |
+| `form[data-dirty-guard]` | предупреждение при уходе + индикатор в `savebar`; Ctrl+S сохраняет |
+| `form[data-cc-draft="news:new"]` | черновик полей в браузере (раз в 2 с), плашка «Восстановить черновик» |
+| `.modal[data-cc-open-on-load]` | открыть модалку при загрузке (`ui.modal_form(open=True)`) |
+| прежние: `data-confirm` (+ `-title`, `-ok`, `-variant="primary"`), `data-table-search`, `data-sortable` + `th[data-sort]`, `tr[data-href]` (Ctrl/⌘/Shift/средняя кнопка — новая вкладка), `data-copy`, `data-autosubmit` (в шторке на телефоне — нет), `data-password-toggle`, `data-loading` | без изменений |
+
+События: `cc:theme` (смена темы — перерисуйте графики), `cc:content-loaded` (`detail.root`), `cc:selection`
+(`detail.form`, `detail.count`), `cc:filtered`, `cc:uploader-change`.
+
+Горячие клавиши (по `e.code`, работают в RU-раскладке): Ctrl/⌘+K — поиск по разделам, группам, преподавателям,
+аудиториям, людям, новостям и командам (`/api/search`); `/` — поиск страницы; `n` — создать; Ctrl/⌘+S — сохранить;
+Ctrl/⌘+Enter — отправить ответ; Esc — закрыть/снять выделение; `?` — окно со списком (включая `CC.hotkey` модулей).

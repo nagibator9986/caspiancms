@@ -1,92 +1,86 @@
 {# Участники события или клуба (общий шаблон; club_registrations.html его наследует) (CONTENT).
-   kind: 'events' | 'clubs'. Имена и группы — из users (одно пакетное чтение). #}
+   kind: 'events' | 'clubs'. Имена и группы — из users (одно пакетное чтение). Поиск — мгновенно на клиенте. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_event = kind == 'events' %}
 {% set list_ep = 'events' if is_event else 'clubs' %}
 {% set id_kw = {'event_id': item.id} if is_event else {'club_id': item.id} %}
 {% block title %}Участники — {{ title }}{% endblock %}
-{% block page_title %}Участники{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-{% call ui.page_header(title, ((event_date.strftime('%d.%m.%Y') ~ (' · ' ~ item.time if item.time else '') ~ (' · ' ~ item.location if item.location else '')) if event_date else (item.location or None)) if is_event else (item.meetingTime or item.location or None),
-                       icon='people') %}
-    {{ ui.button('CSV', href=url_with(format='csv'), icon='download', variant='light') }}
-    {{ ui.button('Редактировать', href=url_for('event_form' if is_event else 'club_form', **id_kw), icon='pencil', variant='light') }}
-    {{ ui.button('Написать участникам', icon='bell', variant='primary', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#ctRemind'}) }}
+{%- set when = ((event_date.strftime('%d.%m.%Y') ~ (' · ' ~ item.time if item.time else '') ~ (' · ' ~ item.location if item.location else '')) if event_date else (item.location or None)) if is_event else ((item.meetingTime or '') ~ (' · ' if item.meetingTime and item.location else '') ~ (item.location or '')) or None -%}
+{% call ui.page_header(title, back={'href': back_url(list_ep), 'label': 'События' if is_event else 'Клубы'},
+                       meta=ui.badge('when', when, 'outline', 'calendar-event' if is_event else 'clock') if when else None) %}
+    {{ ui.header_menu([
+        {'label': 'Скачать CSV', 'href': url_with(format='csv'), 'icon': 'download'},
+        {'label': 'Пересчитать участников', 'action': url_for('event_recount' if is_event else 'club_recount', **id_kw), 'icon': 'arrow-repeat'},
+        {'divider': True},
+        {'label': 'Удалить ' ~ ('событие' if is_event else 'клуб'), 'action': url_for('event_delete' if is_event else 'club_delete', **id_kw), 'fields': {'next': back_url(list_ep)}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': ('Удалить событие «' if is_event else 'Удалить клуб «') ~ title ~ '» вместе со списком участников? Из приложения ' ~ ('оно' if is_event else 'он') ~ ' тоже пропадёт.'},
+    ]) }}
+    {{ ui.button('Редактировать', href=url_for('event_form' if is_event else 'club_form', next=here(), **id_kw), icon='pencil', variant='light') }}
+    {% if total %}{{ ui.button('Написать участникам', icon='bell', variant='primary', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#ctRemind'}) }}{% endif %}
 {% endcall %}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Участников', total, 'people') }}
-    {{ ui.stat_card('Счётчик в приложении', stored_count, 'phone', tone='warning' if stored_count != total else 'success',
-                    meta='расходится — пересчитайте' if stored_count != total else 'совпадает') }}
-    {% for g, n in top_groups[:2] %}{{ ui.stat_card(g, n, 'collection', tone='info', meta='самая активная группа' if loop.first else None) }}{% endfor %}
-</div>
+{%- set summary = [(total, plural(total, 'участник', 'участника', 'участников'))] -%}
+{%- if top_groups|length > 1 and top_groups[0][1] >= 2 and top_groups[0][1] > top_groups[1][1] and top_groups[0][0] != 'Без группы' -%}{%- set _ = summary.append({'value': top_groups[0][1], 'label': 'из ' ~ top_groups[0][0] ~ ' — активнее всех'}) -%}{%- endif -%}
+{{ ui.summary_line(summary) }}
 
 {% if stored_count != total %}
-<div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" role="status">
-    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-    <span class="me-auto">В приложении показывается {{ stored_count }}, а фактически записано {{ total }}.</span>
-    {{ ui.confirm_button(url_for('event_recount' if is_event else 'club_recount', **id_kw), 'Пересчитать', 'Записать в счётчик фактическое число участников (' ~ total ~ ')?', variant='outline-primary', icon='arrow-repeat', ok='Пересчитать') }}
-</div>
+{% call ui.hint(icon='exclamation-triangle', tone='warning') %}
+    В приложении показывается <b>{{ stored_count }}</b>, а фактически записано <b>{{ total }}</b>.
+    {{ ui.confirm_button(url_for('event_recount' if is_event else 'club_recount', **id_kw), 'Пересчитать', 'Записать в счётчик приложения фактическое число участников (' ~ total ~ ')?', variant='light', icon='arrow-repeat', ok='Пересчитать', classes='ms-1') }}
+{% endcall %}
 {% endif %}
 
-{% if total %}
-<section class="cc-card">
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ rows|length }} {{ (rows|length)|plural('участник', 'участника', 'участников') }}{% if q %} <span class="cc-muted fw-normal">из {{ total }}</span>{% endif %}</h2>
-        <form class="cc-search" method="get" role="search">
+{% call ui.list_card() %}
+    {% if total %}
+    <form class="cc-filters cc-filters--inline" method="get" role="search" data-cc-filters>
+        <div class="cc-filters__search cc-search">
             <i class="bi bi-search" aria-hidden="true"></i>
-            <input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="Имя, группа, телефон" aria-label="Поиск участника" data-table-search="#regsTable">
-        </form>
-    </div>
+            <input class="form-control" type="search" name="q" value="{{ q }}" placeholder="Имя, группа, телефон" aria-label="Поиск участника" autocomplete="off" data-cc-search data-cc-filter="#regsTable">
+        </div>
+    </form>
     <div class="cc-table-wrap">
-        <table class="cc-table" id="regsTable" data-sortable>
-            <thead><tr><th data-sort="text">Участник</th><th data-sort="text">Группа</th><th class="d-none d-md-table-cell">Контакты</th><th class="d-none d-sm-table-cell" data-sort="text">Записался</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
+        <table class="cc-table cc-table--stack" id="regsTable" data-sortable>
+            <thead><tr>
+                <th data-sort="text">Участник</th>
+                <th data-sort="text">Группа</th>
+                <th class="cc-col-md">Контакты</th>
+                <th class="cc-col-lg" data-sort="text">Записался</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
             <tbody>
             {% for r in rows %}
-            <tr>
-                <td><div class="d-flex align-items-center gap-2">{{ ui.avatar(r.name, size='sm') }}<div class="min-w-0"><div class="cc-cell-main">{{ r.name }}</div><div class="cc-cell-sub">{% if r.missing %}аккаунт удалён{% elif r.role %}{{ ui.badge(r.role) }}{% endif %}</div></div></div></td>
-                <td>{{ r.group or '—' }}</td>
-                <td class="d-none d-md-table-cell cc-nowrap">
-                    {% if r.phone %}<a href="{{ ('tel:' ~ r.phone)|safe_url }}">{{ r.phone|phone }}</a>{% endif %}
-                    {% if r.email %}<div class="cc-cell-sub">{{ r.email }}</div>{% endif %}
-                    {% if not r.phone and not r.email %}—{% endif %}
+            <tr data-search="{{ r.name }} {{ r.group }} {{ r.phone }} {{ r.email }}">
+                <td class="cc-cell-primary"><div class="d-flex align-items-center gap-2">{{ ui.avatar(r.name, size='sm') }}<div class="min-w-0"><div class="cc-cell-main">{{ r.name }}</div>{% if r.missing %}<div class="cc-cell-sub">аккаунт удалён</div>{% elif r.role and r.role != 'student' %}<div class="cc-cell-sub">{{ ui.role_badge(r.role) }}</div>{% endif %}</div></div></td>
+                <td class="cc-cell-meta">{{ r.group or '—' }}</td>
+                <td class="cc-col-md cc-cell-meta cc-nowrap">
+                    {% if r.phone %}<a class="cc-link-quiet" href="{{ ('tel:' ~ r.phone)|safe_url }}">{{ r.phone|phone }}</a>{% endif %}
+                    {% if r.email %}<div class="cc-cell-sub ct-hide-stack">{{ r.email }}</div>{% endif %}
+                    {% if not r.phone and not r.email %}<span class="ct-hide-stack">—</span>{% endif %}
                 </td>
-                <td class="d-none d-sm-table-cell cc-nowrap" data-value="{{ r.registeredAt|dt('%Y%m%d%H%M', '') }}">{{ r.registeredAt|dt }}</td>
-                <td class="cc-actions">
-                    {{ ui.confirm_button(url_for('delete_event_registration', event_id=item.id, user_id=r.id) if is_event else url_for('delete_club_registration', club_id=item.id, reg_id=r.id),
-                                         'Убрать', 'Убрать «' ~ r.name ~ '» из списка участников?', icon='person-dash', ok='Убрать', icon_only=True) }}
-                </td>
+                <td class="cc-col-lg cc-col-optional cc-nowrap" data-label="Записался" data-value="{{ r.registeredAt|dt('%Y%m%d%H%M', '') }}">{{ r.registeredAt|dt }}</td>
+                <td class="cc-actions">{{ ui.row_menu([
+                    {'label': 'Убрать из списка', 'action': url_for('delete_event_registration', event_id=item.id, user_id=r.id) if is_event else url_for('delete_club_registration', club_id=item.id, reg_id=r.id),
+                     'icon': 'person-dash', 'danger': True, 'ok': 'Убрать', 'confirm': 'Убрать «' ~ r.name ~ '» из списка участников? Вернуть запись сможет только сам студент в приложении.'},
+                ]) }}</td>
             </tr>
             {% endfor %}
             <tr data-table-empty class="{{ 'is-hidden' if rows else '' }}"><td colspan="5" class="cc-table-empty">Никого не нашли</td></tr>
             </tbody>
         </table>
     </div>
-</section>
-{% else %}
-<section class="cc-card">{{ ui.empty_state('people', 'Пока никто не записался', 'Участники появятся, когда студенты запишутся в приложении.' if is_event else 'Участники появятся, когда студенты вступят в клуб в приложении.') }}</section>
-{% endif %}
+    {% else %}
+    {{ ui.empty_state('people', 'Пока никто не записался', 'Участники появятся, когда студенты запишутся в приложении.' if is_event else 'Участники появятся, когда студенты вступят в клуб в приложении.') }}
+    {% endif %}
+{% endcall %}
 
-<div class="modal fade" id="ctRemind" tabindex="-1" aria-labelledby="ctRemindTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <form class="modal-content" method="post" action="{{ url_for('event_remind' if is_event else 'club_remind', **id_kw) }}">
-            {{ ui.csrf_field() }}
-            <div class="modal-header">
-                <h2 class="modal-title fs-5" id="ctRemindTitle">Уведомление участникам</h2>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-            </div>
-            <div class="modal-body">
-                <p class="cc-muted small">Пуш уйдёт всем записавшимся, у кого установлено приложение с уведомлениями ({{ total }} {{ total|plural('участник', 'участника', 'участников') }}).</p>
-                {{ ui.field('message', 'Текст', 'textarea', rows=3, placeholder='Пусто — стандартное напоминание с датой и временем' if is_event else 'Пусто — напоминание о встрече клуба', attrs={'maxlength': 300}) }}
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
-                <button type="submit" class="btn btn-primary" data-loading="Отправляем…" {{ 'disabled' if not total }}><i class="bi bi-send" aria-hidden="true"></i><span>Отправить</span></button>
-            </div>
-        </form>
-    </div>
-</div>
+{% if total %}
+{% call ui.modal_form('ctRemind', 'Уведомление участникам', url_for('event_remind' if is_event else 'club_remind', **id_kw), submit='Отправить') %}
+    <p class="cc-muted small">Пуш получат участники с приложением и включёнными уведомлениями — всего записано {{ total }} {{ total|plural('человек', 'человека', 'человек') }}.</p>
+    {{ ui.field('message', 'Текст', 'textarea', rows=3, placeholder='Пусто — стандартное напоминание с датой и временем' if is_event else 'Пусто — напоминание о встрече клуба', attrs={'maxlength': 300, 'data-cc-ctrl-enter': ''}, classes='mb-0') }}
+{% endcall %}
+{% endif %}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

@@ -201,6 +201,77 @@ class ShopTest(CmsTestCase):
         html = self.get_ok('/coins/orders?status=all')
         self.assertNotIn('<script>alert(1)</script>', html)
 
+    # ---------- CRM-1 (г): у coin_products всегда целый sort — приложение делает orderBy('sort') ----------
+    def _break_sort(self):
+        from cms.core import DELETE_FIELD, db
+        db.collection('coin_products').document('prod_mug').update({'sort': DELETE_FIELD})      # нет поля
+        db.collection('coin_products').document('prod_tshirt').update({'sort': '1'})            # строка
+        db.collection('coin_products').document('prod_notebook').update({'sort': 4.0})         # дробь
+
+    def assertIntSort(self, pid):
+        v = self.doc('coin_products', pid).get('sort')
+        self.assertIs(type(v), int, '%s: sort=%r' % (pid, v))
+        return v
+
+    def test_shop_warns_about_products_without_sort(self):
+        self._break_sort()
+        html = self.get_ok('/coins/shop')
+        self.assertIn('без порядка', html)
+        self.assertIn('приложение их не покажет', html)
+        self.assertIn('Упорядочить', html)
+        self.assertIn('action="/coins/shop/reorder"', html)
+        # кнопка «Упорядочить» шлёт текущий порядок — после неё у ВСЕХ товаров целый sort
+        r = self.post('/coins/shop/reorder', {'ids': ['prod_hoodie', 'prod_tshirt', 'prod_mug', 'prod_stickers',
+                                                      'prod_notebook', 'prod_shopper']})
+        self.assertRedirectsTo(r, '/coins/shop')
+        for pos, pid in enumerate(['prod_hoodie', 'prod_tshirt', 'prod_mug', 'prod_stickers', 'prod_notebook',
+                                   'prod_shopper']):
+            self.assertEqual(self.assertIntSort(pid), pos)
+        self.assertNotIn('приложение их не покажет', self.get_ok('/coins/shop'))
+
+    def test_reorder_subset_puts_unsorted_rest_last(self):
+        self._break_sort()
+        r = self.post_json('/coins/shop/reorder', {'ids': ['prod_shopper', 'prod_hoodie']})
+        self.assertEqual(r.status_code, 200)
+        for d in self.docs('coin_products'):
+            self.assertIs(type(d.get('sort')), int, d['id'])
+        self.assertEqual(self.doc('coin_products', 'prod_shopper')['sort'], 0)
+
+    def test_toggle_stock_edit_bulk_add_missing_sort(self):
+        self._break_sort()
+        self.post('/coins/shop/prod_mug/toggle')                          # нет sort → max + 1 (в сиде max 5)
+        self.assertEqual(self.assertIntSort('prod_mug'), 6)
+        self.post('/coins/shop/prod_tshirt/stock', {'delta': '3'})        # '1' → 1
+        self.assertEqual(self.assertIntSort('prod_tshirt'), 1)
+        self.post('/coins/shop/bulk', {'action': 'show', 'ids': ['prod_notebook']})   # 4.0 → 4
+        self.assertEqual(self.assertIntSort('prod_notebook'), 4)
+        from cms.core import DELETE_FIELD, db
+        db.collection('coin_products').document('prod_stickers').update({'sort': DELETE_FIELD})
+        self.post('/coins/shop/prod_stickers/edit', self.product_form(title='Стикерпак', price='50', unlimited='1',
+                                                                      stock='', limitPerUser='0'))
+        self.assertEqual(self.assertIntSort('prod_stickers'), 7)
+        # товар с целым sort не трогаем
+        self.post('/coins/shop/prod_hoodie/toggle')
+        self.assertEqual(self.assertIntSort('prod_hoodie'), 0)
+
+    def test_toggle_is_undoable(self):
+        r = self.post('/coins/shop/prod_mug/toggle', {'next': '/coins/shop?state=active'})
+        self.assertRedirectsTo(r, '/coins/shop?state=active')
+        self.assertIs(self.doc('coin_products', 'prod_mug')['active'], False)
+        action = json.loads(self.flashes()[-1][1])
+        self.assertEqual(action['label'], 'Отменить')
+        self.assertEqual(action['post'], '/coins/shop/prod_mug/toggle')
+        self.post(action['post'], action['fields'])
+        self.assertIs(self.doc('coin_products', 'prod_mug')['active'], True)
+
+    def test_sort_helpers(self):
+        from cms.routes_coins import sort_missing
+        self.assertTrue(sort_missing({}))
+        self.assertTrue(sort_missing({'sort': '2'}))
+        self.assertTrue(sort_missing({'sort': 2.0}))
+        self.assertTrue(sort_missing({'sort': True}))
+        self.assertFalse(sort_missing({'sort': 0}))
+
     def test_product_form_pages(self):
         self.get_ok('/coins/shop/new')
         html = self.get_ok('/coins/shop/prod_hoodie/edit')
@@ -243,7 +314,7 @@ class OrdersTest(CmsTestCase):
         html = self.get_ok('/coins/orders?status=all&uid=ap_003')
         self.assertIn('o-ord_001', html)
         self.assertNotIn('o-ord_002', html)
-        self.assertIn('показаны заказы этого абитуриента', html)
+        self.assertIn('Заказы абитуриента', html)                 # плашка «чьи заказы» со ссылкой «Все»
 
     def test_issue_changes_only_status_fields(self):
         wallets = self.wallets()
@@ -264,6 +335,20 @@ class OrdersTest(CmsTestCase):
         # повторно — не меняется
         self.post('/coins/orders/ord_001/issue')
         self.assertIn('уже выдан', ' '.join(t for _, t in self.flashes()))
+
+    def test_issue_is_one_click_with_journal_link(self):
+        # UX v2: выдача — одна кнопка в строке без подтверждения; тост ведёт в журнал коинов абитуриента
+        html = self.get_ok('/coins/orders')
+        btn = re.search(r'<button[^>]*cn-issue-btn[^>]*>', html).group(0)
+        self.assertNotIn('data-confirm', btn)
+        self.assertIn('Выдать {items}?', html)                    # массовая выдача — с подтверждением
+        uid = self.doc('coin_orders', 'ord_001')['uid']
+        self.post('/coins/orders/ord_001/issue', {'next': '/coins/orders'})
+        cat, payload = self.flashes()[-1]
+        self.assertEqual(cat, 'cc-action')
+        action = json.loads(payload)
+        self.assertEqual(action['label'], 'Журнал')
+        self.assertEqual(action['href'], '/coins/journal?uid=' + uid)
 
     def test_cancel_does_not_refund_itself(self):
         wallets = self.wallets()
@@ -391,6 +476,18 @@ class CampaignsTest(CmsTestCase):
         self.assertEqual(self.client.post('/coins/campaigns/bad code/toggle',
                                           data={'csrf_token': self.csrf()}).status_code, 404)
 
+    def test_toggle_is_undoable(self):
+        r = self.post('/coins/campaigns/DOD2026/toggle', {'next': '/coins/campaigns?state=live'})
+        self.assertRedirectsTo(r, '/coins/campaigns?state=live')
+        self.assertIs(self.doc('coin_campaigns', 'DOD2026')['active'], False)
+        cat, payload = self.flashes()[-1]
+        action = json.loads(payload)
+        self.assertEqual((cat, action['label'], action['post']), ('cc-action', 'Отменить', '/coins/campaigns/DOD2026/toggle'))
+        self.post(action['post'], action['fields'])
+        c = self.doc('coin_campaigns', 'DOD2026')
+        self.assertIs(c['active'], True)
+        self.assertEqual(c['claimsCount'], 14)                   # счётчик вводов не трогаем
+
     def test_detail_present_and_export(self):
         from cms.core import db
         db.collection('coin_claims').document('DOD2026_ap_002').set({'status': 'accepted', 'amount': 100}, merge=True)
@@ -400,7 +497,7 @@ class CampaignsTest(CmsTestCase):
         html = self.get_ok('/coins/campaigns/DOD2026')
         self.assertIn('DOD2026', html)
         # вводы из сида без статуса, но с операцией claim_<id> — засчитаны
-        self.assertRegex(html, r'Начислено <span class="cc-chip__count">1[0-9]</span>')
+        self.assertRegex(html, r'Начислено\s*<span class="cc-chip__count">1[0-9]</span>')   # чип фильтра со счётчиком
         self.assertIn('лимит участников исчерпан', html)
         present = self.get_ok('/coins/campaigns/DOD2026/present')
         self.assertIn('cn-present-page', present)
@@ -572,6 +669,68 @@ class AdmissionsTest(CmsTestCase):
                 self.assertEqual(r.status_code, 200)
                 self.assertIn('Проверьте поля формы', r.get_data(as_text=True))
         self.assertEqual(self.doc('app_config', 'admissions'), before)
+
+    # ---------- CRM-1: контракт данных приложения ----------
+    def test_quests_always_int_old_strings_normalized(self):
+        from cms.core import db
+        db.collection('app_config').document('admissions').update(
+            {'quests': {'profile': '50', 'referral': 30.0, 'referralCap': True}})
+        html = self.get_ok('/admissions')
+        self.assertIn('награды за квесты записаны не числами', html)
+        self.assertIn('value="50"', html)
+        r = self.post('/admissions', self.base_form())
+        self.assertRedirectsTo(r, '/admissions')
+        q = self.doc('app_config', 'admissions')['quests']
+        self.assertEqual(q, {'profile': 60, 'referral': 35, 'referralCap': 0})
+        for k, v in q.items():
+            self.assertIs(type(v), int, k)
+        # полей квестов нет в форме — значения по умолчанию, тоже int
+        form = self.base_form()
+        for k in ('quest_profile', 'quest_referral', 'quest_referralCap'):
+            form.pop(k)
+        self.post('/admissions', form)
+        q = self.doc('app_config', 'admissions')['quests']
+        self.assertEqual(q, {'profile': 50, 'referral': 30, 'referralCap': 10})
+        self.assertTrue(all(type(v) is int for v in q.values()))
+        for bad in ('12.5', 'да', '1e3'):
+            r = self.post('/admissions', self.base_form(quest_profile=bad))
+            self.assertEqual(r.status_code, 200, bad)
+        self.assertEqual(self.doc('app_config', 'admissions')['quests']['profile'], 50)
+
+    def test_register_url_always_absolute_http(self):
+        self.post('/admissions', self.base_form(registerUrl=''))
+        self.assertEqual(self.doc('app_config', 'admissions')['registerUrl'], 'http://localhost/join')
+        self.post('/admissions', self.base_form(registerUrl='HTTPS://caspian.kz/join'))
+        self.assertEqual(self.doc('app_config', 'admissions')['registerUrl'], 'https://caspian.kz/join')
+        for bad in ('/join', 'join', 'caspian.kz/join', 'javascript:alert(1)', 'ftp://caspian.kz/join', 'https://',
+                    'https://caspian kz/join', 'http://x'):
+            with self.subTest(bad=bad):
+                r = self.post('/admissions', self.base_form(registerUrl=bad))
+                self.assertEqual(r.status_code, 200)
+                self.assertIn('Нужна полная ссылка', r.get_data(as_text=True))
+        self.assertEqual(self.doc('app_config', 'admissions')['registerUrl'], 'https://caspian.kz/join')
+
+    def test_catalog_titles_equal_specialties(self):
+        form = self.base_form(cat_key=['po', 'k1', 'k2'], cat_id=['po', '', ''], cat_imageUrl=['', '', ''],
+                              cat_title=['  Программное обеспечение ', 'Туризм', ' Дизайн  интерьера'],
+                              cat_titleKk=['', '', ''], cat_description=['', '', ''], cat_descriptionKk=['', '', ''],
+                              cat_duration=['', '', ''], cat_base=['', '', ''], cat_form=['', '', ''],
+                              cat_language=['', '', ''], cat_places=['', '', ''], cat_price=['', '', ''])
+        self.post('/admissions', form)
+        d = self.doc('app_config', 'admissions')
+        self.assertEqual(d['specialties'], [c['title'] for c in d['catalog']])
+        self.assertEqual(d['specialties'], ['Программное обеспечение', 'Туризм', 'Дизайн  интерьера'])
+        self.assertTrue(all(type(t) is str for t in d['specialties']))
+
+    def test_app_data_issues(self):
+        from cms.routes_admissions import app_data_issues
+        ok = {'quests': {'profile': 1, 'referral': 2, 'referralCap': 3}, 'registerUrl': 'https://a.kz/join',
+              'catalog': [{'id': 'a', 'title': 'A'}], 'specialties': ['A']}
+        self.assertEqual(app_data_issues(ok), [])
+        self.assertEqual(len(app_data_issues(dict(ok, registerUrl='/join'))), 1)
+        self.assertEqual(len(app_data_issues(dict(ok, specialties=['B']))), 1)
+        self.assertEqual(len(app_data_issues(dict(ok, quests={'profile': '1'}))), 1)
+        self.assertEqual(app_data_issues({}), [])
 
     def test_catalog_image_upload_and_remove(self):
         data = self.base_form()

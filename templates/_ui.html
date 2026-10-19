@@ -1,18 +1,23 @@
+{# CONTRACT v2 READY #}
 {#
   _ui.html — Jinja-макросы дизайн-системы (FOUNDATION). Подключение в шаблоне:
       {% import '_ui.html' as ui with context %}
   («with context» нужен макросам, которые используют request/csrf_token/url_with).
-  Примеры вызова — в tests/README.md, раздел «Макросы _ui.html».
+  Примеры вызова — в tests/README.md (раздел «Макросы _ui.html») и на живой странице /ui-kit.
+  Контракт v2 (UX_SPEC_v2 §4.15): сигнатуры макросов ниже не меняются — только добавляются
+  необязательные параметры в конец.
 #}
 
-{# ----------------------------- Справочник статусов для badge() ----------------------------- #}
+{# ----------------------------- Справочник статусов для badge() (UX_SPEC_v2 §1.7) -----------------------------
+   Цвет = состояние. Тип объекта (роль, тип транзакции, тип недели) — нейтрально.
+#}
 {% set STATUS = {
-  'new': ('Новый', 'info', 'stars'),
-  'contacted': ('Связались', 'violet', 'telephone'),
-  'applied': ('Подал документы', 'warning', 'file-earmark-text'),
+  'new': ('Новый', 'neutral', 'stars'),
+  'contacted': ('Связались', 'info', 'telephone'),
+  'applied': ('Подал документы', 'info-outline', 'file-earmark-text'),
   'enrolled': ('Поступил', 'success', 'mortarboard'),
-  'declined': ('Отказ', 'neutral', 'x-circle'),
-  'reserved': ('Ждёт выдачи', 'brand', 'hourglass-split'),
+  'declined': ('Отказ', 'outline', 'x-circle'),
+  'reserved': ('Ждёт выдачи', 'warning', 'hourglass-split'),
   'issued': ('Выдан', 'success', 'bag-check'),
   'cancelled': ('Отменён', 'neutral', 'arrow-counterclockwise'),
   'rejected': ('Отклонён', 'danger', 'x-octagon'),
@@ -28,23 +33,33 @@
   'critical': ('Критично', 'danger', 'exclamation-octagon'),
   'warning': ('Внимание', 'warning', 'exclamation-triangle'),
   'info': ('Инфо', 'info', 'info-circle'),
-  'admin': ('Админ', 'violet', 'shield-lock'),
-  'teacher': ('Преподаватель', 'info', 'person-badge'),
-  'student': ('Студент', 'brand', 'backpack'),
-  'club': ('Клуб', 'neutral', 'stars'),
-  'applicant': ('Абитуриент', 'warning', 'mortarboard'),
+  'admin': ('Админ', 'outline', 'shield-lock'),
+  'teacher': ('Преподаватель', 'outline', 'person-badge'),
+  'student': ('Студент', 'outline', 'backpack'),
+  'club': ('Клуб', 'outline', 'stars'),
+  'applicant': ('Абитуриент', 'outline', 'mortarboard'),
   'manual': ('Вручную', 'neutral', 'pencil-square'),
-  'campaign': ('Кампания', 'brand', 'ticket-perforated'),
-  'welcome': ('Приветствие', 'success', 'gift'),
-  'quest': ('Квест', 'violet', 'trophy'),
-  'referral': ('Реферал', 'info', 'people'),
-  'purchase': ('Покупка', 'warning', 'bag'),
-  'refund': ('Возврат', 'success', 'arrow-counterclockwise'),
+  'campaign': ('Кампания', 'neutral', 'ticket-perforated'),
+  'welcome': ('Приветствие', 'neutral', 'gift'),
+  'quest': ('Квест', 'neutral', 'trophy'),
+  'referral': ('Реферал', 'neutral', 'people'),
+  'purchase': ('Покупка', 'neutral', 'bag'),
+  'refund': ('Возврат', 'neutral', 'arrow-counterclockwise'),
+} %}
+
+{# Роли пользователей → (подпись, иконка) для role_badge() #}
+{% set ROLES = {
+  'admin': ('Админ', 'shield-lock'),
+  'teacher': ('Преподаватель', 'person-badge'),
+  'student': ('Студент', 'backpack'),
+  'club': ('Клуб', 'stars'),
+  'applicant': ('Абитуриент', 'mortarboard'),
 } %}
 
 {# ----------------------------- Кнопка / ссылка-кнопка -----------------------------
    button('Добавить', href=url_for('news_form'), icon='plus-lg')
    button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'})
+   variant: primary (одна на экран) | light | outline-primary | ghost | danger | outline-danger
 #}
 {% macro button(label, href=None, icon=None, variant='primary', size=None, type='button', attrs={}, icon_only=False, classes='') -%}
 {%- set cls = 'btn btn-' ~ variant ~ (' btn-' ~ size if size else '') ~ (' cc-btn-icon' if icon_only else '') ~ (' ' ~ classes if classes else '') -%}
@@ -55,29 +70,105 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# ----------------------------- Заголовок страницы -----------------------------
-   page_header('Новости', 'Публикации в приложении', [{'label': 'Добавить', 'href': url_for('news_form'), 'icon': 'plus-lg'}])
-   {% call ui.page_header('Лиды', icon='person-lines-fill') %} …свои кнопки… {% endcall %}
-   action: {label, href | type='submit', icon, variant='primary', attrs}
+{# ----------------------------- Пункты меню (общие для header_menu и row_menu) -----------------------------
+   item: {label, href, icon, attrs}                      — ссылка
+         {label, action, fields, confirm, ok, danger, icon} — POST-форма (CSRF внутри), confirm — модальное подтверждение
+         {divider: True} | {header: 'Экспорт'}
+   Опасные пункты (danger) ставьте последними, после разделителя.
 #}
-{% macro page_header(title, subtitle=None, actions=None, icon=None) -%}
-<div class="cc-page-header">
-    <div class="cc-page-header__text">
-        <h1>{% if icon %}<i class="bi bi-{{ icon }}" aria-hidden="true"></i>{% endif %}{{ title }}</h1>
-        {% if subtitle %}<p>{{ subtitle }}</p>{% endif %}
-    </div>
-    {% if actions or caller is defined %}
-    <div class="cc-page-header__actions">
-        {% for a in actions or [] %}{{ button(a.label, href=a.href, icon=a.icon, variant=a.variant or 'primary', type=a.type or 'button', attrs=a.attrs or {}) }}{% endfor %}
-        {% if caller is defined %}{{ caller() }}{% endif %}
-    </div>
-    {% endif %}
+{% macro _menu_items(items) -%}
+{%- for it in items or [] -%}
+{%- if it.divider -%}
+<li><hr class="dropdown-divider"></li>
+{%- elif it.header -%}
+<li><h6 class="dropdown-header">{{ it.header }}</h6></li>
+{%- elif it.action -%}
+<li><form method="post" action="{{ it.action }}" class="m-0"{% if it.confirm %} data-confirm="{{ it.confirm }}" data-confirm-ok="{{ it.ok or it.label }}"{% if not it.danger %} data-confirm-variant="primary"{% endif %}{% endif %}>{{ csrf_field() }}{% for k, v in (it.fields or {}).items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button type="submit" class="dropdown-item{{ ' text-danger' if it.danger }}"{{ (it.attrs or {})|xmlattr }}{% if it.disabled %} disabled{% endif %}>{% if it.icon %}<i class="bi bi-{{ it.icon }}" aria-hidden="true"></i>{% endif %}<span>{{ it.label }}</span></button></form></li>
+{%- else -%}
+<li><a class="dropdown-item{{ ' text-danger' if it.danger }}{{ ' disabled' if it.disabled }}" href="{{ it.href or '#' }}"{{ (it.attrs or {})|xmlattr }}>{% if it.icon %}<i class="bi bi-{{ it.icon }}" aria-hidden="true"></i>{% endif %}<span>{{ it.label }}</span></a></li>
+{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{# ----------------------------- Меню «⋯» в шапке страницы -----------------------------
+   {{ ui.header_menu([
+       {'label': 'Экспорт CSV', 'href': url_with(format='csv'), 'icon': 'download'},
+       {'label': 'Печать', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
+       {'divider': True},
+       {'label': 'Удалить всё', 'action': url_for('x_delete_all'), 'icon': 'trash', 'danger': True, 'confirm': 'Удалить все записи?'},
+   ]) }}
+#}
+{% macro header_menu(items, label='Ещё действия') -%}
+<div class="dropdown cc-header-menu">
+    <button type="button" class="btn btn-light cc-btn-icon" data-bs-toggle="dropdown" aria-expanded="false" aria-label="{{ label }}" title="{{ label }}"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+    <ul class="dropdown-menu dropdown-menu-end">{{ _menu_items(items) }}</ul>
 </div>
+{%- endmacro %}
+
+{# ----------------------------- Заголовок страницы (§4.2) -----------------------------
+   page_header('Новости', 'Публикации в приложении', [
+       {'menu': [{'label': 'CSV', 'href': url_with(format='csv'), 'icon': 'download'}]},          — ⋯ (header_menu)
+       {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg', 'variant': 'primary',
+        'attrs': {'data-cc-hotkey': 'n'}},
+   ])
+   {% call ui.page_header('Новая новость', back={'href': back_url('news'), 'label': 'Новости'}, meta=ui.badge('draft')) %}
+       {{ ui.header_menu([...]) }}{{ ui.button('Опубликовать', type='submit', icon='check2', attrs={'form': 'newsForm'}) }}
+   {% endcall %}
+   - кнопки actions по умолчанию light; основную (одну на страницу) помечайте 'variant': 'primary';
+   - icon — для совместимости, в h1 не рисуется; back — ссылка «‹ Новости» над h1 (с восстановлением фильтров);
+   - meta — разметка рядом с h1 (ui.week_now(...), бейдж статуса); subtitle — одна строка (на телефоне скрыт).
+#}
+{% macro page_header(title, subtitle=None, actions=None, icon=None, meta=None, back=None) -%}
+<div class="cc-page-header">
+    {% if back %}
+    {%- set bh = back.href if back is mapping else back -%}
+    {%- set bl = (back.label if back is mapping else None) or 'Назад' -%}
+    <a class="cc-page-header__back" href="{{ bh }}" data-cc-back><i class="bi bi-chevron-left" aria-hidden="true"></i><span>{{ bl }}</span></a>
+    {% endif %}
+    <div class="cc-page-header__row">
+        <div class="cc-page-header__text">
+            <div class="cc-page-header__title">
+                <h1>{{ title }}</h1>
+                {% if meta %}<div class="cc-page-header__meta">{{ meta }}</div>{% endif %}
+            </div>
+            {% if subtitle %}<p class="cc-page-header__sub" title="{{ subtitle }}">{{ subtitle }}</p>{% endif %}
+        </div>
+        {% if actions or caller is defined %}
+        <div class="cc-page-header__actions">
+            {% for a in actions or [] %}
+            {%- if a.menu -%}{{ header_menu(a.menu, a.label or 'Ещё действия') }}
+            {%- else -%}
+            {%- set v = a.variant or 'light' -%}
+            {%- set extra = {} if v == 'primary' or a.icon_only or not a.icon else {'title': a.label} -%}
+            {{ button(a.label, href=a.href, icon=a.icon, variant=v, type=a.type or 'button', attrs=dict(extra, **(a.attrs or {})), icon_only=a.icon_only or False) }}
+            {%- endif -%}
+            {% endfor %}
+            {% if caller is defined %}{{ caller() }}{% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}
+
+{# ----------------------------- Сводка под заголовком (§4.3) -----------------------------
+   summary_line([{'value': 5, 'label': 'новостей'}, {'value': 4, 'label': 'за 30 дней', 'href': url_with(period='30')},
+                 {'value': 2, 'label': 'накладки', 'tone': 'danger', 'title': 'Числитель: 1 · Знаменатель: 1'}])
+   summary_line([(5, 'новостей'), (4, 'с фото')])   → «5 новостей · 4 с фото»
+   Склонение — plural(n, 'новость', 'новости', 'новостей'). tone: danger|warning|success (только состояние).
+#}
+{% macro summary_line(items) -%}
+<p class="cc-summary">
+{%- for it in items or [] -%}
+{%- if it is mapping -%}{%- set v, l, h, t, ti = it.get('value'), it.get('label'), it.get('href'), it.get('tone'), it.get('title') -%}
+{%- else -%}{%- set v, l, h, t, ti = it[0], it[1], None, None, None -%}{%- endif -%}
+<{{ 'a' if h else 'span' }} class="cc-summary__item{{ ' cc-summary__item--' ~ t if t }}"{% if h %} href="{{ h }}"{% endif %}{% if ti %} title="{{ ti }}"{% endif %}>{% if v is not none and v != '' %}<b class="cc-num">{{ v|num if v is number else v }}</b> {% endif %}{{ l }}</{{ 'a' if h else 'span' }}>
+{%- endfor -%}
+</p>
 {%- endmacro %}
 
 {# ----------------------------- Карточка-секция -----------------------------
    {% call ui.card('Регистрации по дням', icon='graph-up', subtitle='30 дней') %} … {% endcall %}
-   flush=True — без внутренних отступов (для таблиц).
+   flush=True — без внутренних отступов (для таблиц). Иконка заголовка нейтральная.
 #}
 {% macro card(title=None, subtitle=None, icon=None, flush=False, actions=None, id=None, classes='') -%}
 <section class="cc-card {{ classes }}"{% if id %} id="{{ id }}"{% endif %}>
@@ -94,15 +185,39 @@
 </section>
 {%- endmacro %}
 
+{# ----------------------------- Карточка списка (§4.4) -----------------------------
+   {% call ui.list_card() %}
+       {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Заголовок или текст'}, inline=True) %}
+           {{ ui.filter_select('category', 'Категория', categories, category) }}
+       {% endcall %}
+       <div class="cc-table-wrap"><table class="cc-table cc-table--stack" data-sortable>…</table></div>
+       {{ ui.pagination(page) }}
+   {% endcall %}
+   summary — строка-сводка в начале карточки (список для summary_line или текст); title/actions — шапка.
+#}
+{% macro list_card(summary=None, title=None, actions=None, id=None, classes='') -%}
+<section class="cc-card cc-list {{ classes }}"{% if id %} id="{{ id }}"{% endif %}>
+    {% if title or actions %}
+    <div class="cc-card__head">
+        <div class="min-w-0">{% if title %}<h2 class="cc-card__title">{{ title }}</h2>{% endif %}</div>
+        {% if actions %}<div class="d-flex flex-wrap gap-2">{% for a in actions %}{{ button(a.label, href=a.href, icon=a.icon, variant=a.variant or 'light', size='sm', type=a.type or 'button', attrs=a.attrs or {}) }}{% endfor %}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% if summary %}<div class="cc-list__summary">{% if summary is string %}{{ summary }}{% else %}{{ summary_line(summary) }}{% endif %}</div>{% endif %}
+    {% if caller is defined %}{{ caller() }}{% endif %}
+</section>
+{%- endmacro %}
+
 {# ----------------------------- KPI-плитка -----------------------------
-   stat_card('Абитуриенты за 7 дней', 42, 'person-plus', trend=12.5, href=url_for('applicants_leads'), meta='против прошлой недели')
-   trend: число (%, >0 — рост) или None; tone: success|warning|danger|info|violet (цвет иконки).
+   stat_card('Пары сегодня', 48, 'calendar-day', href=url_for('schedule_all'), meta='идёт 2-я пара')
+   trend: число (%, >0 — рост) или None; tone: danger|warning|success|info — ТОЛЬКО состояние
+   (красит иконку и левую полосу). KPI-ряды — только на Обзоре, в Аналитике приёма и на «Накладках».
 #}
 {% macro stat_card(label, value, icon=None, trend=None, href=None, meta=None, tone=None) -%}
 {%- set tag = 'a' if href else 'div' -%}
 <{{ tag }} class="cc-stat{{ ' cc-stat--' ~ tone if tone }}"{% if href %} href="{{ href }}"{% endif %}>
     <div class="cc-stat__top">
-        <span class="cc-stat__label">{{ label }}</span>
+        <span class="cc-stat__label" title="{{ label }}">{{ label }}</span>
         {% if icon %}<span class="cc-stat__icon"><i class="bi bi-{{ icon }}" aria-hidden="true"></i></span>{% endif %}
     </div>
     <div class="cc-stat__value">{{ value|num if value is number else (value if value not in (None, '') else '—') }}</div>
@@ -114,15 +229,25 @@
             <i class="bi bi-{{ 'arrow-up-right' if up else ('arrow-down-right' if down else 'dash') }}" aria-hidden="true"></i>{{ '%+.0f'|format(trend) if trend != 0 else '0' }}%
         </span>
         {% endif %}
-        {% if meta %}<span>{{ meta }}</span>{% endif %}
+        {% if meta %}<span class="cc-stat__meta-text" title="{{ meta }}">{{ meta }}</span>{% endif %}
     </div>
     {% endif %}
 </{{ tag }}>
 {%- endmacro %}
 
+{# Ряд KPI (на телефоне — горизонтальная прокрутка):
+   stat_strip([{'label': 'Пары сегодня', 'value': 48, 'href': url_for('schedule_all'), 'meta': 'идёт 2-я пара', 'icon': 'calendar-day'},
+               {'label': 'Накладки', 'value': 8, 'tone': 'danger', 'href': url_for('schedule_conflicts')}]) #}
+{% macro stat_strip(items) -%}
+<div class="cc-stat-strip">
+    {% for it in items or [] %}{{ stat_card(it.label, it.get('value'), it.get('icon'), it.get('trend'), it.get('href'), it.get('meta'), it.get('tone')) }}{% endfor %}
+</div>
+{%- endmacro %}
+
 {# ----------------------------- Пустое состояние -----------------------------
    empty_state('inbox', 'Заказов пока нет', 'Когда абитуриент обменяет коины, заказ появится здесь.',
                {'label': 'Добавить товар', 'href': url_for('coins_shop'), 'icon': 'plus-lg'})
+   Кнопка по умолчанию light (основная на странице уже есть); 'variant': 'primary' — если это единственное действие.
 #}
 {% macro empty_state(icon='inbox', title='Пока пусто', text=None, action=None) -%}
 <div class="cc-empty">
@@ -130,13 +255,19 @@
     <p class="cc-empty__title">{{ title }}</p>
     {% if text %}<p class="cc-empty__text">{{ text }}</p>{% endif %}
     {% if caller is defined %}{{ caller() }}{% endif %}
-    {% if action %}{{ button(action.label, href=action.href, icon=action.icon, variant=action.variant or 'primary', type=action.type or 'button') }}{% endif %}
+    {% if action %}{{ button(action.label, href=action.href, icon=action.icon, variant=action.variant or 'light', type=action.type or 'button', attrs=action.attrs or {}) }}{% endif %}
 </div>
+{%- endmacro %}
+
+{# «Ничего не найдено» по фильтрам (отличаем от «пусто»): empty_filtered(url_for('news')) #}
+{% macro empty_filtered(reset_href, text=None) -%}
+{{ empty_state('search', 'Ничего не найдено по фильтрам', text or 'Измените условия поиска или сбросьте фильтры.',
+               {'label': 'Сбросить фильтры', 'href': reset_href, 'icon': 'x-lg', 'variant': 'light'}) }}
 {%- endmacro %}
 
 {# ----------------------------- Бейдж статуса -----------------------------
    badge('reserved') → «Ждёт выдачи»; badge('enrolled'); badge(lesson.week_type); badge('x', 'Своя подпись', 'success')
-   Варианты: brand success warning danger info violet neutral outline week-num week-den week-all
+   Варианты: success warning danger info info-outline neutral outline brand violet week-num week-den week-all
 #}
 {% macro badge(status, label=None, variant=None, icon=None) -%}
 {%- if status is sameas true -%}{%- set meta = ('Да', 'success', 'check-lg') -%}
@@ -147,10 +278,34 @@
 <span class="cc-badge cc-badge--{{ variant or meta[1] }}">{% if ic %}<i class="bi bi-{{ ic }}" aria-hidden="true"></i>{% endif %}{{ label or meta[0] }}</span>
 {%- endmacro %}
 
-{# Тип недели занятия ('always'|'numerator'|'denominator'|пусто) #}
+{# Тип недели занятия ('always'|'numerator'|'denominator'|пусто): нейтральный бейдж, цвет — только точка.
+   short=True → «Ч»/«З»/«Всегда», полное слово — в title. #}
 {% macro week_badge(week_type, short=False) -%}
 {%- set w = week_type if week_type in ('numerator', 'denominator') else 'always' -%}
-{{ badge(w, ({'always': 'Всегда', 'numerator': 'Ч', 'denominator': 'З'}[w]) if short else None) }}
+{%- set full = {'always': 'Каждую неделю', 'numerator': 'Числитель', 'denominator': 'Знаменатель'}[w] -%}
+<span class="cc-badge cc-badge--week-{{ {'always': 'all', 'numerator': 'num', 'denominator': 'den'}[w] }}" title="{{ full }}">{{ ({'always': 'Всегда', 'numerator': 'Ч', 'denominator': 'З'}[w]) if short else full }}</span>
+{%- endmacro %}
+
+{# Роль пользователя — нейтральный outline с иконкой: role_badge(user.role) #}
+{% macro role_badge(role) -%}
+{%- set r = ROLES.get(role|string, (role if role not in (None, '') else 'Без роли', 'person')) -%}
+<span class="cc-badge cc-badge--outline cc-badge--role"><i class="bi bi-{{ r[1] }}" aria-hidden="true"></i>{{ r[0] }}</span>
+{%- endmacro %}
+
+{# Текущая неделя — нейтральный чип для шапки: week_now(current_week, week_number) → «Знаменатель · 8-я неделя» #}
+{% macro week_now(current_week, week_number=None) -%}
+{%- set num = current_week == 'numerator' -%}
+<span class="cc-week-chip" data-current-week="{{ current_week }}" title="Тип недели считается как в приложении (по Алматы)">
+    <i class="bi bi-calendar3" aria-hidden="true"></i><span class="cc-week-chip__dot cc-week-chip__dot--{{ 'num' if num else 'den' }}" aria-hidden="true"></span>{{ 'Числитель' if num else 'Знаменатель' }}{% if week_number %}<span class="cc-week-chip__sep" aria-hidden="true">·</span>{{ week_number }}-я неделя{% endif %}
+</span>
+{%- endmacro %}
+
+{# Легенда сетки расписания: legend([('always', 'Каждую неделю'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель'),
+                                     ('conflict', 'Накладка'), ('now', 'Сейчас')]) #}
+{% macro legend(items) -%}
+<ul class="cc-legend" aria-label="Обозначения">
+    {% for kind, label in items or [] %}<li><span class="cc-legend__swatch cc-legend__swatch--{{ kind }}" aria-hidden="true"></span>{{ label }}</li>{% endfor %}
+</ul>
 {%- endmacro %}
 
 {# ----------------------------- Пагинация -----------------------------
@@ -161,7 +316,7 @@
 {% macro pagination(page, param='page') -%}
 {%- if page.pages is defined -%}
   {%- if page.pages > 1 -%}
-  <nav class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3" aria-label="Страницы">
+  <nav class="cc-pagination" aria-label="Страницы">
       <span class="cc-muted small">Показано {{ page.items|length }} из {{ page.total|num }}</span>
       <ul class="pagination pagination-sm mb-0 flex-wrap">
           <li class="page-item {{ 'disabled' if not page.has_prev }}"><a class="page-link" href="{{ url_with(**{param: page.page - 1}) }}" aria-label="Назад">‹</a></li>
@@ -176,7 +331,7 @@
   </nav>
   {%- endif -%}
 {%- elif page.has_next or page.has_prev -%}
-  <nav class="d-flex align-items-center justify-content-between gap-2 mt-3" aria-label="Страницы">
+  <nav class="cc-pagination" aria-label="Страницы">
       <span class="cc-muted small">Страница {{ page.number }}</span>
       <div class="d-flex gap-2">
           {% if page.has_prev %}{{ button('В начало', href=url_with(cursor=None, p=None), icon='chevron-double-left', variant='light', size='sm') }}{% endif %}
@@ -186,15 +341,18 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# ----------------------------- Вкладки -----------------------------
+{# ----------------------------- Вкладки, сегменты, чипы (§4.6) -----------------------------
+   Подстраницы/разделы → tabs; режим отображения/период → segmented; фильтр по статусу внутри списка → filter_chips.
+
    tabs([{'key': 'rooms', 'label': 'Аудиторный фонд', 'href': url_for('schedule_rooms'), 'icon': 'door-open'},
-         {'key': 'conflicts', 'label': 'Накладки', 'href': url_for('schedule_conflicts'), 'count': 3}], 'conflicts')
-   pills=True — сегментированный переключатель.
+         {'key': 'free', 'label': 'Свободные аудитории', 'href': url_for('schedule_free_rooms'), 'count': 12}], 'rooms')
+   pills=True — старый сегментированный вид (новый код — segmented()).
 #}
 {% macro tabs(items, active, pills=False, label='Вкладки') -%}
-<nav class="cc-tabs{{ ' cc-tabs--pills' if pills }}" aria-label="{{ label }}">
+<nav class="cc-tabs{{ ' cc-tabs--pills' if pills }}" aria-label="{{ label }}" data-cc-scroll-active>
     {% for t in items %}
-    <a class="cc-tab {{ 'active' if t.key == active }}" href="{{ t.href }}" {% if t.key == active %}aria-current="page"{% endif %}>
+    {%- set is_active = (t.key|string) == (active|string) -%}
+    <a class="cc-tab {{ 'active' if is_active }}" href="{{ t.href }}" {% if is_active %}aria-current="page"{% endif %}>
         {% if t.icon %}<i class="bi bi-{{ t.icon }}" aria-hidden="true"></i>{% endif %}<span>{{ t.label }}</span>
         {% if t.count is defined and t.count is not none %}<span class="cc-tab__count">{{ t.count }}</span>{% endif %}
     </a>
@@ -202,12 +360,45 @@
 </nav>
 {%- endmacro %}
 
+{# segmented([{'key': 'week', 'label': 'Неделя', 'href': url_with(view='week'), 'icon': 'calendar-week'},
+              {'key': 'list', 'label': 'Список', 'href': url_with(view='list'), 'icon': 'list-ul'}], view, remember='schedule_group')
+   Элемент — dict (как у tabs) или кортеж (key, label, href[, icon]).
+   remember — клик ставит cookie cc_view_<remember>=<key>; сервер читает view_param('<remember>', allowed, default). #}
+{% macro segmented(items, active, label='Вид', remember=None) -%}
+<nav class="cc-segmented" aria-label="{{ label }}" data-cc-scroll-active>
+    {% for t in items %}
+    {%- if t is mapping -%}{%- set k, l, h, ic = t.key, t.label, t.href, t.get('icon') -%}
+    {%- else -%}{%- set k, l, h, ic = t[0], t[1], t[2], (t[3] if t|length > 3 else None) -%}{%- endif -%}
+    {%- set is_active = (k|string) == (active|string) -%}
+    <a class="cc-segmented__item{{ ' active' if is_active }}" href="{{ h }}"{% if is_active %} aria-current="true"{% endif %}{% if remember %} data-cc-view="{{ remember }}" data-cc-view-value="{{ k }}"{% endif %}>{% if ic %}<i class="bi bi-{{ ic }}" aria-hidden="true"></i>{% endif %}<span>{{ l }}</span></a>
+    {% endfor %}
+</nav>
+{%- endmacro %}
+
+{# filter_chips('status', [('new', 'Новые', 3), ('answered', 'Отвечены', 12), ('closed', 'Закрыты')], status, all_count=15)
+   Ссылки url_with(status=…, page=None); «Все» снимает параметр (all_label=None — без «Все»). #}
+{% macro filter_chips(param, items, active, all_label='Все', all_count=None) -%}
+{%- set reset_kw = {param: None, 'page': None, 'cursor': None, 'p': None} -%}
+<nav class="cc-chips" aria-label="Фильтр" data-cc-scroll-active>
+    {% if all_label %}
+    <a class="cc-chip{{ ' active' if active in (None, '') }}" href="{{ url_with(**reset_kw) }}"{% if active in (None, '') %} aria-current="true"{% endif %}>{{ all_label }}{% if all_count is not none %}<span class="cc-chip__count">{{ all_count }}</span>{% endif %}</a>
+    {% endif %}
+    {% for it in items or [] %}
+    {%- set v = it[0]|string -%}{%- set is_active = active not in (None, '') and v == (active|string) -%}
+    <a class="cc-chip{{ ' active' if is_active }}" href="{{ url_with(**dict(reset_kw, **{param: v})) }}"{% if is_active %} aria-current="true"{% endif %}>{{ it[1] }}{% if it|length > 2 and it[2] is not none %}<span class="cc-chip__count">{{ it[2] }}</span>{% endif %}</a>
+    {% endfor %}
+</nav>
+{%- endmacro %}
+
 {# ----------------------------- CSRF-поле ----------------------------- #}
 {% macro csrf_field() -%}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{%- endmacro %}
 
+{# Скрытое поле next из безопасного ?next= (возврат в отфильтрованный список после сохранения): {{ ui.next_field() }} #}
+{% macro next_field() -%}{%- set n = next_target() -%}{% if n %}<input type="hidden" name="next" value="{{ n }}">{% endif %}{%- endmacro %}
+
 {# ----------------------------- Кнопка с подтверждением (POST-форма) -----------------------------
    confirm_button(url_for('news_delete', news_id=n.id), 'Удалить', 'Удалить новость «' ~ n.title ~ '»?')
-   confirm_button(url, 'Сбросить пароль', 'Пароль станет abiturient123', variant='outline-primary', icon='key', ok='Сбросить')
+   confirm_button(url, 'Сбросить пароль', 'Новый пароль: abiturient123', variant='outline-primary', icon='key', ok='Сбросить')
    fields — доп. скрытые поля {name: value}; icon_only=True — квадратная кнопка с aria-label.
 #}
 {% macro confirm_button(action, label, message, variant='outline-danger', icon='trash', size='sm', fields={}, title=None, ok=None, icon_only=False, classes='') -%}
@@ -224,6 +415,7 @@
    field('note', 'Заметка', 'textarea', value=…, rows=3, help='Видно только админам')
    field('active', 'Показывать в приложении', 'switch', value=item.active)
    type: text|email|tel|number|password|date|datetime-local|url|select|textarea|checkbox|switch
+   id поля — 'f-<name>' (на него ссылается form_errors()).
 #}
 {% macro field(name, label, type='text', value='', required=False, help=None, error=None, options=None, placeholder=None, id=None, attrs={}, rows=4, classes='mb-3') -%}
 {%- set fid = id or ('f-' ~ name|replace('[', '-')|replace(']', '')|replace('.', '-')) -%}
@@ -255,6 +447,25 @@
 </div>
 {%- endmacro %}
 
+{# Сводка ошибок над формой со ссылками на поля: form_errors({'title': 'Заполните заголовок', 'images': ['Не больше 10 фото']}) #}
+{% macro form_errors(errors) -%}
+{%- if errors -%}
+<div class="cc-form-errors" role="alert" tabindex="-1" data-cc-form-errors>
+    <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+    <div class="min-w-0">
+        <b>Проверьте форму</b>
+        <ul>
+        {%- if errors is mapping -%}
+            {%- for k, v in errors.items() -%}{%- for msg in ([v] if v is string else v) -%}<li><a href="#f-{{ k|replace('[', '-')|replace(']', '')|replace('.', '-') }}">{{ msg }}</a></li>{%- endfor -%}{%- endfor -%}
+        {%- else -%}
+            {%- for msg in ([errors] if errors is string else errors) -%}<li>{{ msg }}</li>{%- endfor -%}
+        {%- endif -%}
+        </ul>
+    </div>
+</div>
+{%- endif -%}
+{%- endmacro %}
+
 {# ----------------------------- Загрузка нескольких фото -----------------------------
    В форме с enctype="multipart/form-data":
        {{ ui.image_uploader('images', news) }}          — existing: документ (images[]/imageUrl) или список фото
@@ -283,19 +494,52 @@
 </div>
 {%- endmacro %}
 
-{# ----------------------------- Панель фильтров (GET-форма) -----------------------------
-   {% call ui.filters_bar() %}
-       {{ ui.filter_search('q', 'Поиск', request.args.get('q'), 'Имя, логин, телефон') }}
-       {{ ui.filter_select('status', 'Статус', [('new','Новый'), ('enrolled','Поступил')], request.args.get('status')) }}
-   {% endcall %}
+{# ----------------------------- Панель фильтров (GET-форма, §4.4) -----------------------------
+   Новый вид (поиск всегда виден, остальное — пилюли «Курс: Все ▾»; на телефоне — в шторке снизу):
+       {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Заголовок или текст'}, inline=True,
+                              ignore=('status',)) %}
+           {{ ui.filter_select('category', 'Категория', categories, category) }}
+           {{ ui.filter_switch('anon', 'Только анонимные', anon) }}
+       {% endcall %}
+   search: {name, value, placeholder, label, filter: '#css' (мгновенный фильтр элементов с data-search на клиенте)}.
+   Поиск отправляется по Enter и через 600 мс после ввода; пилюли — сразу (в шторке на телефоне — кнопкой «Показать»).
+   ignore — параметры вкладок/чипов (status, role…): не считаются фильтрами, сохраняются скрытыми полями и в «Сбросить».
+   «Сбросить · N» видна только при активных фильтрах; «Применить» видна только без JS.
+   Старый вызов {% call ui.filters_bar() %}…{% endcall %} (поля с подписями) работает как раньше, но компактнее.
 #}
-{% macro filters_bar(action=None, reset=None, submit='Применить') -%}
-<form class="cc-filters" method="get" action="{{ action or request.path }}" role="search">
+{% macro filters_bar(action=None, reset=None, submit='Применить', search=None, inline=False, ignore=(), sheet_title='Фильтры', id=None) -%}
+{%- set st = filter_state(ignore, search.name if search else None) -%}
+{%- set reset_href = reset or st.reset -%}
+{%- set modern = search or inline -%}
+{%- set sid = id or ('ccFilters' ~ ('-' ~ search.name if search else '')) -%}
+<form class="cc-filters{{ ' cc-filters--inline' if modern }}" method="get" action="{{ action or request.path }}" role="search" data-cc-filters>
+{% if modern %}
+    {% for k, v in st.keep %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    {% if search %}
+    <div class="cc-filters__search cc-search">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="form-control" type="search" name="{{ search.name }}" value="{{ search.value or '' }}" placeholder="{{ search.placeholder or 'Поиск…' }}" aria-label="{{ search.label or search.placeholder or 'Поиск' }}" autocomplete="off" data-cc-search data-cc-autosubmit-debounce="600"{% if search.filter %} data-cc-filter="{{ search.filter }}"{% endif %}>
+    </div>
+    {% endif %}
+    {% if caller is defined %}{%- set fields = caller() -%}{% if fields|trim %}
+    <button type="button" class="btn btn-light cc-filters__toggle" data-bs-toggle="offcanvas" data-bs-target="#{{ sid }}" aria-controls="{{ sid }}"><i class="bi bi-sliders" aria-hidden="true"></i><span>{{ sheet_title }}</span>{% if st.sheet_count %}<span class="cc-filters__count">{{ st.sheet_count }}</span>{% endif %}</button>
+    <div class="offcanvas-md offcanvas-bottom cc-filters__sheet" id="{{ sid }}" tabindex="-1" aria-labelledby="{{ sid }}-title">
+        <div class="offcanvas-header"><h2 class="offcanvas-title" id="{{ sid }}-title">{{ sheet_title }}</h2><button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#{{ sid }}" aria-label="Закрыть"></button></div>
+        <div class="offcanvas-body cc-filters__fields">{{ fields }}</div>
+        <div class="cc-filters__sheet-foot"><a class="btn btn-light" href="{{ reset_href }}">Сбросить</a><button type="submit" class="btn btn-primary">Показать</button></div>
+    </div>
+    {% endif %}{% endif %}
+    <div class="cc-filters__end">
+        {% if st.count %}<a class="cc-filters__reset" href="{{ reset_href }}" title="Сбросить фильтры"><i class="bi bi-x-lg" aria-hidden="true"></i>Сбросить<span class="cc-filters__reset-n"> · {{ st.count }}</span></a>{% endif %}
+        <button type="submit" class="btn btn-light cc-filters__submit">{{ submit }}</button>
+    </div>
+{% else %}
     {% if caller is defined %}{{ caller() }}{% endif %}
     <div class="cc-filters__actions">
-        <a class="btn btn-light" href="{{ reset or request.path }}">Сбросить</a>
-        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i><span>{{ submit }}</span></button>
+        {% if st.count %}<a class="cc-filters__reset" href="{{ reset_href }}" title="Сбросить фильтры"><i class="bi bi-x-lg" aria-hidden="true"></i>Сбросить<span class="cc-filters__reset-n"> · {{ st.count }}</span></a>{% endif %}
+        <button type="submit" class="btn btn-light cc-filters__submit"><i class="bi bi-funnel" aria-hidden="true"></i><span>{{ submit }}</span></button>
     </div>
+{% endif %}
 </form>
 {%- endmacro %}
 
@@ -303,15 +547,16 @@
 <div class="cc-filters__field{{ ' cc-filters__field--grow' if grow }}">
     <label class="form-label" for="flt-{{ name }}">{{ label }}</label>
     <div class="cc-search"><i class="bi bi-search" aria-hidden="true"></i>
-        <input class="form-control" type="search" id="flt-{{ name }}" name="{{ name }}" value="{{ value or '' }}" placeholder="{{ placeholder }}">
+        <input class="form-control" type="search" id="flt-{{ name }}" name="{{ name }}" value="{{ value or '' }}" placeholder="{{ placeholder }}" autocomplete="off" data-cc-autosubmit-debounce="600">
     </div>
 </div>
 {%- endmacro %}
 
+{# Пилюля-выбор «Подпись: Значение ▾» (в старой панели — поле с подписью сверху) #}
 {% macro filter_select(name, label, options, value=None, all_label='Все', autosubmit=True) -%}
-<div class="cc-filters__field">
-    <label class="form-label" for="flt-{{ name }}">{{ label }}</label>
-    <select class="form-select" id="flt-{{ name }}" name="{{ name }}"{{ ' data-autosubmit' if autosubmit }}>
+<div class="cc-filters__field cc-fsel{{ ' is-active' if value not in (None, '') and all_label }}">
+    <label class="form-label cc-fsel__label" for="flt-{{ name }}">{{ label }}</label>
+    <select class="form-select cc-fsel__select" id="flt-{{ name }}" name="{{ name }}"{{ ' data-autosubmit' if autosubmit }}>
         {% if all_label %}<option value="">{{ all_label }}</option>{% endif %}
         {% for opt in options %}
         {%- set ov = opt[0] if opt is not string else opt -%}{%- set ol = opt[1] if opt is not string else opt -%}
@@ -322,15 +567,25 @@
 {%- endmacro %}
 
 {% macro filter_input(name, label, value=None, type='text', placeholder=None) -%}
-<div class="cc-filters__field">
-    <label class="form-label" for="flt-{{ name }}">{{ label }}</label>
-    <input class="form-control" type="{{ type }}" id="flt-{{ name }}" name="{{ name }}" value="{{ value or '' }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}>
+<div class="cc-filters__field cc-fsel cc-fsel--input{{ ' is-active' if value }}">
+    <label class="form-label cc-fsel__label" for="flt-{{ name }}">{{ label }}</label>
+    <input class="form-control cc-fsel__select" type="{{ type }}" id="flt-{{ name }}" name="{{ name }}" value="{{ value or '' }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}{% if type not in ('text', 'search') %} data-autosubmit{% else %} data-cc-autosubmit-debounce="600"{% endif %}>
+</div>
+{%- endmacro %}
+
+{# Булев фильтр (value=1), отправляется сразу: filter_switch('anon', 'Только анонимные', anon) #}
+{% macro filter_switch(name, label, value=False) -%}
+<div class="cc-filters__field cc-fswitch{{ ' is-active' if value and value not in ('0', 'false', 'False') }}">
+    <div class="form-check form-switch m-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="flt-{{ name }}" name="{{ name }}" value="1"{{ ' checked' if value and value not in ('0', 'false', 'False') }} data-autosubmit>
+        <label class="form-check-label" for="flt-{{ name }}">{{ label }}</label>
+    </div>
 </div>
 {%- endmacro %}
 
 {# ----------------------------- Таблица данных -----------------------------
    {% call ui.data_table('leadsTable', search=True, placeholder='Поиск по имени или логину') %}
-     <table class="cc-table" id="leadsTable" data-sortable>
+     <table class="cc-table cc-table--stack" id="leadsTable" data-sortable>
        <thead><tr><th data-sort="text">Имя</th><th data-sort="date">Дата</th><th class="cc-actions"></th></tr></thead>
        <tbody>…<tr data-table-empty class="is-hidden"><td colspan="3" class="cc-table-empty">Ничего не найдено</td></tr></tbody>
      </table>
@@ -338,14 +593,14 @@
    Поиск — на клиенте по строкам текущей страницы; для больших данных — серверный filters_bar + pagination.
 #}
 {% macro data_table(table_id, search=False, placeholder='Поиск в таблице…', title=None, actions=None) -%}
-<section class="cc-card">
+<section class="cc-card cc-table-card">
     {% if search or title or actions %}
     <div class="cc-table-toolbar">
         {% if title %}<h2 class="cc-card__title me-auto">{{ title }}</h2>{% endif %}
         {% if search %}
         <div class="cc-search">
             <i class="bi bi-search" aria-hidden="true"></i>
-            <input class="form-control form-control-sm" type="search" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}" data-table-search="#{{ table_id }}">
+            <input class="form-control form-control-sm" type="search" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}" data-table-search="#{{ table_id }}" data-cc-search>
         </div>
         {% endif %}
         {% if actions %}<div class="d-flex flex-wrap gap-2 ms-auto">{% for a in actions %}{{ button(a.label, href=a.href, icon=a.icon, variant=a.variant or 'light', size='sm', type=a.type or 'button', attrs=a.attrs or {}) }}{% endfor %}</div>{% endif %}
@@ -355,19 +610,168 @@
 </section>
 {%- endmacro %}
 
+{# ----------------------------- Действия строки таблицы (§4.5.3) -----------------------------
+   <td class="cc-actions">{{ ui.row_menu([
+       {'label': 'Редактировать', 'href': url_for('news_form', news_id=n.id, next=here()), 'icon': 'pencil'},
+       {'divider': True},
+       {'label': 'Удалить', 'action': url_for('news_delete', news_id=n.id), 'icon': 'trash', 'danger': True,
+        'confirm': 'Удалить новость «' ~ n.title ~ '»?'},
+   ], quick={'label': 'Редактировать', 'href': url_for('news_form', news_id=n.id, next=here()), 'icon': 'pencil'}) }}</td>
+   quick — одна иконка самого частого действия (ссылка или {action, fields, confirm} — POST). Меню не обрезается
+   прокруткой таблицы (popper strategy: fixed).
+#}
+{% macro row_menu(items, label='Действия', quick=None) -%}
+<div class="cc-row-menu">
+    {%- if quick -%}
+    {%- if quick.action -%}
+    <form method="post" action="{{ quick.action }}" class="m-0 d-inline-flex"{% if quick.confirm %} data-confirm="{{ quick.confirm }}" data-confirm-ok="{{ quick.ok or quick.label }}"{% if not quick.danger %} data-confirm-variant="primary"{% endif %}{% endif %}>{{ csrf_field() }}{% for k, v in (quick.fields or {}).items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button type="submit" class="btn btn-ghost btn-sm cc-btn-icon cc-row-quick" aria-label="{{ quick.label }}" title="{{ quick.label }}"><i class="bi bi-{{ quick.icon or 'check2' }}" aria-hidden="true"></i></button></form>
+    {%- else -%}
+    <a class="btn btn-ghost btn-sm cc-btn-icon cc-row-quick" href="{{ quick.href }}" aria-label="{{ quick.label }}" title="{{ quick.label }}"{{ (quick.attrs or {})|xmlattr }}><i class="bi bi-{{ quick.icon or 'arrow-right' }}" aria-hidden="true"></i></a>
+    {%- endif -%}
+    {%- endif -%}
+    {%- if items -%}
+    <div class="dropdown">
+        <button type="button" class="btn btn-ghost btn-sm cc-btn-icon cc-row-menu__toggle" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" aria-label="{{ label }}" title="{{ label }}"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+        <ul class="dropdown-menu dropdown-menu-end">{{ _menu_items(items) }}</ul>
+    </div>
+    {%- endif -%}
+</div>
+{%- endmacro %}
+
+{# ----------------------------- Выбор строк и массовые действия (§4.5.5) -----------------------------
+   <form id="newsBulk" method="post" action="{{ url_for('news_bulk') }}">{{ ui.next_field() }}</form>
+   <th class="cc-select">{{ ui.select_all('newsBulk') }}</th>
+   <td class="cc-select">{{ ui.select_row('newsBulk', n.id, n.title) }}</td>
+   {% call ui.bulkbar('newsBulk', noun=('новость', 'новости', 'новостей')) %}
+       <button class="btn btn-sm btn-outline-danger" name="action" value="delete" form="newsBulk"
+               data-confirm="Удалить выбранные: {items}?">Удалить</button>
+   {% endcall %}
+   Чекбоксы — name="ids" form="<id>". Панель появляется при выборе ≥ 1 строки; Shift+клик — диапазон; Esc — снять.
+   В data-confirm кнопок панели: {n} → число, {items} → «3 новости».
+#}
+{% macro select_all(form_id, label='Выбрать все на странице') -%}
+<input class="form-check-input" type="checkbox" data-cc-select-all="{{ form_id }}" aria-label="{{ label }}" title="{{ label }}">
+{%- endmacro %}
+
+{% macro select_row(form_id, value, label) -%}
+<input class="form-check-input" type="checkbox" name="ids" value="{{ value }}" form="{{ form_id }}" data-cc-select="{{ form_id }}" aria-label="Выбрать: {{ label }}">
+{%- endmacro %}
+
+{% macro bulkbar(form_id, noun=('элемент', 'элемента', 'элементов')) -%}
+<div class="cc-bulkbar" data-cc-bulkbar="{{ form_id }}" data-noun="{{ noun|join('|') }}" role="region" aria-label="Действия с выбранными">
+    <span class="cc-bulkbar__count" aria-live="polite"><b class="cc-num" data-cc-bulk-count>0</b> выбрано<span class="visually-hidden" data-cc-bulk-items></span></span>
+    <div class="cc-bulkbar__actions">{% if caller is defined %}{{ caller() }}{% endif %}</div>
+    <button type="button" class="btn btn-ghost btn-sm cc-bulkbar__clear" data-cc-bulk-clear><i class="bi bi-x-lg" aria-hidden="true"></i><span>Снять выделение</span></button>
+</div>
+{%- endmacro %}
+
+{# ----------------------------- Панель сохранения формы (§4.8) -----------------------------
+   Внутри формы с data-dirty-guard (или form='id' — вне формы):
+   {% call ui.savebar('Опубликовать', cancel_href=back_url('news'),
+                      danger={'label': 'Удалить', 'action': url_for('news_delete', news_id=n.id), 'confirm': 'Удалить новость?'}) %}
+       {{ ui.button('Предпросмотр', variant='light', attrs={'data-preview': ''}) }}
+   {% endcall %}
+   «Есть несохранённые изменения» появляется, когда форма изменена; Ctrl+S нажимает основную кнопку.
+   danger — dict {label, action, confirm, icon} (кнопка formaction, без вложенных форм) или готовая разметка.
+#}
+{% macro savebar(submit='Сохранить', cancel_href=None, form=None, danger=None, note=None, submit_attrs={}) -%}
+<div class="cc-savebar" data-cc-savebar>
+    {% if danger %}
+    <div class="cc-savebar__danger">
+        {%- if danger is mapping -%}
+        <button type="submit" class="btn btn-ghost cc-savebar__danger-btn"{% if form %} form="{{ form }}"{% endif %} formaction="{{ danger.action }}" formmethod="post" formnovalidate data-cc-no-dirty{% if danger.confirm %} data-confirm="{{ danger.confirm }}" data-confirm-ok="{{ danger.ok or danger.label }}"{% endif %}><i class="bi bi-{{ danger.icon or 'trash' }}" aria-hidden="true"></i><span>{{ danger.label or 'Удалить' }}</span></button>
+        {%- else -%}{{ danger }}{%- endif -%}
+    </div>
+    {% endif %}
+    <div class="cc-savebar__status">
+        <span class="cc-savebar__dirty" data-cc-dirty-note><span class="cc-savebar__dot" aria-hidden="true"></span>Есть несохранённые изменения</span>
+        {% if note %}<span class="cc-savebar__note">{{ note }}</span>{% endif %}
+    </div>
+    <div class="cc-savebar__actions">
+        {% if caller is defined %}{{ caller() }}{% endif %}
+        {% if cancel_href %}<a class="btn btn-light" href="{{ cancel_href }}" data-cc-back>Отмена</a>{% endif %}
+        <button type="submit" class="btn btn-primary" data-cc-save{% if form %} form="{{ form }}"{% endif %}{{ submit_attrs|xmlattr }}><i class="bi bi-check2" aria-hidden="true"></i><span>{{ submit }}</span></button>
+        <span class="cc-savebar__kbd" aria-hidden="true">{{ kbd('Ctrl', 'S') }}</span>
+    </div>
+</div>
+{%- endmacro %}
+
+{# ----------------------------- Модальная форма -----------------------------
+   {{ ui.button('Новый источник', icon='plus-lg', variant='primary', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#srcNew'}) }}
+   {% call ui.modal_form('srcNew', 'Новый QR-источник', url_for('applicant_source_create'), submit='Создать', open=bool(errors)) %}
+       {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title) }}
+   {% endcall %}
+   open=True — открыть сразу при загрузке (после ошибки сервера).
+#}
+{% macro modal_form(id, title, action, submit='Сохранить', variant='primary', enctype=None, open=False) -%}
+<div class="modal fade cc-modal-form" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}-title" aria-hidden="true"{% if open %} data-cc-open-on-load{% endif %}>
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="{{ action }}"{% if enctype %} enctype="{{ enctype }}"{% endif %} novalidate>
+            {{ csrf_field() }}
+            <div class="modal-header">
+                <h2 class="modal-title" id="{{ id }}-title">{{ title }}</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">{% if caller is defined %}{{ caller() }}{% endif %}</div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" class="btn btn-{{ variant }}" data-loading><span>{{ submit }}</span></button>
+            </div>
+        </form>
+    </div>
+</div>
+{%- endmacro %}
+
+{# ----------------------------- Подсказка (§4.7) -----------------------------
+   {{ ui.hint('Абитуриенты — во вкладке «Абитуриенты».', dismiss='users-applicants') }}
+   {% call ui.hint(icon='lightbulb', tone='warning') %}Есть <b>3</b> товара без порядка…{% endcall %}
+   tone: None (нейтрально) | info | warning | danger | success; dismiss — «×», выбор запоминается в браузере.
+#}
+{% macro hint(text=None, icon='info-circle', tone=None, dismiss=None) -%}
+<div class="cc-hint{{ ' cc-hint--' ~ tone if tone }}"{% if dismiss %} data-cc-hint="{{ dismiss }}"{% endif %}>
+    <i class="bi bi-{{ icon }} cc-hint__icon" aria-hidden="true"></i>
+    <div class="cc-hint__text">{% if text %}{{ text }}{% endif %}{% if caller is defined %}{{ caller() }}{% endif %}</div>
+    {% if dismiss %}<button type="button" class="cc-hint__close" data-cc-hint-close aria-label="Скрыть подсказку" title="Скрыть"><i class="bi bi-x-lg" aria-hidden="true"></i></button>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Сворачиваемый блок: {% call ui.details('Когда случаются накладки', key='cf-heatmap') %}…{% endcall %}
+   key — открытость запоминается в браузере. #}
+{% macro details(title, key=None, open=False, classes='') -%}
+<details class="cc-details {{ classes }}"{% if open %} open{% endif %}{% if key %} data-cc-collapse-key="{{ key }}"{% endif %}>
+    <summary><span>{{ title }}</span><i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
+    <div class="cc-details__body">{% if caller is defined %}{{ caller() }}{% endif %}</div>
+</details>
+{%- endmacro %}
+
+{# Ссылка «быстрый просмотр» (боковая панель на ≥ 768 px): peek_link(url_for('applicant_detail', uid=l.uid, next=here()), l.name) #}
+{% macro peek_link(href, label, classes='', title=None) -%}
+<a href="{{ href }}" class="{{ classes }}" data-cc-peek{% if title %} title="{{ title }}"{% endif %}>{{ label }}</a>
+{%- endmacro %}
+
+{# Клавиши: ui.kbd('Ctrl', 'S') → Ctrl S (на Mac — ⌘ S) #}
+{% macro kbd() -%}
+<span class="cc-kbd">{% for k in varargs %}<kbd{% if k in ('Ctrl', 'Cmd') %} data-cc-mod{% endif %}>{{ k }}</kbd>{% endfor %}</span>
+{%- endmacro %}
+
+{# Скелетон загрузки: ui.skeleton(4) #}
+{% macro skeleton(lines=3) -%}
+<div class="cc-skel" aria-hidden="true">{% for i in range(lines) %}<div class="cc-skeleton" style="width: {{ [92, 74, 84, 58, 70][i % 5] }}%"></div>{% endfor %}</div>
+{%- endmacro %}
+
 {# ----------------------------- Мелкие компоненты ----------------------------- #}
 {# kv([('Логин', lead.login), ('Телефон', lead.phone|phone)]) — список «подпись: значение» #}
 {% macro kv(items) -%}
 <dl class="cc-kv">{% for k, v in items %}<dt>{{ k }}</dt><dd>{{ v if v not in (None, '') else '—' }}</dd>{% endfor %}</dl>
 {%- endmacro %}
 
-{# avatar('Айгерим Сапарова', url=None, size='sm'|'lg') — инициалы или фото #}
+{# avatar('Айгерим Сапарова', url=None, size='sm'|'lg') — инициалы (нейтрально) или фото #}
 {% macro avatar(name, url=None, size=None) -%}
 {%- set parts = (name or '?').split() -%}
 <span class="cc-avatar{{ ' cc-avatar--' ~ size if size }}" aria-hidden="true">{% if url %}<img src="{{ url|safe_url }}" alt="" loading="lazy">{% else %}{{ (parts[0][:1] ~ (parts[1][:1] if parts|length > 1 else ''))|upper }}{% endif %}</span>
 {%- endmacro %}
 
-{# progress_bar(37, 100, 'success', '37 из 100') #}
+{# progress_bar(37, 100, 'success', '37 из 100') — полоса нейтральная; tone: brand|success|info|warning|danger #}
 {% macro progress_bar(value, max=100, tone=None, label=None) -%}
 {%- set pct = ((value or 0) * 100 / max) if max else 0 -%}
 <div class="cc-bar{{ ' cc-bar--' ~ tone if tone }}" role="progressbar" aria-valuenow="{{ value or 0 }}" aria-valuemin="0" aria-valuemax="{{ max }}"{% if label %} aria-label="{{ label }}"{% endif %}><span style="width: {{ [pct, 100]|min|round(1) }}%"></span></div>

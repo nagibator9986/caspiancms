@@ -1,62 +1,56 @@
-{# Новый пользователь (PEOPLE). Данные: routes_people.admin_add_user. #}
+{# Новый пользователь (PEOPLE). Данные: routes_people.admin_add_user. Абитуриенты здесь не создаются. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
+{% set list_url = back_url('admin_users') %}
 {% block title %}Новый пользователь{% endblock %}
-{% block page_title %}Новый пользователь{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Новый пользователь', 'Аккаунт входа в приложение и профиль', icon='person-plus') %}
-    {{ ui.button('К списку', href=url_for('admin_users'), icon='arrow-left', variant='light') }}
-{% endcall %}
+{{ ui.page_header('Новый пользователь', 'Аккаунт входа в приложение и профиль', back={'href': list_url, 'label': 'Пользователи'}) }}
 
-<div class="pp-form-layout">
-    <form method="post" action="{{ url_for('admin_add_user') }}" class="pp-form-main" novalidate data-dirty-guard>
-        {{ ui.csrf_field() }}
-        {% call ui.card('Профиль', icon='person-vcard') %}
-            <div class="row g-3">
-                <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='Иванов Иван Иванович', classes='') }}</div>
-                <div class="col-md-6">{{ ui.field('email', 'Email (логин для входа)', 'email', value=values.email, required=True, error=errors.get('email'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='name@example.com', classes='') }}</div>
-                <div class="col-md-6">
-                    <label class="form-label cc-required" for="f-password">Пароль</label>
-                    <div class="pp-password-row">
-                        <div class="cc-password flex-grow-1">
-                            <input class="form-control{{ ' is-invalid' if errors.get('password') }}" type="password" id="f-password" name="password" required minlength="6" maxlength="128" autocomplete="new-password"{% if errors.get('password') %} aria-describedby="f-password-error"{% endif %}>
-                            <button type="button" class="btn btn-ghost cc-btn-icon cc-password__toggle" data-password-toggle="#f-password" aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
-                        </div>
-                        <button type="button" class="btn btn-light" data-pp-generate="#f-password" title="Придумать надёжный пароль"><i class="bi bi-magic" aria-hidden="true"></i><span>Создать</span></button>
+<form id="userAddForm" method="post" action="{{ url_for('admin_add_user') }}" novalidate data-dirty-guard>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {% call ui.hint(icon='info-circle') %}
+                Абитуриенты регистрируются сами — по QR-коду или в приложении. Преподавателя удобнее добавить в разделе
+                <a href="{{ url_for('teachers_list', add=1) }}">«Преподаватели»</a>: там видна нагрузка, а вход можно создать позже.
+            {% endcall %}
+            {% call ui.card('Профиль') %}
+                <div class="row g-3">
+                    <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='Иванов Иван Иванович', classes='') }}</div>
+                    <div class="col-sm-6">
+                        {{ ui.field('role', 'Роль', 'select', value=values.role, required=True, error=errors.get('role'), options=role_options,
+                                    attrs={'data-pp-role-select': ''}, help='«Администратор» — полный доступ к этой панели', classes='') }}
                     </div>
-                    {% if errors.get('password') %}<div class="invalid-feedback d-block" id="f-password-error">{{ errors.password }}</div>{% else %}<div class="form-text">Не короче 6 символов. Передайте пароль лично.</div>{% endif %}
+                    <div class="col-sm-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+                    <div class="col-7 col-sm-6" data-pp-role-only="student">
+                        {{ ui.field('group', 'Группа', 'select', value=values.group, error=errors.get('group'), options=groups, placeholder='— без группы —', classes='') }}
+                    </div>
+                    <div class="col-5 col-sm-6" data-pp-role-only="student">
+                        {{ ui.field('course', 'Курс', 'select', value=values.course, error=errors.get('course'), options=courses, placeholder='—', classes='') }}
+                    </div>
+                    <div class="col-12" data-pp-role-only="student"><p class="form-text m-0">Группы нет в списке? Создайте её в разделе <a href="{{ url_for('groups') }}">«Группы»</a>.</p></div>
                 </div>
-                <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
-                <div class="col-md-6">
-                    {{ ui.field('role', 'Роль', 'select', value=values.role, required=True, error=errors.get('role'),
-                                options=role_options,
-                                attrs={'data-pp-role-select': ''}, classes='') }}
+            {% endcall %}
+            {% call ui.card('Вход в приложение') %}
+                <div class="row g-3">
+                    <div class="col-sm-6">{{ ui.field('email', 'Email (логин)', 'email', value=values.email, required=True, error=errors.get('email'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='name@example.com', classes='') }}</div>
+                    <div class="col-sm-6">
+                        <label class="form-label cc-required" for="f-password">Пароль</label>
+                        <div class="pp-password-row">
+                            <div class="cc-password flex-grow-1">
+                                <input class="form-control{{ ' is-invalid' if errors.get('password') }}" type="password" id="f-password" name="password" required minlength="6" maxlength="128" autocomplete="new-password"{% if errors.get('password') %} aria-describedby="f-password-error"{% endif %}>
+                                <button type="button" class="btn btn-ghost cc-btn-icon cc-password__toggle" data-password-toggle="#f-password" aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                            </div>
+                            <button type="button" class="btn btn-light cc-btn-icon" data-pp-generate="#f-password" title="Придумать надёжный пароль" aria-label="Придумать надёжный пароль"><i class="bi bi-magic" aria-hidden="true"></i></button>
+                        </div>
+                        {% if errors.get('password') %}<div class="invalid-feedback d-block" id="f-password-error">{{ errors.password }}</div>{% else %}<div class="form-text">Не короче 6 символов. Передайте пароль лично.</div>{% endif %}
+                    </div>
                 </div>
-                <div class="col-md-6" data-pp-role-only="student">
-                    {{ ui.field('group', 'Группа', 'select', value=values.group, error=errors.get('group'), options=groups, placeholder='— без группы —', classes='') }}
-                </div>
-                <div class="col-md-6" data-pp-role-only="student">
-                    {{ ui.field('course', 'Курс', 'select', value=values.course, error=errors.get('course'), options=courses, placeholder='—', classes='') }}
-                </div>
-            </div>
-            <div class="pp-form-actions">
-                {{ ui.button('Создать пользователя', type='submit', icon='check2', attrs={'data-loading': 'Создаём…'}) }}
-                {{ ui.button('Отмена', href=url_for('admin_users'), variant='light') }}
-            </div>
-        {% endcall %}
-    </form>
-
-    <aside class="pp-form-aside">
-        {% call ui.card('Подсказки', icon='lightbulb') %}
-            <ul class="pp-tips">
-                <li><i class="bi bi-mortarboard" aria-hidden="true"></i><span><b>Абитуриенты</b> регистрируются сами — по QR-коду на стенде или в приложении. Здесь их не создают.</span></li>
-                <li><i class="bi bi-person-badge" aria-hidden="true"></i><span>Преподавателя удобнее добавлять в разделе <a href="{{ url_for('teachers_list') }}">«Преподаватели»</a> — там видна нагрузка, а вход можно создать позже.</span></li>
-                <li><i class="bi bi-collection" aria-hidden="true"></i><span>Группы нет в списке? Создайте её в разделе <a href="{{ url_for('groups') }}">«Группы»</a>.</span></li>
-                <li><i class="bi bi-shield-lock" aria-hidden="true"></i><span>Роль «Администратор» даёт полный доступ к этой панели.</span></li>
-            </ul>
-        {% endcall %}
-    </aside>
-</div>
+            {% endcall %}
+        </div>
+    </div>
+    {{ ui.savebar('Создать', cancel_href=list_url, submit_attrs={'data-loading': 'Создаём…'}) }}
+</form>
 {% endblock %}

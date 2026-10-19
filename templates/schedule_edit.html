@@ -1,103 +1,120 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# Правка одного занятия (владелец — SCHEDULE): день недели вместо даты, значения не из справочников сохраняются. #}
-{% block title %}Занятие: {{ lesson.subject or item.id }}{% endblock %}
+{# Правка одного занятия (владелец — SCHEDULE): день недели вместо даты, значения не из справочников сохраняются.
+   Живая проверка накладок — над кнопками сохранения; подсказка свободных аудиторий — под полем «Аудитория».
+   {% block peek %} — та же форма без истории (быстрый просмотр из недели группы, накладок, аудиторий). #}
+{% block title %}{{ lesson.subject or 'Занятие' }}{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
+{% block lesson_form %}
+{% set critical = conflicts|selectattr('severity', 'equalto', 'critical')|list|length %}
+<form method="post" action="{{ url_for('schedule_edit', schedule_id=item.id) }}" class="sch-lesson-form" data-lesson-form data-dirty-guard novalidate
+      data-check-url="{{ url_for('api_schedule_check') }}" data-free-url="{{ url_for('api_free_rooms') }}" data-lesson-id="{{ item.id }}"
+      data-custom-time="{{ f.custom_time }}" data-critical="{{ critical }}">
+    {{ ui.csrf_field() }}
+    <input type="hidden" name="next" value="{{ return_url }}">
+    {{ ui.form_errors(errors) }}
+    {% call ui.card() %}
+    <div class="row g-3">
+        <div class="col-sm-6">
+            <label class="form-label cc-required" for="f-group">Группа</label>
+            <select class="form-select" id="f-group" name="groupId" data-f="groupId" required>
+                {% for g in f.group_choices(values.groupId) %}<option value="{{ g }}" {{ 'selected' if g == values.groupId }}>{{ g }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="col-sm-6">
+            <label class="form-label cc-required" for="f-day">День недели</label>
+            <select class="form-select" id="f-day" name="day" data-f="day" required>
+                {% if values.day is none %}<option value="" selected>— выберите день —</option>{% endif %}
+                {% for d in range(7) %}<option value="{{ d }}" {{ 'selected' if values.day == d }}>{{ f.day_names_full[d] }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="col-sm-6">
+            <label class="form-label cc-required" for="f-time">Время</label>
+            <select class="form-select" id="f-time" name="time" data-f="time" required>
+                {% if not values.time %}<option value="" selected>Выберите время…</option>{% endif %}
+                {% for v, label in f.time_choices(values.day, values.time) %}<option value="{{ v }}" {{ 'selected' if values.time and v == values.time }}>{{ label }}</option>{% endfor %}
+            </select>
+            <input class="form-control mt-2 sch-row__custom" type="text" name="time_custom" data-f="time_custom" placeholder="08.30-09.50" aria-label="Своё время (ЧЧ.ММ-ЧЧ.ММ)" hidden>
+            <div class="form-text">Сетка звонков понедельника своя — список меняется вместе с днём.</div>
+        </div>
+        <div class="col-sm-6">
+            <label class="form-label" for="f-week">Неделя</label>
+            <select class="form-select" id="f-week" name="week_type" data-f="week_type">
+                {% for v, label in f.week_choices(values.week_type) %}<option value="{{ v }}" {{ 'selected' if v == values.week_type }}>{{ label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="col-12">
+            <label class="form-label cc-required" for="f-subject">Дисциплина</label>
+            <select class="form-select" id="f-subject" name="subject" data-f="subject" required>
+                {% if not values.subject %}<option value="" selected>Выберите дисциплину…</option>{% endif %}
+                {% for v, label in f.subject_choices(values.subject) %}<option value="{{ v }}" {{ 'selected' if v == values.subject }}>{{ label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="col-sm-7">
+            <label class="form-label" for="f-teacher">Преподаватель</label>
+            <select class="form-select" id="f-teacher" name="teacher" data-f="teacher">
+                {% for v, label in f.teacher_choices(values.teacher) %}<option value="{{ v }}" {{ 'selected' if v == values.teacher }}>{{ label }}</option>{% endfor %}
+            </select>
+            {% set hint = lesson|sch_teacher_hint %}
+            {% if hint %}<div class="form-text sch-text-warning"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> {{ hint[:1]|upper }}{{ hint[1:] }}: выберите преподавателя из списка, чтобы приложение показало занятие в его расписании.</div>{% endif %}
+        </div>
+        <div class="col-sm-5">
+            <label class="form-label" for="f-room">Аудитория</label>
+            <input class="form-control" type="text" id="f-room" name="room" data-f="room" value="{{ values.room }}" list="schRoomsList" maxlength="40" autocomplete="off" placeholder="например, 204">
+            <datalist id="schRoomsList">{% for r in f.all_rooms %}<option value="{{ r }}"></option>{% endfor %}</datalist>
+        </div>
+        <div class="col-12 sch-free-hint" data-free-rooms aria-live="polite" hidden></div>
+    </div>
+    <div class="sch-live" data-live-conflicts aria-live="polite">
+        {% if conflicts %}{{ sch.conflict_list(conflicts) }}
+        {% else %}<p class="sch-live__ok"><i class="bi bi-check-circle" aria-hidden="true"></i>Накладок нет: преподаватель, аудитория и группа в это время свободны.</p>{% endif %}
+    </div>
+    {% endcall %}
+    {{ ui.savebar('Сохранить', cancel_href=return_url, note='Студенты группы получат уведомление') }}
+    {{ ui.json_data('schCallSchedule', f.call_schedule) }}
+</form>
+{% endblock %}
+
 {% block content %}
 {% set day_label = lesson.day_name if lesson.weekday is not none else 'день не указан' %}
-{% call ui.page_header(lesson.subject or 'Занятие', (lesson.groupId or 'без группы') ~ ' · ' ~ day_label ~ ' · ' ~ (lesson|sch_time), icon='pencil-square') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    {{ ui.button('Назад', href=return_url, icon='arrow-left', variant='light') }}
-{% endcall %}
+{% set group_url = url_for('schedule', group=lesson.groupId) if lesson.groupId else url_for('schedule') %}
+{{ ui.page_header(lesson.subject or 'Занятие',
+    subtitle=(lesson.groupId or 'без группы') ~ ' · ' ~ day_label ~ ' · ' ~ (lesson|sch_time)|time_range,
+    back={'href': return_url, 'label': lesson.groupId or 'Расписание'},
+    meta=ui.week_now(current_week, week_number),
+    actions=[{'menu': [
+        {'label': 'Неделя группы', 'href': group_url, 'icon': 'calendar-week'},
+        {'label': 'История группы', 'href': url_for('schedule_logs', group=lesson.groupId) if lesson.groupId else url_for('schedule_logs'), 'icon': 'clock-history'},
+        {'divider': True},
+        {'label': 'Удалить занятие', 'action': url_for('schedule_delete_item', doc_id=item.id), 'icon': 'trash', 'danger': True,
+         'fields': {'next': group_url}, 'ok': 'Удалить',
+         'confirm': 'Удалить «' ~ (lesson.subject or item.id) ~ '» у группы ' ~ (lesson.groupId or '—') ~ '? Студенты получат уведомление об отмене.'},
+    ]}]) }}
 
-<div class="sch-layout">
-    <div class="sch-layout__main min-w-0">
-        <form method="post" class="cc-card sch-lesson-form" data-lesson-form data-dirty-guard novalidate
-              data-check-url="{{ url_for('api_schedule_check') }}" data-lesson-id="{{ item.id }}" data-custom-time="{{ f.custom_time }}">
-            <div class="cc-card__head"><h2 class="cc-card__title"><i class="bi bi-calendar-event" aria-hidden="true"></i>Параметры занятия</h2></div>
-            <div class="cc-card__body">
-                {{ ui.csrf_field() }}
-                <input type="hidden" name="next" value="{{ return_url }}">
-                {% if errors %}
-                <div class="alert alert-danger" role="alert"><ul class="mb-0">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></div>
-                {% endif %}
-                <div class="row g-3">
-                    <div class="col-md-6">
-                        <label class="form-label cc-required" for="f-group">Группа</label>
-                        <select class="form-select" id="f-group" name="groupId" required>
-                            {% for g in f.group_choices(values.groupId) %}<option value="{{ g }}" {{ 'selected' if g == values.groupId }}>{{ g }}</option>{% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label cc-required" for="f-day">День недели</label>
-                        <select class="form-select" id="f-day" name="day" data-f="day" required>
-                            {% if values.day is none %}<option value="" selected>— выберите день —</option>{% endif %}
-                            {% for d in range(7) %}<option value="{{ d }}" {{ 'selected' if values.day == d }}>{{ f.day_names_full[d] }}</option>{% endfor %}
-                        </select>
-                        <div class="form-text">Занятие повторяется каждую неделю (или по числителю/знаменателю). В базу пишутся и day_index, и date.</div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label cc-required" for="f-time">Время</label>
-                        <select class="form-select" id="f-time" name="time" data-f="time" required>
-                            {% if not values.time %}<option value="" selected>Выберите время…</option>{% endif %}
-                            {% for v, label in f.time_choices(values.day, values.time) %}<option value="{{ v }}" {{ 'selected' if values.time and v == values.time }}>{{ label }}</option>{% endfor %}
-                        </select>
-                        <input class="form-control mt-2 sch-row__custom" type="text" name="time_custom" data-f="time_custom" placeholder="08.30-09.50" aria-label="Своё время (ЧЧ.ММ-ЧЧ.ММ)" hidden>
-                        <div class="form-text">Сетка звонков понедельника отличается от остальных дней — список обновится при смене дня.</div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label" for="f-week">Неделя</label>
-                        <select class="form-select" id="f-week" name="week_type" data-f="week_type">
-                            {% for v, label in f.week_choices(values.week_type) %}<option value="{{ v }}" {{ 'selected' if v == values.week_type }}>{{ label }}</option>{% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label cc-required" for="f-subject">Дисциплина</label>
-                        <select class="form-select" id="f-subject" name="subject" data-f="subject" required>
-                            {% if not values.subject %}<option value="" selected>Выберите дисциплину…</option>{% endif %}
-                            {% for v, label in f.subject_choices(values.subject) %}<option value="{{ v }}" {{ 'selected' if v == values.subject }}>{{ label }}</option>{% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-md-8">
-                        <label class="form-label" for="f-teacher">Преподаватель</label>
-                        <select class="form-select" id="f-teacher" name="teacher" data-f="teacher">
-                            {% for v, label in f.teacher_choices(values.teacher) %}<option value="{{ v }}" {{ 'selected' if v == values.teacher }}>{{ label }}</option>{% endfor %}
-                        </select>
-                        {% set hint = lesson|sch_teacher_hint %}
-                        {% if hint %}<div class="form-text text-warning-emphasis"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> {{ hint[:1]|upper }}{{ hint[1:] }}: выберите преподавателя из списка, чтобы приложение показало занятие в его расписании.</div>{% endif %}
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label" for="f-room">Аудитория</label>
-                        <input class="form-control" type="text" id="f-room" name="room" data-f="room" value="{{ values.room }}" list="schRoomsList" maxlength="40" autocomplete="off" placeholder="например, 204">
-                        <datalist id="schRoomsList">{% for r in f.all_rooms %}<option value="{{ r }}"></option>{% endfor %}</datalist>
-                    </div>
-                </div>
-            </div>
-            <div class="cc-card__foot d-flex flex-wrap gap-2 justify-content-end">
-                <a class="btn btn-light" href="{{ return_url }}">Отмена</a>
-                <button type="submit" class="btn btn-primary" data-loading="Сохраняем…"><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить</span></button>
-            </div>
-            {{ ui.json_data('schCallSchedule', f.call_schedule) }}
-        </form>
-
-        {% call ui.card('История занятия', icon='clock-history') %}
+<div class="cc-form-layout sch-edit-layout">
+    <div class="cc-stack min-w-0">
+        {{ self.lesson_form() }}
+        {% call ui.card('История занятия') %}
             {% if history %}<ul class="sch-logs sch-logs--compact">{% for e in history %}{{ sch.log_item(e, show_group=False) }}{% endfor %}</ul>
             {% else %}<p class="cc-muted mb-0">Изменений этого занятия в журнале нет.</p>{% endif %}
         {% endcall %}
     </div>
-
-    <aside class="sch-layout__aside">
-        {% call ui.card('Накладки', icon='exclamation-diamond', subtitle='Проверка по всему расписанию') %}
-            <div data-live-conflicts>
-            {% if conflicts %}{{ sch.conflict_list(conflicts) }}
-            {% else %}<p class="cc-muted mb-0"><i class="bi bi-check-circle text-success" aria-hidden="true"></i> Пересечений не найдено.</p>{% endif %}
-            </div>
-            {% if conflicts_url %}<a class="btn btn-ghost btn-sm mt-2" href="{{ conflicts_url }}"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>Все накладки</span></a>{% endif %}
+    <aside class="cc-form-aside cc-stack">
+        {% call ui.card('Связанное', flush=True) %}
+        <ul class="sch-related">
+            {% if lesson.groupId %}<li><a href="{{ group_url }}"><i class="bi bi-people" aria-hidden="true"></i><span><small>Неделя группы</small>{{ lesson.groupId }}</span></a></li>{% endif %}
+            {% if lesson.teacher_key %}<li><a href="{{ url_for('schedule_teachers', teacher=lesson.teacher_key) }}"><i class="bi bi-person-badge" aria-hidden="true"></i><span><small>Неделя преподавателя</small>{{ lesson|sch_teacher }}</span></a></li>{% endif %}
+            {% if lesson.room %}<li><a href="{{ url_for('schedule_rooms', room=lesson.room) }}"><i class="bi bi-door-open" aria-hidden="true"></i><span><small>Неделя аудитории</small>{{ lesson.room }}</span></a></li>{% endif %}
+            {% if lesson.weekday is not none and lesson.start is not none and lesson.end is not none %}
+            <li><a href="{{ url_for('schedule_free_rooms', day=lesson.weekday, **{'from': '%02d:%02d'|format(lesson.start // 60, lesson.start % 60), 'to': '%02d:%02d'|format(lesson.end // 60, lesson.end % 60)}) }}"><i class="bi bi-door-closed" aria-hidden="true"></i><span><small>Свободные аудитории</small>{{ lesson.day_name }}, {{ (lesson|sch_time)|time_range }}</span></a></li>
+            {% endif %}
+            {% if conflicts_url and conflicts %}<li><a href="{{ conflicts_url }}"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i><span><small>Раздел</small>Все накладки</span></a></li>{% endif %}
+        </ul>
         {% endcall %}
-        {% call ui.card('О записи', icon='info-circle') %}
+        {% call ui.details('О записи', key='sch-edit-record') %}
             {{ ui.kv([
                 ('Схема', {'recurring': 'повторяется (day_index)', 'dated': 'день из даты (date)', 'unknown': 'без дня'}[lesson.kind]),
                 ('day_index', lesson.day_index if lesson.day_index is not none else '—'),
@@ -109,10 +126,20 @@
             ]) }}
             {% if lesson.day_mismatch %}<p class="sch-issue sch-issue--warning mt-2 mb-0"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>day_index и date указывают на разные дни — приложение показывает день из day_index. Сохранение выровняет date.</p>{% endif %}
         {% endcall %}
-        {% call ui.card('Опасная зона', icon='trash') %}
-            <p class="cc-muted small">Студенты группы получат уведомление об отмене занятия.</p>
-            {{ ui.confirm_button(url_for('schedule_delete_item', doc_id=item.id), 'Удалить занятие', 'Удалить «' ~ (lesson.subject or item.id) ~ '» у группы ' ~ (lesson.groupId or '—') ~ '?', fields={'next': url_for('schedule', group=lesson.groupId) if lesson.groupId else url_for('schedule')}, size=None, title='Удаление занятия') }}
-        {% endcall %}
     </aside>
+</div>
+{% endblock %}
+
+{% block peek %}
+{% set day_label = lesson.day_name if lesson.weekday is not none else 'день не указан' %}
+<div class="sch-peek">
+    <h1 class="sch-peek__title">{{ lesson.subject or 'Занятие' }}</h1>
+    <p class="sch-peek__sub">{{ lesson.groupId or 'без группы' }} · {{ day_label }} · {{ (lesson|sch_time)|time_range }}</p>
+    {{ self.lesson_form() }}
+    <p class="sch-peek__links">
+        {% if lesson.teacher_key %}<a href="{{ url_for('schedule_teachers', teacher=lesson.teacher_key) }}"><i class="bi bi-person-badge" aria-hidden="true"></i>Неделя преподавателя</a>{% endif %}
+        {% if lesson.room %}<a href="{{ url_for('schedule_rooms', room=lesson.room) }}"><i class="bi bi-door-open" aria-hidden="true"></i>Аудитория {{ lesson.room }}</a>{% endif %}
+        <a href="{{ url_for('schedule_edit', schedule_id=item.id, next=return_url) }}"><i class="bi bi-clock-history" aria-hidden="true"></i>История и удаление</a>
+    </p>
 </div>
 {% endblock %}

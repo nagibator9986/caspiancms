@@ -1,53 +1,66 @@
 {# Преподаватель: правка, вход в приложение, нагрузка (PEOPLE). Данные: routes_people.teacher_edit.
-   uid преподавателя не меняется: вход создаётся с тем же uid (на него ссылается расписание). #}
+   uid преподавателя не меняется: вход создаётся с тем же uid (на него ссылается расписание).
+   «Передать занятия…» (PPL-6) — форма шлёт POST /schedule/bulk (action=teacher, контракт SCH-11). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
-{% set title = values.name or teacher.name or teacher.id %}
-{% set back_url = next_url or url_for('teachers_list') %}
+{% set title = teacher.name or values.name or teacher.id %}
+{% set list_url = back_url('teachers_list') %}
+{% set can_transfer = lessons and bulk_teacher_ready and replacements %}
+{# после действий из быстрого просмотра — обратно в список, со страницы — на эту же карточку #}
+{% set act_next = list_url if is_partial else here() %}
+{% set menu = [{'label': 'Все настройки аккаунта', 'href': url_for('admin_edit_user', user_id=teacher.id, next=here()), 'icon': 'gear'}] %}
+{% if can_transfer %}{% set _ = menu.append({'label': 'Передать занятия…', 'href': '#', 'icon': 'arrow-left-right', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#teacherTransfer'}}) %}{% endif %}
+{% if has_account and not account.disabled %}{% set _ = menu.append({'label': 'Сбросить пароль…', 'action': url_for('admin_reset_password', user_id=teacher.id), 'fields': {'next': act_next}, 'icon': 'key', 'ok': 'Сбросить',
+    'confirm': 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.'}) %}{% endif %}
+
+{% set badges %}
+<span class="pp-badges">
+    {{ ui.role_badge('teacher') }}
+    {% if account and account.error %}<span class="cc-badge cc-badge--neutral">вход: ?</span>
+    {% elif has_account and account.disabled %}{{ ui.badge('blocked', 'вход заблокирован', 'danger', 'lock') }}
+    {% elif has_account %}<span class="cc-badge cc-badge--outline"><i class="bi bi-key" aria-hidden="true"></i>Есть вход</span>
+    {% else %}<span class="cc-badge cc-badge--neutral"><i class="bi bi-person-slash" aria-hidden="true"></i>Нет входа</span>{% endif %}
+</span>
+{% endset %}
+
+{% set summary = [{'value': load_label, 'label': 'пар в неделю', 'title': 'Неделя-числитель: ' ~ week_num ~ ' · неделя-знаменатель: ' ~ week_den ~ ' (числитель/знаменатель — по 0,5)'},
+                  (lessons|length, plural(lessons|length, 'занятие', 'занятия', 'занятий') ~ ' в расписании'),
+                  {'value': groups|length, 'label': plural(groups|length, 'группа', 'группы', 'групп'), 'title': groups|join(', ')}] %}
+{% if clashes %}{% set _ = summary.append({'value': clashes|length, 'label': plural(clashes|length, 'занятие', 'занятия', 'занятий') ~ ' с накладкой', 'tone': 'danger', 'href': nav_url('schedule_conflicts', teacher=teacher.id)}) %}{% endif %}
 {% block title %}{{ title }}{% endblock %}
-{% block page_title %}{{ title }}{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-<div class="cc-page-header pp-profile-head">
-    <div class="pp-person pp-person--lg min-w-0">
-        {{ ui.avatar(teacher.name or title, size='lg') }}
-        <div class="min-w-0 cc-page-header__text">
-            <h1 class="cc-truncate">{{ teacher.name or title }}</h1>
-            <p class="d-flex flex-wrap align-items-center gap-2">
-                {{ ui.badge('teacher') }}
-                {% if has_account %}{{ ui.badge('active', 'Есть вход', 'success', 'key') }}{% elif account is none %}{{ ui.badge('inactive', 'Нет входа', 'neutral', 'person-slash') }}{% endif %}
-                {% if account and account.disabled %}<span class="cc-badge cc-badge--danger"><i class="bi bi-lock" aria-hidden="true"></i>заблокирован</span>{% endif %}
-                <span class="cc-subtle small">uid: <code data-copy="{{ teacher.id }}" title="Скопировать" class="pp-copy">{{ teacher.id }}</code></span>
-            </p>
-        </div>
-    </div>
-    <div class="cc-page-header__actions">
-        {{ ui.button('Назад', href=back_url, icon='arrow-left', variant='light') }}
-        {{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=teacher.id), icon='calendar-week') }}
-    </div>
-</div>
+{% call ui.page_header(title, ((teacher.email or values.email or 'без email') ~ (' · ' ~ (teacher.phone|phone) if teacher.phone else '')),
+                       back={'href': list_url, 'label': 'Преподаватели'}, meta=badges) %}
+    {{ ui.header_menu(menu) }}
+    {{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=teacher.id), icon='calendar-week', variant='light') }}
+{% endcall %}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Пар в неделю', load_label, 'speedometer', meta='числитель/знаменатель — по 0,5') }}
-    {{ ui.stat_card('Занятий в расписании', lessons|length, 'calendar-week', tone='info') }}
-    {{ ui.stat_card('Групп', groups|length, 'collection', tone='violet', meta=groups[:3]|join(', ') if groups else 'нет') }}
-    {% if clashes %}{{ ui.stat_card('Накладки', clashes|length, 'exclamation-octagon', tone='danger', meta='занятий пересекаются', href=nav_url('schedule_conflicts', teacher=teacher.id)) }}{% endif %}
-</div>
+{{ ui.summary_line(summary) }}
 
-<div class="pp-form-layout">
-    <div class="pp-form-main">
-        <form method="post" action="{{ url_for('teacher_edit', uid=teacher.id) }}" novalidate data-dirty-guard>
-            {{ ui.csrf_field() }}
-            {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
-            {% call ui.card('Данные и вход', icon='person-vcard') %}
-                {% if errors.get('_form') %}<div class="alert alert-danger">{{ errors._form }}</div>{% endif %}
+{% if namesakes %}
+    {% call ui.hint(icon='people', tone='warning') %}
+        В справочнике есть ещё {{ 'преподаватель' if namesakes|length == 1 else 'преподаватели' }} с таким ФИО:
+        {% for n in namesakes %}<a href="{{ url_for('teacher_edit', uid=n.id, next=list_url) }}">{{ n.email or n.id }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+        Если это дубль — передайте его занятия одному преподавателю, а лишнюю карточку удалите.
+    {% endcall %}
+{% endif %}
+
+<div class="cc-form-layout">
+    <div class="cc-stack">
+        <form id="teacherForm" method="post" action="{{ url_for('teacher_edit', uid=teacher.id) }}" novalidate data-dirty-guard>
+            {{ ui.csrf_field() }}{{ ui.next_field() }}
+            {# для «Удалить» в панели сохранения: занятия останутся без преподавателя — об этом говорит подтверждение #}
+            {% if lessons %}<input type="hidden" name="force" value="1" data-cc-no-dirty>{% endif %}
+            {% if errors.get('_form') %}{{ ui.form_errors([errors._form]) }}{% endif %}
+            {% call ui.card('Данные и вход') %}
                 <div class="row g-3">
                     <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120}, help='Так ФИО увидят студенты в расписании', classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('email', 'Email', 'email', value=values.email, required=has_account, error=errors.get('email'), attrs={'maxlength': 120, 'autocomplete': 'off'},
+                    <div class="col-sm-6">{{ ui.field('email', 'Email', 'email', value=values.email, required=has_account, error=errors.get('email'), attrs={'maxlength': 120, 'autocomplete': 'off'},
                                                        help='Логин для входа в приложение' if has_account else 'Нужен, чтобы создать вход', classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
-                    <div class="col-md-6">
+                    <div class="col-sm-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+                    <div class="col-sm-6">
                         <label class="form-label" for="te-password">{{ 'Новый пароль' if has_account else 'Пароль для входа' }}</label>
                         <div class="pp-password-row">
                             <div class="cc-password flex-grow-1">
@@ -61,19 +74,12 @@
                     </div>
                 </div>
                 {% if not has_account and account is none %}
-                <div class="pp-hint mt-3">
-                    <i class="bi bi-key" aria-hidden="true"></i>
-                    <div>У преподавателя пока нет входа в приложение. Укажите email и пароль — аккаунт создастся <b>с тем же uid</b>, поэтому все его занятия в расписании сохранятся.</div>
-                </div>
+                <div class="mt-3">{% call ui.hint(icon='key') %}Входа в приложение пока нет. Укажите email и пароль — аккаунт создастся <b>с тем же uid</b>, поэтому все занятия в расписании сохранятся.{% endcall %}</div>
                 {% endif %}
-                <div class="pp-form-actions">
-                    {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-                    {{ ui.button('Отмена', href=back_url, variant='light') }}
-                </div>
             {% endcall %}
         </form>
 
-        {% call ui.card('Занятия по дням', icon='calendar-week', subtitle='из текущего расписания', flush=not lessons) %}
+        {% call ui.card('Занятия по дням', subtitle='из текущего расписания', flush=not lessons) %}
             {% if lessons %}
                 {% for wd, items in days.items() %}
                 <div class="pp-day">
@@ -81,15 +87,15 @@
                     <ul class="pp-lessons">
                         {% for l in items %}
                         <li{% if l.id in clashes %} class="is-clash"{% endif %}>
-                            <span class="pp-lessons__time cc-num">{{ l.time_label or l.time or '—' }}</span>
+                            <span class="pp-lessons__time cc-num">{{ (l.time_label or l.time)|time_range if (l.time_label or l.time) else '—' }}</span>
                             <span class="min-w-0">
-                                <span class="d-block cc-truncate"><b>{{ l.subject or 'Без дисциплины' }}</b></span>
+                                <span class="d-block cc-truncate pp-lessons__subject">{{ l.subject or 'Без дисциплины' }}</span>
                                 <span class="cc-cell-sub d-block cc-truncate">{{ l.groupId or '—' }}{% if l.room %} · ауд. {{ l.room }}{% endif %}{% if l.kind == 'dated' and l.date %} · разово {{ l.date[8:10] }}.{{ l.date[5:7] }}{% endif %}</span>
                             </span>
-                            <span class="d-flex gap-1 align-items-center">
+                            <span class="pp-lessons__side">
                                 {% if l.id in clashes %}<a class="cc-badge cc-badge--danger" href="{{ nav_url('schedule_conflicts', teacher=teacher.id) }}" title="Пересекается с другим занятием"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>накладка</a>{% endif %}
                                 {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}
-                                {{ ui.button('Изменить занятие', href=nav_url('schedule_edit', schedule_id=l.id), icon='pencil', variant='ghost', size='sm', icon_only=True) }}
+                                {{ ui.button('Изменить занятие', href=nav_url('schedule_edit', schedule_id=l.id, next=here()), icon='pencil', variant='ghost', size='sm', icon_only=True) }}
                             </span>
                         </li>
                         {% endfor %}
@@ -97,37 +103,119 @@
                 </div>
                 {% endfor %}
             {% else %}
-                {{ ui.empty_state('calendar-x', 'Занятий нет', 'Преподаватель не указан ни в одном занятии расписания.', {'label': 'Конструктор', 'href': nav_url('schedule_builder'), 'icon': 'plus-lg', 'variant': 'light'}) }}
+                {{ ui.empty_state('calendar-x', 'Занятий нет', 'Преподаватель не указан ни в одном занятии расписания.', {'label': 'Открыть конструктор', 'href': nav_url('schedule_builder'), 'icon': 'plus-lg'}) }}
             {% endif %}
         {% endcall %}
     </div>
 
-    <aside class="pp-form-aside">
-        {% call ui.card('Вход в приложение', icon='key') %}
+    <aside class="cc-form-aside">
+        {% call ui.card('Вход в приложение') %}
             {% if account and account.error %}
                 <p class="cc-muted mb-0">Сервис входа сейчас недоступен.</p>
             {% elif has_account %}
                 {{ ui.kv([
-                    ('Статус', ui.badge('inactive', 'Заблокирован', 'danger') if account.disabled else ui.badge('active', 'Активен')),
+                    ('Статус', ui.badge('blocked', 'Заблокирован', 'danger', 'lock') if account.disabled else ui.badge('active')),
                     ('Email', account.email or '—'),
                     ('Последний вход', (account.last_sign_in|ago) if account.last_sign_in else 'ещё не входил'),
                 ]) }}
                 <div class="pp-account-actions">
-                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль на Teacher123',
-                                         'Пароль станет Teacher123. Сообщите его преподавателю лично.', variant='outline-primary', icon='key', size=None, ok='Сбросить', classes='w-100') }}
-                    {{ ui.button('Все настройки аккаунта', href=url_for('admin_edit_user', user_id=teacher.id), icon='gear', variant='light', classes='w-100') }}
+                    {% if not account.disabled %}
+                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.',
+                                         variant='light', icon='key', size=None, fields={'next': here()}, ok='Сбросить', title='Сброс пароля', classes='w-100') }}
+                    {% endif %}
+                    {{ ui.button('Все настройки аккаунта', href=url_for('admin_edit_user', user_id=teacher.id, next=here()), icon='gear', variant='light', classes='w-100') }}
                 </div>
             {% else %}
-                <p class="mb-0 cc-muted small">Входа нет. Заполните email и пароль в форме слева.</p>
+                <p class="mb-0 cc-muted small">Входа нет. Заполните email и пароль в форме — аккаунт создастся с тем же uid.</p>
             {% endif %}
+            <p class="pp-uid">uid: <code data-copy="{{ teacher.id }}" title="Скопировать uid" class="pp-copy">{{ teacher.id }}</code></p>
         {% endcall %}
 
-        {% call ui.card('Удаление', icon='trash', classes='pp-danger-card') %}
-            <p class="cc-muted small">{% if lessons %}В расписании останется {{ lessons|length }} {{ plural(lessons|length, 'занятие', 'занятия', 'занятий') }} без преподавателя — лучше сначала назначить замену.{% else %}Удалятся карточка и вход в приложение.{% endif %}</p>
-            {{ ui.confirm_button(url_for('teacher_delete', uid=teacher.id), 'Удалить преподавателя',
-                                 ('Удалить «' ~ (teacher.name or teacher.id) ~ '»? ' ~ lessons|length ~ ' занятий останутся без преподавателя.') if lessons else ('Удалить «' ~ (teacher.name or teacher.id) ~ '» и его вход?'),
-                                 variant='outline-danger', icon='trash', size=None, ok='Удалить', fields={'force': '1'} if lessons else {}, classes='w-100') }}
+        {% if lessons %}
+        {% call ui.card('Замена преподавателя') %}
+            <p class="cc-muted small">Заболел, уволился или это дубль? Передайте его {{ lessons|length }} {{ plural(lessons|length, 'занятие', 'занятия', 'занятий') }} другому преподавателю — целиком или по дням.</p>
+            {% if can_transfer %}
+            {{ ui.button('Передать занятия…', icon='arrow-left-right', variant='light', classes='w-100', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#teacherTransfer'}) }}
+            {% else %}
+            <p class="cc-muted small mb-0">Массовая замена сейчас недоступна — поменяйте преподавателя в занятиях по одному.</p>
+            {% endif %}
         {% endcall %}
+        {% endif %}
     </aside>
+</div>
+{{ ui.savebar('Сохранить', cancel_href=list_url, form='teacherForm', submit_attrs={'data-loading': 'Сохраняем…'},
+              danger={'label': 'Удалить', 'action': url_for('teacher_delete', uid=teacher.id), 'ok': 'Удалить',
+                      'confirm': ('Удалить «' ~ title ~ '»? ' ~ lessons|length ~ ' ' ~ plural(lessons|length, 'занятие', 'занятия', 'занятий') ~ ' останутся без преподавателя — лучше сначала «Передать занятия…». Вход в приложение тоже удалится. Действие необратимо.') if lessons
+                                 else ('Удалить «' ~ title ~ '» и его вход в приложение? Действие необратимо.')}) }}
+
+{% if can_transfer %}
+{% call ui.modal_form('teacherTransfer', 'Передать занятия', nav_url('schedule_bulk'), submit='Передать') %}
+    <input type="hidden" name="action" value="teacher">
+    <input type="hidden" name="teacher_from" value="{{ teacher.id }}">
+    <input type="hidden" name="next" value="{{ here() }}">
+    <p class="cc-muted small">Занятия «{{ title }}» перейдут к другому преподавателю — студенты увидят новое ФИО в расписании. Изменение попадёт в историю расписания.</p>
+    {{ ui.field('teacher', 'Кому передать', 'select', options=replacements, required=True, placeholder='— выберите преподавателя —', id='tt-teacher') }}
+    <fieldset class="pp-transfer-days">
+        <legend class="form-label">Какие дни</legend>
+        {% for wd, items in days.items() %}
+        {%- set key = wd if wd is not none else 'x' -%}
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="tt-day-{{ key }}" checked data-pp-day="{{ key }}">
+            <label class="form-check-label" for="tt-day-{{ key }}">{{ day_names[wd] if wd is not none else 'День не указан' }} <span class="cc-subtle">· {{ items|length }}</span></label>
+            {% for l in items %}<input type="hidden" name="ids" value="{{ l.id }}" data-pp-day-of="{{ key }}">{% endfor %}
+        </div>
+        {% endfor %}
+    </fieldset>
+    <p class="mb-0 mt-2 small">Будет передано: <b data-pp-transfer-count>{{ lessons|length }} {{ plural(lessons|length, 'занятие', 'занятия', 'занятий') }}</b></p>
+{% endcall %}
+{% endif %}
+{% endblock %}
+
+{% block peek %}
+<div class="pp-peek">
+    <h1 class="visually-hidden">{{ title }}</h1>
+    <div class="pp-peek__head">
+        {{ ui.avatar(title, size='lg') }}
+        <div class="min-w-0">
+            <div class="pp-peek__sub cc-truncate">{{ teacher.email or 'без email' }}{% if teacher.phone %} · <a class="cc-link-quiet" href="tel:{{ teacher.phone }}">{{ teacher.phone|phone }}</a>{% endif %}</div>
+            <div class="mt-2">{{ badges }}</div>
+        </div>
+    </div>
+    {{ ui.summary_line(summary) }}
+    <div class="pp-peek__actions">
+        {{ ui.button('Открыть карточку', href=url_for('teacher_edit', uid=teacher.id, next=list_url), icon='person-vcard', variant='light', size='sm') }}
+        {{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=teacher.id), icon='calendar-week', variant='light', size='sm') }}
+        {% if has_account and not account.disabled %}
+        {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.',
+                             variant='light', icon='key', fields={'next': list_url}, ok='Сбросить', title='Сброс пароля') }}
+        {% endif %}
+    </div>
+    <div>
+        <h2 class="pp-peek__title">Занятия по дням</h2>
+        {% if lessons %}
+        {% for wd, items in days.items() %}
+        <div class="pp-day">
+            <h3 class="pp-day__title">{{ day_names[wd] if wd is not none else 'День не указан' }} <span class="cc-subtle">· {{ items|length }}</span></h3>
+            <ul class="pp-lessons">
+                {% for l in items %}
+                <li{% if l.id in clashes %} class="is-clash"{% endif %}>
+                    <span class="pp-lessons__time cc-num">{{ (l.time_label or l.time)|time_range if (l.time_label or l.time) else '—' }}</span>
+                    <span class="min-w-0">
+                        <span class="d-block cc-truncate pp-lessons__subject">{{ l.subject or 'Без дисциплины' }}</span>
+                        <span class="cc-cell-sub d-block cc-truncate">{{ l.groupId or '—' }}{% if l.room %} · ауд. {{ l.room }}{% endif %}</span>
+                    </span>
+                    <span class="pp-lessons__side">
+                        {% if l.id in clashes %}<span class="cc-badge cc-badge--danger" title="Пересекается с другим занятием">накладка</span>{% endif %}
+                        {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="cc-muted small mb-0">В расписании занятий нет.</p>
+        {% endif %}
+    </div>
 </div>
 {% endblock %}

@@ -27,10 +27,10 @@ from flask import abort, current_app, flash, jsonify, redirect, render_template,
 
 from .applicant_login import canonical_login, display_login, normalize_phone, to_auth_email
 from .core import (DELETE_FIELD, IS_EMULATOR, ArrayUnion, SERVER_TIMESTAMP, Routes, UploadError, admin_required,
-                   aggregate_sum, audit, cache, chunked, count, csv_response, current_admin, db, delete_storage_paths,
-                   doc_dict, flash_error, fmt_dt, get_docs, image_fields, images_from_uploader, images_of,
-                   local_input_value, log, now_utc, paginate, paginate_list, parse_local_datetime, plural,
-                   safe_next_url, to_almaty, to_datetime, where)
+                   aggregate_sum, audit, back_url, cache, chunked, count, csv_response, current_admin, db,
+                   delete_storage_paths, doc_dict, flash_action, flash_error, fmt_dt, get_docs, image_fields,
+                   images_from_uploader, images_of, local_input_value, log, next_target, now_utc, paginate,
+                   paginate_list, parse_local_datetime, plural, safe_next_url, to_almaty, to_datetime, where)
 
 routes = Routes()
 
@@ -48,7 +48,7 @@ BULK_LIMIT = 100            # заказов в массовом действи�
 ORDERS_WINDOW = 1500        # последних заказов в снимке (плюс ВСЕ ждущие выдачи)
 CLAIMS_LIMIT = 1000         # вводов кода на странице кампании
 PER_PAGE = 30
-JOURNAL_PER_PAGE = 50
+JOURNAL_PER_PAGE = 30        # UX_SPEC_v2 CRM-8: 30 строк на страницу журнала
 EXPORT_LIMIT = 5000
 
 PRODUCTS_TTL = 300
@@ -353,6 +353,33 @@ def _product_sort_key(p):
     return (s if s is not None else 10 ** 6, _ts(p.get('createdAt')))
 
 
+def sort_missing(p):
+    """У товара нет целого sort. Приложение делает orderBy('sort'): Firestore ИСКЛЮЧАЕТ документы без поля,
+    а строка/дробь ломает разбор — такой товар в магазине приложения не виден (UX_SPEC_v2 CRM-1)."""
+    v = (p or {}).get('sort')
+    return isinstance(v, bool) or not isinstance(v, int)
+
+
+def next_sort(exclude=()):
+    """max(sort) + 1 по СВЕЖИМ данным (не из кэша) — для нового товара и для товара без sort."""
+    best = None
+    for s in db.collection('coin_products').select(['sort']).stream():
+        if s.id in exclude:
+            continue
+        v = (s.to_dict() or {}).get('sort')
+        if isinstance(v, int) and not isinstance(v, bool):
+            best = v if best is None else max(best, v)
+    return 0 if best is None else best + 1
+
+
+def sort_fix(d, pid=None):
+    """Поля для записи, чтобы у товара d стал целый sort: {} — уже в порядке; '3'/3.0 → 3; нет поля → в конец."""
+    if not sort_missing(d):
+        return {}
+    v = _int((d or {}).get('sort'))
+    return {'sort': v if v is not None and v >= 0 else next_sort(exclude=(pid,) if pid else ())}
+
+
 def load_products():
     """Все товары по порядку sort (кэш 5 мин). Документы без sort — в конце."""
     def load():
@@ -447,8 +474,10 @@ def coins_shop():
         'reserved': sum(v['reserved'] for v in views), 'issued': sum(v['issued'] for v in views),
         'low': sum(1 for v in views if v['low'] and v['active']), 'soldout': counts['soldout'],
     }
+    unsorted = [p['id'] for p in products if sort_missing(p)]
     return render_template('coins/shop.html', products=shown, total=len(views), counts=counts, state=state,
-                           states=PRODUCT_STATES, totals=totals, can_sort=not state and len(views) > 1)
+                           states=PRODUCT_STATES, totals=totals, can_sort=not state and len(views) > 1,
+                           unsorted=unsorted, order_ids=[p['id'] for p in products])
 
 
 def _parse_variants(raw):
@@ -555,10 +584,12 @@ def _update_product(ref, data, stock, values):
         snap = ref.get(transaction=t)
         if not snap.exists:
             raise _Gone()
-        change, value = apply_stock(stock_of(snap.to_dict() or {}), stock, values['stock_orig'], values['unlimited'])
+        current = snap.to_dict() or {}
+        change, value = apply_stock(stock_of(current), stock, values['stock_orig'], values['unlimited'])
         upd = dict(data)
         if change:
             upd['stock'] = value
+        upd.update(sort_fix(current, ref.id))   # старый товар без sort — сразу в конец витрины приложения
         t.update(ref, upd)
 
     run(transaction)
@@ -600,10 +631,7 @@ def coins_product_form(product_id=None):
                         for k in optional:
                             if data.get(k) is None:
                                 data.pop(k)
-                        sorts = [_int(p.get('sort')) for p in _safe(load_products, [])]
-                        sorts = [s for s in sorts if s is not None]
-                        data.update({'stock': stock, 'sort': (max(sorts) + 1) if sorts else 0,
-                                     'createdAt': SERVER_TIMESTAMP})
+                        data.update({'stock': stock, 'sort': next_sort(), 'createdAt': SERVER_TIMESTAMP})
                         ref.set(data)   # документ — ПОСЛЕ загрузки фото
                 except _Gone:
                     delete_storage_paths(res.uploaded_paths)
@@ -621,7 +649,7 @@ def coins_product_form(product_id=None):
                            'photos': len(res.images)})
                     flash(('Товар «%s» сохранён' if product_id else 'Товар «%s» добавлен в магазин') % data['title'],
                           'success')
-                    return redirect(url_for('coins_shop') + '#p-' + ref.id)
+                    return redirect((next_target() or url_for('coins_shop')) + '#p-' + ref.id)
         if errors:
             flash('Проверьте поля формы', 'error')
     stats = {}
@@ -645,15 +673,17 @@ def coins_product_toggle(product_id):
             return _back('coins_shop')
         data = snap.to_dict() or {}
         active = data.get('active') is not True
-        ref.update({'active': active, 'updatedAt': SERVER_TIMESTAMP})
+        ref.update(dict({'active': active, 'updatedAt': SERVER_TIMESTAMP}, **sort_fix(data, product_id)))
     except Exception as e:
         flash_error('Не удалось изменить видимость товара', e)
         return _back('coins_shop')
     title = _str(data.get('title')) or product_id
     invalidate_coins_cache('products')
     audit('show' if active else 'hide', 'coin_product', product_id, {'title': title})
-    flash('«%s» %s' % (title, 'снова в магазине' if active else 'скрыт из магазина — новые заказы невозможны'),
-          'success')
+    # обратимое действие — без подтверждения, с «Отменить» в тосте (UX_SPEC_v2 §4.11)
+    flash_action('«%s» %s' % (title, 'снова в магазине' if active else 'скрыт из магазина — новые заказы невозможны'),
+                 'Отменить', post=url_for('coins_product_toggle', product_id=product_id),
+                 fields={'next': back_url('coins_shop')})
     return _back('coins_shop')
 
 
@@ -678,15 +708,16 @@ def coins_product_stock(product_id):
             raise _Gone()
         d = snap.to_dict() or {}
         current = stock_of(d)
+        fix = sort_fix(d, product_id)
         if mode == 'unlimited':
-            t.update(ref, {'stock': None, 'updatedAt': SERVER_TIMESTAMP})
+            t.update(ref, dict({'stock': None, 'updatedAt': SERVER_TIMESTAMP}, **fix))
             return d, current, None
         new = (current if current is not None else 0) + delta
         if new < 0:
             raise ValueError(current or 0)
         if new > MAX_STOCK:
             raise OverflowError()
-        t.update(ref, {'stock': new, 'updatedAt': SERVER_TIMESTAMP})
+        t.update(ref, dict({'stock': new, 'updatedAt': SERVER_TIMESTAMP}, **fix))
         return d, current, new
 
     try:
@@ -751,37 +782,62 @@ def coins_product_delete(product_id):
 @routes.route('/coins/shop/reorder', methods=['POST'])
 @admin_required
 def coins_shop_reorder():
-    """Порядок витрины (drag & drop): JSON {ids: [...]} или форма ids=…; sort = позиция в списке."""
+    """Порядок витрины: JSON {ids: [...]} (drag & drop, ответ JSON) или форма ids=… (кнопка «Упорядочить» —
+    redirect с тостом); sort = позиция в списке. Товары, которых нет в списке, но у которых нет целого sort,
+    ставятся в конец — после этого у КАЖДОГО товара есть целый sort (приложение делает orderBy('sort'))."""
     payload = request.get_json(silent=True)
-    ids = payload.get('ids') if isinstance(payload, dict) else request.form.getlist('ids')
+    as_json = isinstance(payload, dict)
+    ids = payload.get('ids') if as_json else request.form.getlist('ids')
+
+    def fail(msg, code):
+        if as_json:
+            return jsonify({'ok': False, 'error': msg}), code
+        flash(msg, 'error')
+        return _back('coins_shop')
+
     if not isinstance(ids, list) or not ids or len(ids) > 500:
-        return jsonify({'ok': False, 'error': 'Пустой или слишком длинный список'}), 400
+        return fail('Пустой или слишком длинный список', 400)
     ids = [i for i in dict.fromkeys(str(x) for x in ids) if _safe_doc_id(i)]
     try:
-        known = {p['id']: p for p in load_products()}
+        # свежие данные: по кэшу можно «не заметить» товар без sort
+        known = {}
+        for s in db.collection('coin_products').stream():
+            known[s.id] = dict(s.to_dict() or {}, id=s.id)
     except Exception:
         log.exception('Товары не прочитаны')
-        return jsonify({'ok': False, 'error': 'Не удалось прочитать товары. Обновите страницу'}), 500
+        return fail('Не удалось прочитать товары. Обновите страницу', 500)
     ids = [i for i in ids if i in known]
     if not ids:
-        return jsonify({'ok': False, 'error': 'Товары не найдены — обновите страницу'}), 400
+        return fail('Товары не найдены — обновите страницу', 400)
+    order = list(ids)
+    rest = sorted((p for pid, p in known.items() if pid not in ids), key=_product_sort_key)
+    tail = len(order) + max([_int(p.get('sort'), -1) for p in rest if not sort_missing(p)] + [-1]) + 1
     changed = 0
     try:
         batch = db.batch()
-        for pos, pid in enumerate(ids):
-            if _int(known[pid].get('sort')) != pos:
+        for pos, pid in enumerate(order):
+            if sort_missing(known[pid]) or known[pid].get('sort') != pos:
                 batch.update(db.collection('coin_products').document(pid), {'sort': pos})
+                changed += 1
+        for p in rest:   # не попали в список (фильтр, новый товар) и без sort — в конец
+            if sort_missing(p):
+                batch.update(db.collection('coin_products').document(p['id']), {'sort': tail})
+                tail += 1
                 changed += 1
         if changed:
             batch.commit()
     except Exception:
         log.exception('Порядок товаров не сохранён')
         invalidate_coins_cache('products')
-        return jsonify({'ok': False, 'error': 'Не удалось сохранить порядок. Обновите страницу'}), 500
+        return fail('Не удалось сохранить порядок. Обновите страницу', 500)
     invalidate_coins_cache('products')
     if changed:
-        audit('reorder', 'coin_products', None, {'ids': ids[:50]})
-    return jsonify({'ok': True, 'changed': changed, 'message': 'Порядок витрины сохранён'})
+        audit('reorder', 'coin_products', None, {'ids': ids[:50], 'changed': changed})
+    if as_json:
+        return jsonify({'ok': True, 'changed': changed, 'message': 'Порядок витрины сохранён'})
+    flash('Порядок витрины сохранён — все товары видны в приложении' if changed else 'Порядок уже в порядке',
+          'success')
+    return _back('coins_shop')
 
 
 @routes.route('/coins/shop/bulk', methods=['POST'])
@@ -792,14 +848,21 @@ def coins_shop_bulk():
     if action not in ('show', 'hide') or not ids:
         flash('Отметьте товары и выберите действие', 'warning')
         return _back('coins_shop')
-    known = {p['id'] for p in _safe(load_products, [])}
-    ids = [i for i in ids if i in known]
     try:
+        current = get_docs('coin_products', ids, ['sort'])   # свежие: нужен ли товару sort
+        ids = [i for i in ids if i in current]
         if ids:
             batch = db.batch()
+            tail = None
             for pid in ids:
-                batch.update(db.collection('coin_products').document(pid),
-                             {'active': action == 'show', 'updatedAt': SERVER_TIMESTAMP})
+                upd = {'active': action == 'show', 'updatedAt': SERVER_TIMESTAMP}
+                if sort_missing(current[pid]):
+                    v = _int(current[pid].get('sort'))
+                    if v is None or v < 0:
+                        tail = next_sort() if tail is None else tail
+                        v, tail = tail, tail + 1
+                    upd['sort'] = v
+                batch.update(db.collection('coin_products').document(pid), upd)
             batch.commit()
     except Exception as e:
         flash_error('Не удалось изменить товары', e)
@@ -937,7 +1000,7 @@ def coins_orders():
     product_options = sorted({(v['product_id'], v['title']) for v in views if v['product_id']}, key=lambda x: x[1])
     return render_template('coins/orders.html', page=page, f=f, counts=counts, kpi=kpi, statuses=ORDER_STATUSES,
                            periods=PERIODS, product_options=product_options, who=who, filtered=len(rows),
-                           truncated=snap.get('truncated'), bulk_limit=BULK_LIMIT)
+                           truncated=snap.get('truncated'), bulk_limit=BULK_LIMIT, now=now_utc())
 
 
 def set_order_status(order_id, new_status, note=None):
@@ -997,7 +1060,9 @@ def _order_action(order_id, new_status):
         audit('issue' if new_status == 'issued' else 'cancel', 'coin_order', order_id,
               {'uid': d.get('uid'), 'title': title, 'price': d.get('price'), 'note': note or None})
         if new_status == 'issued':
-            flash('«%s» выдан — абитуриент получит уведомление' % title, 'success')
+            # выдача — явное действие без модалки; в тосте — ссылка на журнал абитуриента (UX_SPEC_v2 §4.11)
+            flash_action('«%s» выдан — абитуриент получит уведомление' % title, 'Журнал',
+                         href=url_for('coins_journal', uid=d.get('uid')) if d.get('uid') else url_for('coins_journal'))
         else:
             price = _int(d.get('price'), 0) or 0
             flash('Заказ «%s» отменён — %d %s вернутся на счёт абитуриента через несколько секунд'
@@ -1425,8 +1490,10 @@ def coins_campaign_toggle(code):
         return _back('coins_campaigns')
     _invalidate_campaigns()
     audit('enable' if active else 'disable', 'coin_campaign', code, {'title': doc.get('title')})
-    flash('Код %s %s' % (code, 'снова принимается' if active else 'выключен — новые вводы будут отклонены'),
-          'success')
+    # обратимое — без подтверждения, «Отменить» в тосте (UX_SPEC_v2 §4.11)
+    flash_action('Код %s %s' % (code, 'снова принимается' if active else 'выключен — новые вводы будут отклонены'),
+                 'Отменить', post=url_for('coins_campaign_toggle', code=code),
+                 fields={'next': back_url('coins_campaigns')})
     return _back('coins_campaigns')
 
 

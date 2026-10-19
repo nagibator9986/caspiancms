@@ -15,14 +15,15 @@
 
 import re
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from firebase_admin import firestore
 from flask import abort, flash, redirect, render_template, request, url_for
 
-from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, UploadError, admin_required, audit, cache, current_admin,
-                   db, delete_storage_paths, doc_dict, flash_error, get_docs, image_fields, images_from_uploader,
-                   images_of, local_input_value, log, now_utc, paginate_list, parse_local_datetime, sanitize_topic,
-                   storage_path_from_url, to_almaty, to_datetime, upload_image)
+from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, UploadError, admin_required, audit, back_url, cache,
+                   current_admin, db, delete_storage_paths, doc_dict, flash_action, flash_error, get_docs,
+                   image_fields, images_from_uploader, images_of, local_input_value, log, now_utc, paginate_list,
+                   parse_local_datetime, sanitize_topic, storage_path_from_url, to_almaty, to_datetime, upload_image)
 from .routes_coins import _back, _field, _int, _norm, _safe_doc_id, _str, _ts, site_root
 
 routes = Routes()
@@ -59,11 +60,66 @@ def _invalidate_admissions():
 
 
 def _is_http(url):
-    return url.startswith(('https://', 'http://')) and len(url) > 10 and ' ' not in url
+    """Абсолютная ссылка http(s) с хостом (без пробелов): её откроет приложение (url_launcher)."""
+    url = url or ''
+    if not url or any(c.isspace() for c in url) or len(url) > 500:
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = parts.hostname or ''
+    return parts.scheme.lower() in ('http', 'https') and bool(host) and ('.' in host or host == 'localhost')
+
+
+def _norm_url(url):
+    """Схема — в нижнем регистре (HTTPS://… → https://…), остальное как есть."""
+    m = re.match(r'^(https?)://', url or '', re.I)
+    return m.group(1).lower() + url[m.end(1):] if m else url
 
 
 def default_register_url():
     return site_root() + 'join'
+
+
+def register_url_of(doc):
+    """registerUrl для приложения и ссылок: сохранённый абсолютный http(s), иначе <сайт>/join."""
+    url = _str((doc or {}).get('registerUrl'))
+    return _norm_url(url) if _is_http(url) else default_register_url()
+
+
+def quests_of(doc):
+    """Награды за квесты как в приложении: {profile, referral, referralCap} — всегда int (строки и мусор
+    в старом документе → значение по умолчанию после проверки)."""
+    raw = (doc or {}).get('quests')
+    raw = raw if isinstance(raw, dict) else {}
+    out = {}
+    for k, dflt in QUEST_DEFAULTS.items():
+        n = _int(raw.get(k))
+        out[k] = n if n is not None and 0 <= n <= 100000 else dflt
+    return out
+
+
+def app_data_issues(doc):
+    """Что в app_config/admissions не совпадает с контрактом приложения (UX_SPEC_v2 CRM-1) — подсказка
+    «Сохраните настройки»: quests не int, registerUrl не http(s), specialties ≠ названиям каталога."""
+    if not doc:
+        return []
+    issues = []
+    raw = doc.get('quests')
+    if raw is not None and (not isinstance(raw, dict) or any(
+            k in raw and (isinstance(raw[k], bool) or not isinstance(raw[k], int)) for k in QUEST_DEFAULTS)):
+        issues.append('награды за квесты записаны не числами')
+    url = _str(doc.get('registerUrl'))
+    if url and not _is_http(url):
+        issues.append('ссылка регистрации не начинается с http(s)://')
+    catalog = doc.get('catalog') if isinstance(doc.get('catalog'), list) else []
+    if catalog:
+        titles = [_str(c.get('title')) if isinstance(c, dict) else _str(c) for c in catalog]
+        specs = doc.get('specialties') if isinstance(doc.get('specialties'), list) else None
+        if specs is None or [_str(x) for x in specs] != titles or any(not isinstance(x, str) for x in specs):
+            issues.append('список специальностей расходится с каталогом')
+    return issues
 
 
 # ==================== НАСТРОЙКИ ПРИЁМНОЙ ====================
@@ -96,13 +152,11 @@ def catalog_from_doc(doc):
 
 
 def _settings_values(doc):
-    quests = doc.get('quests') if isinstance(doc.get('quests'), dict) else {}
     v = {k: _str(doc.get(k)) for k in TEXT_LIMITS}
     v['deadline'] = local_input_value(doc.get('deadline'))
     v['registerUrl'] = v['registerUrl'] or default_register_url()
-    for k, dflt in QUEST_DEFAULTS.items():
-        n = _int(quests.get(k))
-        v['quest_' + k] = str(n if n is not None else dflt)
+    for k, n in quests_of(doc).items():
+        v['quest_' + k] = str(n)
     v['catalog'] = catalog_from_doc(doc)
     v['documents'] = _rows_from_doc(doc.get('documents') if isinstance(doc.get('documents'), list) else [], DOC_FIELDS)
     v['faq'] = _rows_from_doc(doc.get('faq') if isinstance(doc.get('faq'), list) else [], FAQ_FIELDS)
@@ -134,7 +188,9 @@ def parse_settings_form(existing_doc):
             errors[k] = 'Не длиннее %d символов' % limit
     for k in URL_FIELDS:
         if v[k] and not _is_http(v[k]):
-            errors[k] = 'Ссылка должна начинаться с https://'
+            errors[k] = 'Нужна полная ссылка: https://… (адрес сайта целиком)'
+        elif v[k]:
+            v[k] = _norm_url(v[k])
     if v['email'] and not _EMAIL_RE.match(v['email']):
         errors['email'] = 'Проверьте email'
     v['registerUrl'] = v['registerUrl'] or default_register_url()
@@ -142,14 +198,14 @@ def parse_settings_form(existing_doc):
     deadline = parse_local_datetime(v['deadline']) if v['deadline'] else None
     if v['deadline'] and deadline is None:
         errors['deadline'] = 'Проверьте дату'
-    quests = {}
+    quests = {}   # приложение читает целые числа: строки/дроби сюда не попадают (старый документ нормализуется)
     for k in QUEST_DEFAULTS:
         raw = _field('quest_' + k)
         v['quest_' + k] = raw
         n = _int(raw) if raw != '' else QUEST_DEFAULTS[k]
         if n is None or not 0 <= n <= 100000:
             errors['quest_' + k] = 'Целое число от 0 до 100000'
-        quests[k] = n
+        quests[k] = int(n) if n is not None else QUEST_DEFAULTS[k]
 
     # --- каталог специальностей ---
     keys = request.form.getlist('cat_key')
@@ -266,7 +322,7 @@ def admissions_settings():
     except Exception as e:
         flash_error('Не удалось загрузить настройки приёмной. Обновите страницу', e)
         return render_template('admissions/settings.html', v=_settings_values({}), errors={}, checklist=[],
-                               bases=BASES, updated=None, updated_by=None, load_failed=True)
+                               bases=BASES, updated=None, updated_by=None, load_failed=True, issues=[])
     errors = {}
     if request.method == 'POST':
         values, data, errors, plan = parse_settings_form(doc)
@@ -320,7 +376,7 @@ def admissions_settings():
     days_left = (to_almaty(deadline).date() - to_almaty(now_utc()).date()).days if deadline else None
     return render_template('admissions/settings.html', v=v, errors=errors, checklist=readiness(doc), bases=BASES,
                            updated=to_datetime(doc.get('updatedAt')), updated_by=updated_by, days_left=days_left,
-                           default_register=default_register_url(), load_failed=False)
+                           default_register=default_register_url(), load_failed=False, issues=app_data_issues(doc))
 
 
 # ==================== НОВОСТИ АБИТУРИЕНТОВ ====================
@@ -453,9 +509,10 @@ def applicant_news_form(news_id=None):
                     cache.invalidate('coins:anews')
                     audit('update' if news_id else 'create', 'applicant_news', ref.id,
                           {'title': values['title'], 'photos': len(res.images)})
-                    flash('Новость обновлена' if news_id else
-                          'Новость опубликована — абитуриенты получат уведомление', 'success')
-                    return redirect(url_for('applicant_news'))
+                    flash_action('Новость обновлена' if news_id else
+                                 'Новость опубликована — абитуриенты получат уведомление', 'Открыть',
+                                 href=url_for('applicant_news_form', news_id=ref.id))
+                    return redirect(back_url('applicant_news'))
         if errors:
             flash('Проверьте поля формы', 'error')
     return render_template('applicants/news_form.html', news=doc, values=values, errors=errors,

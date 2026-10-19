@@ -1,28 +1,23 @@
-{# Журнал Caspian Coin: все операции (фильтры, поиск по людям, пагинация, CSV) и ручное начисление/списание (COINS). #}
+{# Журнал Caspian Coin: все операции (фильтры, поиск по людям, 30 строк на страницу, CSV) и ручное
+   начисление/списание (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'coins/_macros.html' as cn with context %}
 {% block title %}Журнал коинов{% endblock %}
 {% block styles %}{{ ui.css('coins') }}{% endblock %}
 {% block scripts %}{{ ui.js('coins') }}{% endblock %}
-{% set here = request.full_path.rstrip('?') %}
 {% set type_labels = dict(types) %}
 {% block content %}
-{{ ui.page_header('Журнал Caspian Coin', 'Каждое начисление и списание. Баланс меняет только сервер: ручная операция появляется здесь сразу, а «проведено» — через пару секунд.', [
-    {'label': 'Экспорт CSV', 'href': url_for('coins_journal_export', **request.args), 'icon': 'download', 'variant': 'light'},
-], icon='journal-text') }}
+{%- set sitems = [] -%}
+{%- if stats.issued is not none %}{% set _ = sitems.append({'value': stats.issued, 'label': 'начислено', 'title': 'Коинов начислено за всё время'}) %}{% endif -%}
+{%- if stats.spent is not none %}{% set _ = sitems.append({'value': stats.spent, 'label': 'потрачено', 'href': url_for('coins_orders', status='all'), 'title': 'Потрачено в магазине (с учётом возвратов)'}) %}{% endif -%}
+{%- if stats.balance is not none %}{% set _ = sitems.append({'value': stats.balance, 'label': 'на счетах', 'title': 'Сумма балансов абитуриентов'}) %}{% endif -%}
+{%- if stats.errors %}{% set _ = sitems.append({'value': stats.errors, 'label': 'операций с ошибкой', 'tone': 'danger', 'href': url_with(status='error', cursor=None, page=None, p=None)}) %}{% endif -%}
+{%- if stats.manual_month %}{% set _ = sitems.append({'value': stats.manual_month, 'label': 'вручную за 30 дней', 'href': url_with(type='manual', cursor=None, page=None, p=None)}) %}{% endif -%}
+{{ ui.page_header('Журнал Caspian Coin', None, meta=ui.summary_line(sitems), actions=[
+    {'menu': [{'label': 'Экспорт CSV', 'href': url_for('coins_journal_export', **request.args), 'icon': 'download'}]},
+]) }}
 {{ cn.section_tabs('journal') }}
-
-<div class="cc-stats">
-    {{ ui.stat_card('Начислено всего', stats.issued, 'arrow-down-circle', tone='success', meta='коинов за всё время') }}
-    {{ ui.stat_card('Потрачено в магазине', stats.spent, 'bag', tone='warning', meta='с учётом возвратов', href=url_for('coins_orders')) }}
-    {{ ui.stat_card('На счетах абитуриентов', stats.balance, 'wallet2', tone='info', meta='сумма балансов') }}
-    {% if stats.errors %}
-    {{ ui.stat_card('Ошибки', stats.errors, 'exclamation-octagon', tone='danger', meta='операции не проведены', href=url_with(status='error', cursor=None, page=None, p=None)) }}
-    {% else %}
-    {{ ui.stat_card('Вручную за 30 дней', stats.manual_month, 'pencil-square', meta='операций админов', href=url_with(type='manual', cursor=None, page=None, p=None)) }}
-    {% endif %}
-</div>
 
 <div class="cn-journal">
     <div class="cn-journal__main">
@@ -31,7 +26,7 @@
             {{ cn.person_cell(who) }}
             {% if wallet %}
             <div class="cn-who__wallet">
-                <span>Баланс <b>{{ wallet.balance|num }}</b></span>
+                <span>Баланс <b class="cc-num">{{ wallet.balance|num }}</b></span>
                 <span class="cc-subtle">получено {{ wallet.earned|num }} · потрачено {{ wallet.spent|num }}</span>
             </div>
             {% endif %}
@@ -43,36 +38,32 @@
         </div>
         {% endif %}
 
-        {% call ui.filters_bar(reset=url_for('coins_journal')) %}
-            {% if f.uid %}<input type="hidden" name="uid" value="{{ f.uid }}">{% endif %}
-            {{ ui.filter_search('q', 'Абитуриент', f.q, 'Имя, логин, телефон или UID') }}
-            {{ ui.filter_select('type', 'Тип', types, f.type, all_label='Все типы') }}
-            {{ ui.filter_select('status', 'Статус', statuses, f.status, all_label='Любой') }}
-            {{ ui.filter_select('period', 'Период', periods, f.period, all_label='Всё время') }}
-        {% endcall %}
-
-        {% if matches %}
-        <div class="cn-matches">
-            <span class="cc-muted small">Найдено несколько человек — операции всех показаны ниже. Выберите одного:</span>
-            <div class="cn-chips">{% for m in matches %}<a class="cc-chip" href="{{ url_with(uid=m.uid, q=None, cursor=None, page=None, p=None) }}"><i class="bi bi-person" aria-hidden="true"></i>{{ m.title }}{% if m.login and m.login != m.title %} <span class="cc-subtle">{{ m.login }}</span>{% endif %}</a>{% endfor %}</div>
-        </div>
-        {% endif %}
-
-        <section class="cc-card">
+        {% call ui.list_card() %}
+            {% call ui.filters_bar(search={'name': 'q', 'value': f.q, 'placeholder': 'Имя, логин, телефон или UID', 'label': 'Поиск по абитуриенту'}, inline=True, ignore=('uid',)) %}
+                {{ ui.filter_select('type', 'Тип', types, f.type) }}
+                {{ ui.filter_select('status', 'Статус', statuses, f.status, all_label='Любой') }}
+                {{ ui.filter_select('period', 'Период', periods, f.period, all_label='Всё время') }}
+            {% endcall %}
+            {% if matches %}
+            <div class="cc-list__summary cn-matches">
+                <span class="cc-muted small">Нашлось несколько человек — ниже операции всех. Выберите одного:</span>
+                <div class="cc-chips">{% for m in matches %}<a class="cc-chip" href="{{ url_with(uid=m.uid, q=None, cursor=None, page=None, p=None) }}"><i class="bi bi-person" aria-hidden="true"></i>{{ m.title }}{% if m.login and m.login != m.title %} <span class="cc-subtle">{{ m.login }}</span>{% endif %}</a>{% endfor %}</div>
+            </div>
+            {% endif %}
             {% if page.items %}
-            <div class="cc-table-wrap">
-                <table class="cc-table cn-journal-table cn-stack" data-sortable>
+            <div class="cc-table-wrap cc-table-wrap--sticky">
+                <table class="cc-table cc-table--compact cc-table--stack cn-journal-table" data-sortable>
                     <thead><tr>
                         <th data-sort="num">Когда</th>
                         <th data-sort="text">Абитуриент</th>
                         <th>Операция</th>
-                        <th class="text-end" data-sort="num">Коины</th>
+                        <th class="cc-num-col" data-sort="num">Коины</th>
                     </tr></thead>
                     <tbody>
                     {% for t in page.items %}
                     <tr>
-                        <td class="cc-nowrap cn-c-when" data-value="{{ t.created.timestamp() if t.created else 0 }}"><div>{{ t.created|dateonly }}</div><div class="cc-cell-sub">{{ t.created|timeonly }}</div></td>
-                        <td class="cn-c-person" data-value="{{ t.person.title }}">
+                        <td class="cc-nowrap cn-c-when cc-cell-meta" data-value="{{ t.created.timestamp() if t.created else 0 }}" title="{{ t.created|dt }}">{{ t.created|dateonly }} <span class="cc-subtle">{{ t.created|timeonly }}</span></td>
+                        <td class="cc-cell-primary cn-c-person" data-value="{{ t.person.title }}">
                             {{ cn.person_cell(t.person, filter_url=url_with(uid=t.person.uid, q=None, cursor=None, page=None, p=None) if t.person.uid and not who else None) }}
                         </td>
                         <td class="cn-c-op">
@@ -83,44 +74,46 @@
                             {% if t.by or t.code or t.order_id %}
                             <div class="cc-cell-sub">
                                 {% if t.by and t.by != 'система' %}<span>{{ t.by }}</span>{% endif %}
-                                {% if t.code %}<span>код <a href="{{ url_for('coins_campaign_detail', code=t.code) }}">{{ t.code }}</a></span>{% endif %}
-                                {% if t.order_id %}<span><a href="{{ url_for('coins_orders', status='all', q=t.order_id) }}">заказ № {{ t.order_id[:8] }}</a></span>{% endif %}
+                                {% if t.code %}<span>код <a class="cc-link-quiet" href="{{ url_for('coins_campaign_detail', code=t.code) }}">{{ t.code }}</a></span>{% endif %}
+                                {% if t.order_id %}<span><a class="cc-link-quiet" href="{{ url_for('coins_orders', status='all', q=t.order_id) }}">заказ № {{ t.order_id[:8] }}</a></span>{% endif %}
                             </div>
                             {% endif %}
                         </td>
-                        <td class="text-end cc-nowrap cn-c-amount" data-value="{{ t.amount }}">
+                        <td class="cc-num-col cc-nowrap cn-c-amount" data-value="{{ t.amount }}">
                             {{ cn.coins(t.amount, signed=True) }}
-                            <div class="mt-1">{% if t.status == 'applied' %}<span class="cn-tag cn-tag--success">проведено</span>{% elif t.status == 'error' %}<span class="cn-tag cn-tag--danger" title="{{ t.error }}">ошибка{% if t.error %}: {{ t.error }}{% endif %}</span>{% else %}<span class="cn-tag">в обработке</span>{% endif %}</div>
+                            {% if t.status == 'applied' %}<span class="cn-tx-state" title="Проведено"><i class="bi bi-check2" aria-hidden="true"></i><span class="visually-hidden">проведено</span></span>{% elif t.status == 'error' %}<div class="cn-tag cn-tag--danger" title="{{ t.error }}">ошибка{% if t.error %}: {{ t.error }}{% endif %}</div>{% else %}<div class="cn-tag">в обработке</div>{% endif %}
                         </td>
                     </tr>
                     {% endfor %}
                     </tbody>
                 </table>
             </div>
-            <div class="cc-card__body pt-0">{{ ui.pagination(page) }}</div>
+            {{ ui.pagination(page) }}
             {% elif error %}
-            {{ ui.empty_state('exclamation-octagon', 'Журнал не загрузился', 'Сбросьте фильтры или обновите страницу через минуту.', {'label': 'Сбросить фильтры', 'href': url_for('coins_journal'), 'variant': 'light'}) }}
+            {{ ui.empty_state('exclamation-octagon', 'Журнал не загрузился', 'Сбросьте фильтры или обновите страницу через минуту.', {'label': 'Сбросить фильтры', 'href': url_for('coins_journal')}) }}
             {% elif not_found %}
-            {{ ui.empty_state('person-x', 'Никого не нашли', 'Проверьте логин, телефон или имя. Поиск по имени работает для абитуриентов.', {'label': 'Сбросить', 'href': url_for('coins_journal'), 'variant': 'light'}) }}
+            {{ ui.empty_state('person-x', 'Никого не нашли', 'Проверьте логин, телефон или имя. Поиск по имени работает для абитуриентов.', {'label': 'Сбросить', 'href': url_for('coins_journal')}) }}
+            {% elif f.type or f.status or f.period %}
+            {{ ui.empty_filtered(url_for('coins_journal')) }}
             {% else %}
             {{ ui.empty_state('journal', 'Операций нет', 'Здесь появятся начисления за коды, приветственные коины, квесты, покупки и ручные операции.') }}
             {% endif %}
-        </section>
+        {% endcall %}
     </div>
 
     <aside class="cn-journal__side">
         <details class="cc-card cn-award" open data-cn-award {% if prefill %}data-cn-keep-open{% endif %}>
             <summary class="cc-card__head">
-                <h2 class="cc-card__title"><i class="bi bi-plus-slash-minus" aria-hidden="true"></i>Начислить или списать</h2>
+                <h2 class="cc-card__title">Начислить или списать</h2>
                 <i class="bi bi-chevron-down cn-award__chev" aria-hidden="true"></i>
             </summary>
-            <form method="post" action="{{ url_for('coins_award') }}" class="cc-card__body" data-cn-award-form data-confirm="Провести операцию?" data-confirm-title="Ручная операция" data-confirm-ok="Провести" data-confirm-variant="primary">
-                <input type="hidden" name="next" value="{{ here }}">
-                <div class="cn-seg" role="radiogroup" aria-label="Тип операции">
+            <form method="post" action="{{ url_for('coins_award') }}" class="cc-card__body" novalidate data-cn-award-form data-confirm="Провести операцию?" data-confirm-title="Ручная операция" data-confirm-ok="Провести" data-confirm-variant="primary">
+                {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+                <div class="cc-segmented cn-seg" role="radiogroup" aria-label="Тип операции">
                     <input type="radio" class="btn-check" name="direction" id="cnDirPlus" value="plus" checked>
-                    <label class="btn btn-light btn-sm" for="cnDirPlus"><i class="bi bi-plus-circle" aria-hidden="true"></i>Начислить</label>
+                    <label class="cc-segmented__item" for="cnDirPlus"><i class="bi bi-plus-circle" aria-hidden="true"></i>Начислить</label>
                     <input type="radio" class="btn-check" name="direction" id="cnDirMinus" value="minus">
-                    <label class="btn btn-light btn-sm" for="cnDirMinus"><i class="bi bi-dash-circle" aria-hidden="true"></i>Списать</label>
+                    <label class="cc-segmented__item" for="cnDirMinus"><i class="bi bi-dash-circle" aria-hidden="true"></i>Списать</label>
                 </div>
                 {{ ui.field('recipients', 'Кому', 'textarea', value=prefill, required=True, rows=3, placeholder='+7 701 123 45 67, aigerim.s', help='Логин, телефон или UID — по одному в строке (до ' ~ max_recipients ~ ')', attrs={'spellcheck': 'false', 'data-cn-recipients': ''}) }}
                 {{ ui.field('amount', 'Сколько коинов', 'number', value='', required=True, attrs={'min': 1, 'max': max_coins, 'step': 1, 'inputmode': 'numeric', 'placeholder': '50'}) }}
@@ -131,7 +124,7 @@
                 </datalist>
                 <p class="cn-award__summary" data-cn-award-summary aria-live="polite"></p>
                 {{ ui.button('Провести', type='submit', icon='check2', attrs={'data-loading': 'Проводим…'}, classes='w-100') }}
-                <p class="form-text mt-2 mb-0">Списать больше, чем на балансе, нельзя. Каждая операция попадает в журнал и аудит.</p>
+                <p class="form-text mt-2 mb-0">Операция появится в журнале сразу, баланс сервер обновит через пару секунд. Списать больше, чем на балансе, нельзя.</p>
             </form>
         </details>
     </aside>

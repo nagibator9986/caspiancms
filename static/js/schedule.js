@@ -1,12 +1,13 @@
 /* ==========================================================================
    schedule.js — раздел «Расписание» (владелец — SCHEDULE). Зависит от app.js (window.CC).
-   • Редактор занятий: конструктор (обычная POST-форма) и редактор группы (сохранение JSON
-     в /schedule/update_group — только изменённые строки, удаляются только отмеченные).
-     Строка: смена дня (строка переезжает в секцию дня), время из сетки звонков этого дня
-     или своё, дубль, удаление/возврат, подсветка изменений, пересечения внутри группы
-     (локально) и накладки по всему колледжу (POST /api/schedule/check → cms.conflicts).
-   • Правка одного занятия: сетка звонков по дню, своё время, живая проверка накладок.
-   • Массовые действия в списке занятий группы; кнопки печати.
+   • Редактор занятий: конструктор (обычная POST-форма) и правка недели группы (сохранение JSON
+     в /schedule/update_group — только изменённые строки, удаляются только отмеченные; Ctrl+S).
+     Строка: день задаёт секция (перенос — «Перенести на…» в ⋯), время из сетки звонков дня или
+     своё, дубль, удаление/возврат, подсветка изменений, пересечения внутри группы (локально) и
+     накладки по всему колледжу (POST /api/schedule/check → cms.conflicts).
+   • Правка одного занятия (страница и быстрый просмотр): сетка звонков по дню, своё время,
+     живая проверка накладок, подсказка свободных аудиторий, подтверждение при критичных накладках.
+   • Неделя: переключатель дня на телефоне (кнопки, свайп, ← →), соседние группы — [ и ].
    Данные из шаблона — только через <script type="application/json"> (без |safe).
    ========================================================================== */
 (function () {
@@ -20,16 +21,25 @@
   function qs(sel, root) { return (root || doc).querySelector(sel); }
   function qsa(sel, root) { return Array.prototype.slice.call((root || doc).querySelectorAll(sel)); }
   function onReady(fn) { if (doc.readyState !== 'loading') fn(); else doc.addEventListener('DOMContentLoaded', fn); }
+  function onInit(fn) {   // для документа и для HTML, вставленного в быстрый просмотр
+    if (CC.onInit) CC.onInit(fn); else onReady(function () { fn(doc); });
+  }
   function debounce(fn, ms) {
     var t;
     return function () { var a = arguments; clearTimeout(t); t = setTimeout(function () { fn.apply(null, a); }, ms); };
   }
-  function readJSON(id, fallback) {
-    var el = doc.getElementById(id);
+  function readJSON(id, fallback, root) {
+    var el = (root && qs('#' + id, root)) || doc.getElementById(id);
     if (!el) return fallback;
     try { var v = JSON.parse(el.textContent || 'null'); return v === null ? fallback : v; } catch (e) { return fallback; }
   }
-  function toast(text, cat) { if (CC.toast) CC.toast(text, cat); }
+  function toast(text, cat, opts) { if (CC.toast) CC.toast(text, cat, opts); }
+  function plural(n, forms) {
+    if (CC.plural) return CC.plural(n, forms);
+    var m10 = n % 10, m100 = n % 100;
+    return forms[m10 === 1 && m100 !== 11 ? 0 : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? 1 : 2)];
+  }
+  function fire(el, type) { if (el) el.dispatchEvent(new Event(type, { bubbles: true })); }
 
   /* ----------------------------- Время ----------------------------- */
   // Как parse_time_range на сервере: первое ЧЧ[.:]ММ — начало, второе — конец.
@@ -92,17 +102,18 @@
 
   /* ----------------------------- Редактор занятий ----------------------------- */
   function initEditor(root) {
+    if (root._schEditor) return;
+    root._schEditor = true;
     var mode = root.getAttribute('data-editor');                // 'builder' | 'group'
     var CUSTOM = root.getAttribute('data-custom-time') || '__custom__';
-    var CALL = readJSON('schCallSchedule', { monday: [], other: [] });
+    var CALL = readJSON('schCallSchedule', { monday: [], other: [] }, root);
     var tpl = qs('template[data-row-template]', root);
     var form = root.tagName === 'FORM' ? root : null;
     var groupSelect = qs('[data-builder-group]', root);
-    var existing = mode === 'builder' ? readJSON('schExisting', []) : [];
+    var existing = mode === 'builder' ? readJSON('schExisting', [], root) : [];
     var remote = {};          // key строки → [{severity, text}] от сервера
     var checkSeq = 0;
     var seq = 0;
-    var dirty = false;
     var saving = false;
 
     function rows() { return qsa('[data-row]', root); }
@@ -110,6 +121,7 @@
     function val(row, f) { var el = field(row, f); return el ? String(el.value || '') : ''; }
     function group() { return mode === 'group' ? root.getAttribute('data-group') : (groupSelect ? groupSelect.value : ''); }
     function section(day) { return qs('[data-day-section="' + (day === null || day === undefined ? '' : day) + '"]', root); }
+    function markDirty() { if (form) form.dispatchEvent(new Event('change')); }
 
     function values(row) {
       var time = val(row, 'time');
@@ -182,9 +194,8 @@
       qsa('[data-day-section]', root).forEach(function (sec) {
         var n = qsa('[data-row]', sec).length;
         var cnt = qs('[data-section-count]', sec);
-        if (cnt) cnt.textContent = n;
-        var empty = qs('[data-empty]', sec);
-        if (empty) empty.hidden = n > 0;
+        if (cnt) cnt.textContent = n || '';
+        sec.classList.toggle('is-empty', n === 0);
         if (sec.getAttribute('data-day-section') === '' && n === 0) sec.hidden = true;
       });
     }
@@ -278,7 +289,6 @@
     }, 700);
 
     function changed(row) {
-      dirty = true;
       if (row) { setIssues(row, 'error', []); qsa('[data-server-error]', row).forEach(function (n) { n.remove(); }); paintRow(row); }
       localCheck();
       refreshCounters();
@@ -319,7 +329,17 @@
       placeRow(row, day);
       var t = field(row, 'time');
       if (t) t.focus();
+      markDirty();
       changed(row);
+    }
+    function moveRow(row, day) {
+      var sel = field(row, 'day');
+      if (!sel || String(sel.value) === String(day)) return;
+      if (!qsa('option', sel).some(function (o) { return o.value === String(day); })) addOption(sel, String(day), DAY_SHORT[day]);
+      sel.value = String(day);
+      fire(sel, 'change');        // дальше — как при выборе дня (обработчик change ниже)
+      try { row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { row.scrollIntoView(); }
+      toast('Занятие перенесено: ' + (DAY_SHORT[day] || ''), 'info');
     }
 
     root.addEventListener('click', function (e) {
@@ -333,21 +353,25 @@
         t.hidden = true;
         return;
       }
+      if (t.hasAttribute('data-row-move') && row) { moveRow(row, parseInt(t.getAttribute('data-row-move'), 10)); return; }
       if (t.hasAttribute('data-row-duplicate') && row) {
         var v = values(row);
         var copy = newRow(v.day === null ? 0 : v.day, v);
         placeRow(copy, v.day === null ? 0 : v.day, row);
+        markDirty();
         changed(copy);
         return;
       }
       if (t.hasAttribute('data-row-delete') && row) {
-        if (row.getAttribute('data-id')) { row.classList.add('is-deleted'); setIssues(row, 'remote', []); setIssues(row, 'local', []); }
-        else { row.remove(); refreshSections(); }
+        if (row.getAttribute('data-id')) {
+          row.classList.add('is-deleted'); setIssues(row, 'remote', []); setIssues(row, 'local', []);
+          toast('Занятие удалится после сохранения', 'info', { action: { label: 'Вернуть', onClick: function () { row.classList.remove('is-deleted'); changed(row); } } });
+        } else { row.remove(); refreshSections(); }
+        markDirty();
         changed(null);
         return;
       }
-      if (t.hasAttribute('data-row-restore') && row) { row.classList.remove('is-deleted'); changed(row); return; }
-      if (t.hasAttribute('data-editor-save')) { save(t); }
+      if (t.hasAttribute('data-row-restore') && row) { row.classList.remove('is-deleted'); markDirty(); changed(row); }
     });
 
     root.addEventListener('change', function (e) {
@@ -376,8 +400,9 @@
       var box = qs('[data-existing]', root);
       if (!box) return;
       box.innerHTML = '';
-      if (!group()) { var p0 = doc.createElement('p'); p0.className = 'cc-muted mb-0'; p0.textContent = 'Выберите группу — здесь появятся её текущие пары.'; box.appendChild(p0); return; }
-      if (!existing.length) { var p1 = doc.createElement('p'); p1.className = 'cc-muted mb-0'; p1.textContent = 'У группы пока нет занятий.'; box.appendChild(p1); return; }
+      function note(text) { var p = doc.createElement('p'); p.className = 'cc-muted mb-0'; p.textContent = text; box.appendChild(p); }
+      if (!group()) { note('Выберите группу — здесь появятся её текущие пары.'); return; }
+      if (!existing.length) { note('У группы пока нет занятий.'); return; }
       var byDay = {};
       existing.forEach(function (l) { var d = l.day_index === null || l.day_index === undefined ? 7 : l.day_index; (byDay[d] = byDay[d] || []).push(l); });
       Object.keys(byDay).sort().forEach(function (d) {
@@ -438,6 +463,7 @@
     }
 
     function save(btn) {
+      if (saving) return;
       var errors = clientErrors(true);
       if (errors.length) { markErrors(errors); toast('Проверьте отмеченные занятия', 'error'); return; }
       var payload = { group_id: group(), lessons: [], deleted_ids: [], next: root.getAttribute('data-return') || '' };
@@ -455,14 +481,19 @@
       if (!payload.lessons.length && !payload.deleted_ids.length) { toast('Изменений нет', 'info'); return; }
       function go() {
         saving = true;
-        btn.disabled = true;
-        var label = qs('span', btn), old = label ? label.textContent : '';
+        if (btn) btn.disabled = true;
+        var label = btn ? qs('span', btn) : null, old = label ? label.textContent : '';
         if (label) label.textContent = 'Сохраняем…';
+        if (CC.progress) CC.progress.start();
         CC.fetchJSON(root.getAttribute('data-save-url'), { method: 'POST', body: payload })
-          .then(function (data) { dirty = false; window.location.href = data.redirect || root.getAttribute('data-return') || '/schedule'; })
+          .then(function (data) {
+            if (form && CC.markClean) CC.markClean(form);
+            window.location.href = data.redirect || root.getAttribute('data-return') || '/schedule';
+          })
           .catch(function (err) {
             saving = false;
-            btn.disabled = false;
+            if (CC.progress) CC.progress.done();
+            if (btn) btn.disabled = false;
             if (label) label.textContent = old;
             if (err.data && err.data.errors) markErrors(err.data.errors);
             toast(err.message || 'Не удалось сохранить', 'error');
@@ -470,8 +501,8 @@
       }
       var n = payload.deleted_ids.length;
       if (n && CC.confirm) {
-        CC.confirm('Удалить ' + n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'занятие' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'занятия' : 'занятий')) +
-                   ' и сохранить остальные изменения?', { title: 'Сохранение расписания', okText: 'Сохранить', danger: true })
+        CC.confirm('Удалить ' + n + ' ' + plural(n, ['занятие', 'занятия', 'занятий']) + ' и сохранить остальные изменения? Удалённые занятия вернуть нельзя.',
+                   { title: 'Сохранение недели', okText: 'Удалить и сохранить', danger: true })
           .then(function (ok) { if (ok) go(); });
       } else {
         go();
@@ -480,6 +511,14 @@
 
     if (form) {
       form.addEventListener('submit', function (e) {
+        if (mode === 'group') {   // правка недели: JSON-сохранение (Ctrl+S и кнопка «Сохранить»)
+          e.preventDefault();
+          // app.js уже снял «несохранённые изменения» (форма «ушла») — вернуть, пока JSON не сохранён
+          var st = refreshCounters();
+          if (st.changed || st.added || st.deleted) markDirty();
+          save(e.submitter || qs('[data-cc-save]', form));
+          return;
+        }
         if (!group()) {
           e.preventDefault();
           e.stopImmediatePropagation();
@@ -492,20 +531,8 @@
         // своё время → в поле time, чтобы сервер получил одно значение
         rows().forEach(function (row) {
           var t = field(row, 'time');
-          if (t && t.value === CUSTOM) {
-            var c = val(row, 'time_custom').trim();
-            ensureOption(t, c);
-          }
+          if (t && t.value === CUSTOM) ensureOption(t, val(row, 'time_custom').trim());
         });
-        dirty = false;
-      }, true);
-    } else {
-      window.addEventListener('beforeunload', function (e) {
-        if (!dirty || saving) return;
-        var st = refreshCounters();
-        if (!st.changed && !st.added && !st.deleted) return;
-        e.preventDefault();
-        e.returnValue = '';
       });
     }
 
@@ -516,48 +543,110 @@
     localCheck();
     refreshCounters();
     if (mode === 'builder' && rows().some(function (r) { return isFilled(values(r)); })) remoteCheck();
-    dirty = false;
   }
 
   /* ----------------------------- Правка одного занятия ----------------------------- */
   function initLessonForm(formEl) {
+    if (formEl._schLesson) return;
+    formEl._schLesson = true;
     var CUSTOM = formEl.getAttribute('data-custom-time') || '__custom__';
-    var CALL = readJSON('schCallSchedule', { monday: [], other: [] });
-    var box = qs('[data-live-conflicts]');
-    var my = 0;
+    var CALL = readJSON('schCallSchedule', { monday: [], other: [] }, formEl);
+    var box = qs('[data-live-conflicts]', formEl);
+    var freeBox = qs('[data-free-rooms]', formEl);
+    var critical = parseInt(formEl.getAttribute('data-critical') || '0', 10) || 0;
+    var my = 0, myFree = 0;
     function v(name) { var el = formEl.elements[name]; return el ? String(el.value || '') : ''; }
+    function timeValue() { return v('time') === CUSTOM ? v('time_custom') : v('time'); }
+
+    function renderConflicts(items) {
+      box.innerHTML = '';
+      critical = items.filter(function (c) { return c.severity === 'critical'; }).length;
+      formEl.setAttribute('data-critical', String(critical));
+      if (!items.length) {
+        var p = doc.createElement('p');
+        p.className = 'sch-live__ok';
+        var ok = doc.createElement('i'); ok.className = 'bi bi-check-circle'; ok.setAttribute('aria-hidden', 'true');
+        p.appendChild(ok);
+        p.appendChild(doc.createTextNode('Накладок нет: преподаватель, аудитория и группа в это время свободны.'));
+        box.appendChild(p);
+        return;
+      }
+      var ul = doc.createElement('ul');
+      ul.className = 'sch-conflicts';
+      items.forEach(function (c) {
+        var li = doc.createElement('li');
+        var sev = c.severity || 'warning';
+        li.className = 'sch-conflicts__item sch-conflicts__item--' + sev;
+        var i = doc.createElement('i');
+        i.className = 'bi bi-' + (sev === 'critical' ? 'exclamation-octagon-fill' : (sev === 'info' ? 'info-circle-fill' : 'exclamation-triangle-fill'));
+        i.setAttribute('aria-hidden', 'true');
+        var span = doc.createElement('span'); span.textContent = c.text;
+        li.appendChild(i); li.appendChild(span);
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    }
     var check = debounce(function () {
       var url = formEl.getAttribute('data-check-url');
       if (!url || !box || !CC.fetchJSON) return;
-      var time = v('time') === CUSTOM ? v('time_custom') : v('time');
+      var time = timeValue();
       if (v('day') === '' || !parseRange(time)) return;
       var n = ++my;
+      box.classList.add('is-loading');
       CC.fetchJSON(url, { method: 'POST', body: { lessons: [{ key: 'lesson', id: formEl.getAttribute('data-lesson-id'),
         groupId: v('groupId'), day: v('day'), time: time, subject: v('subject'), teacher: v('teacher'), room: v('room'),
         week_type: v('week_type') }] } })
         .then(function (data) {
           if (n !== my) return;
-          var items = ((data.results || [])[0] || {}).conflicts || [];
-          box.innerHTML = '';
-          if (!items.length) {
-            var p = doc.createElement('p');
-            p.className = 'cc-muted mb-0';
-            p.textContent = 'Пересечений не найдено.';
-            box.appendChild(p);
-            return;
-          }
-          var ul = doc.createElement('ul');
-          ul.className = 'sch-conflicts';
-          items.forEach(function (c) {
-            var li = doc.createElement('li');
-            li.className = 'sch-conflicts__item sch-conflicts__item--' + (c.severity || 'warning');
-            li.textContent = c.text;
-            ul.appendChild(li);
-          });
-          box.appendChild(ul);
+          box.classList.remove('is-loading');
+          renderConflicts(((data.results || [])[0] || {}).conflicts || []);
         })
-        .catch(function () { /* подсказка — не критично */ });
-    }, 600);
+        .catch(function () { box.classList.remove('is-loading'); /* подсказка — не критично */ });
+    }, 500);
+
+    /* «Свободны в это время: 101 · 201 · 302» — клик подставляет аудиторию */
+    var free = debounce(function () {
+      var url = formEl.getAttribute('data-free-url');
+      if (!url || !freeBox || !CC.fetchJSON) return;
+      var r = parseRange(timeValue());
+      if (v('day') === '' || !r) { freeBox.hidden = true; return; }
+      var w = v('week_type');
+      var week = w === 'numerator' || w === 'denominator' ? w : 'both';
+      var n = ++myFree;
+      CC.fetchJSON(url + '?day=' + encodeURIComponent(v('day')) + '&from=' + fmtMin(r[0]) + '&to=' + fmtMin(r[1]) + '&week=' + week)
+        .then(function (data) {
+          if (n !== myFree) return;
+          var rooms = (data.free || []).map(function (x) { return x.room; });
+          freeBox.innerHTML = '';
+          var label = doc.createElement('span');
+          label.className = 'sch-free-hint__label';
+          label.textContent = rooms.length ? 'Свободны в это время:' : 'Свободных аудиторий в это время нет';
+          freeBox.appendChild(label);
+          var cur = v('room').trim().toLowerCase();
+          rooms.slice(0, 12).forEach(function (name) {
+            var b = doc.createElement('button');
+            b.type = 'button';
+            b.textContent = name;
+            b.setAttribute('aria-pressed', name.toLowerCase() === cur ? 'true' : 'false');
+            b.setAttribute('aria-label', 'Поставить аудиторию ' + name);
+            b.addEventListener('click', function () {
+              var input = formEl.elements.room;
+              input.value = name;
+              fire(input, 'input'); fire(input, 'change');
+              qsa('button', freeBox).forEach(function (o) { o.setAttribute('aria-pressed', o === b ? 'true' : 'false'); });
+            });
+            freeBox.appendChild(b);
+          });
+          if (rooms.length > 12) {
+            var more = doc.createElement('span');
+            more.textContent = 'и ещё ' + (rooms.length - 12);
+            freeBox.appendChild(more);
+          }
+          freeBox.hidden = false;
+        })
+        .catch(function () { freeBox.hidden = true; });
+    }, 500);
+
     formEl.addEventListener('change', function (e) {
       var f = e.target.getAttribute('data-f');
       if (f === 'day') {
@@ -567,65 +656,93 @@
       }
       if (f === 'time' || f === 'day') toggleCustom(formEl, CUSTOM);
       check();
+      if (f === 'day' || f === 'time' || f === 'week_type') free();
     });
-    formEl.addEventListener('input', function (e) { if (e.target.name === 'room' || e.target.name === 'time_custom') check(); });
-    formEl.addEventListener('submit', function () {
+    formEl.addEventListener('input', function (e) {
+      if (e.target.name === 'room') check();
+      if (e.target.name === 'time_custom') { check(); free(); }
+    });
+    formEl.addEventListener('submit', function (e) {
+      if (e.defaultPrevented) return;
       var sel = qs('[data-f="time"]', formEl);
       if (sel && sel.value === CUSTOM) ensureOption(sel, v('time_custom').trim());
-    }, true);
+      // критичные накладки не блокируют сохранение, но спрашиваем (UX_SPEC_v2 SCH-4)
+      if (critical > 0 && !formEl._schConfirmed && CC.confirm) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        var submitter = e.submitter;
+        CC.confirm('Есть ' + critical + ' ' + plural(critical, ['накладка', 'накладки', 'накладок']) + '. Сохранить всё равно?',
+                   { title: 'Накладки в расписании', okText: 'Сохранить', danger: false })
+          .then(function (ok) {
+            if (!ok) return;
+            formEl._schConfirmed = true;
+            if (formEl.requestSubmit) formEl.requestSubmit(submitter || undefined); else formEl.submit();
+          });
+        return;
+      }
+      formEl._schConfirmed = false;
+    });
     toggleCustom(formEl, CUSTOM);
+    free();
   }
 
-  /* ----------------------------- Массовые действия ----------------------------- */
-  function initBulk(formEl) {
-    var count = qs('[data-bulk-count]', formEl);
-    var action = qs('[data-bulk-action]', formEl);
-    function items() { return qsa('[data-bulk-item]'); }
-    function update() {
-      var all = items(), n = all.filter(function (i) { return i.checked; }).length;
-      formEl.hidden = n === 0;
-      if (count) count.textContent = n;
-      all.forEach(function (i) { var tr = i.closest('tr'); if (tr) tr.classList.toggle('is-selected', i.checked); });
-      qsa('[data-bulk-all]').forEach(function (box) {
-        var own = qsa('[data-bulk-item]', box.closest('table'));
-        var on = own.filter(function (i) { return i.checked; }).length;
-        box.checked = own.length > 0 && on === own.length;
-        box.indeterminate = on > 0 && on < own.length;
-      });
+  /* ----------------------------- Переключатель дня (телефон) ----------------------------- */
+  var keysBound = false;
+  function initDaySwitch(nav) {
+    if (nav._schSwitch) return;
+    nav._schSwitch = true;
+    var target = qs(nav.getAttribute('data-sch-dayswitch'));
+    if (!target) return;
+    var buttons = qsa('button[data-day]', nav);
+    function current() { return buttons.filter(function (b) { return b.classList.contains('active'); })[0] || buttons[0]; }
+    function show(btn) {
+      if (!btn) return;
+      var day = btn.getAttribute('data-day');
+      buttons.forEach(function (b) { var on = b === btn; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+      qsa('[data-day]', target).forEach(function (el) { el.classList.toggle('is-active-day', el.getAttribute('data-day') === day); });
+      try { btn.scrollIntoView({ inline: 'center', block: 'nearest' }); } catch (e) { /* старый браузер */ }
     }
-    function syncAction() {
-      qsa('[data-bulk-for]', formEl).forEach(function (el) { el.hidden = el.getAttribute('data-bulk-for') !== action.value; });
+    function step(dir) {
+      var i = buttons.indexOf(current()) + dir;
+      if (i >= 0 && i < buttons.length) show(buttons[i]);
     }
-    doc.addEventListener('change', function (e) {
-      var t = e.target;
-      if (t.matches && t.matches('[data-bulk-all]')) {
-        qsa('[data-bulk-item]', t.closest('table')).forEach(function (i) { i.checked = t.checked; });
-        update();
-      } else if (t.matches && t.matches('[data-bulk-item]')) {
-        update();
-      }
-    });
-    if (action) action.addEventListener('change', syncAction);
-    var clear = qs('[data-bulk-clear]', formEl);
-    if (clear) clear.addEventListener('click', function () { items().forEach(function (i) { i.checked = false; }); update(); });
-    formEl.addEventListener('submit', function (e) {
-      var n = items().filter(function (i) { return i.checked; }).length;
-      if (!n) { e.preventDefault(); return; }
-      if (action && action.value === 'delete' && CC.confirm) {
-        e.preventDefault();
-        CC.confirm('Удалить выбранные занятия (' + n + ')? Студенты получат одно уведомление.',
-                   { title: 'Удаление занятий', okText: 'Удалить', danger: true })
-          .then(function (ok) { if (ok) formEl.submit(); });
-      }
-    });
-    syncAction();
-    update();
+    nav._schStep = step;
+    buttons.forEach(function (b) { b.addEventListener('click', function () { show(b); }); });
+    // свайп по сетке: влево — следующий день, вправо — предыдущий
+    var x0 = null, y0 = null;
+    target.addEventListener('touchstart', function (e) { if (e.touches.length === 1) { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; } }, { passive: true });
+    target.addEventListener('touchend', function (e) {
+      if (x0 === null || !e.changedTouches.length) return;
+      var dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+      x0 = y0 = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && nav.offsetParent !== null) step(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    // ← → — только на телефоне (на компьютере стрелки прокручивают страницу и таблицы)
+    if (!keysBound && CC.hotkey && window.matchMedia && window.matchMedia('(max-width: 767.98px)').matches) {
+      keysBound = true;
+      var move = function (dir) {
+        var n = qsa('[data-sch-dayswitch]').filter(function (x) { return x.offsetParent !== null; })[0];
+        if (n && n._schStep) n._schStep(dir);
+      };
+      CC.hotkey('ArrowLeft', function () { move(-1); }, 'Предыдущий день', { group: 'Расписание' });
+      CC.hotkey('ArrowRight', function () { move(1); }, 'Следующий день', { group: 'Расписание' });
+    }
   }
+
+  onInit(function (root) {
+    qsa('[data-editor]', root).forEach(initEditor);
+    qsa('form[data-lesson-form]', root).forEach(initLessonForm);
+    qsa('[data-sch-dayswitch]', root).forEach(initDaySwitch);
+  });
 
   onReady(function () {
-    qsa('[data-editor]').forEach(initEditor);
-    qsa('form[data-lesson-form]').forEach(initLessonForm);
-    qsa('form[data-bulk-form]').forEach(initBulk);
+    // соседние группы: [ и ]
+    var page = qs('.sch-group-page');
+    if (page && CC.hotkey) {
+      var prev = page.getAttribute('data-sch-prev'), next = page.getAttribute('data-sch-next');
+      if (prev) CC.hotkey('BracketLeft', function () { window.location.href = prev; }, 'Предыдущая группа', { group: 'Расписание' });
+      if (next) CC.hotkey('BracketRight', function () { window.location.href = next; }, 'Следующая группа', { group: 'Расписание' });
+    }
     doc.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-print]') : null;
       if (b) { e.preventDefault(); window.print(); }

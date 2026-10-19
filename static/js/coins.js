@@ -1,8 +1,7 @@
 /* ==========================================================================
-   Caspian Coin и приёмная (COINS): массовые действия, витрина (фильтр, drag & drop),
-   склад и заметки (модалки), форма товара (предпросмотр, варианты), кампании (код, QR,
-   полный экран), журнал (сводка ручной операции), настройки приёмной (повторяемые строки),
-   новости абитуриентов (предпросмотр). Зависит от static/js/app.js (window.CC).
+   Caspian Coin и приёмная (CRM): витрина (drag & drop), склад и заметки (модалки), форма товара
+   (предпросмотр, варианты), кампании (код, QR, полный экран), журнал (сводка ручной операции), настройки
+   приёмной (повторяемые строки), новости абитуриентов (предпросмотр). Зависит от static/js/app.js (window.CC).
    Пользовательские данные вставляются только через textContent/value/атрибуты.
    ========================================================================== */
 (function () {
@@ -13,7 +12,6 @@
   function qs(sel, root) { return (root || doc).querySelector(sel); }
   function qsa(sel, root) { return Array.prototype.slice.call((root || doc).querySelectorAll(sel)); }
   function onReady(fn) { if (doc.readyState !== 'loading') fn(); else doc.addEventListener('DOMContentLoaded', fn); }
-  function norm(s) { return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim(); }
   function toast(text, cat) { if (CC.toast) CC.toast(text, cat); }
   function plural(n, one, few, many) {
     n = Math.abs(n) % 100; var n1 = n % 10;
@@ -25,58 +23,16 @@
   function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
   function modal(el) { return window.bootstrap ? window.bootstrap.Modal.getOrCreateInstance(el) : null; }
 
-  /* ----------------------------- Массовые действия ----------------------------- */
-  // <form id="X" data-cn-bulk> + чекбоксы [data-cn-bulk-item form="X"] в любом месте страницы.
-  function initBulk(form) {
-    var items = function () { return qsa('[data-cn-bulk-item]').filter(function (i) { return i.getAttribute('form') === form.id; }); };
-    var counter = qs('[data-cn-bulk-count]', form);
-    var buttons = qsa('[data-cn-bulk-btn]', form);
-    function update() {
-      var n = items().filter(function (i) { return i.checked; }).length;
-      if (counter) counter.textContent = 'Отмечено: ' + n;
-      buttons.forEach(function (b) { b.disabled = n === 0; });
-      form.classList.toggle('has-selection', n > 0);
-    }
-    doc.addEventListener('change', function (e) {
-      if (e.target.matches && e.target.matches('[data-cn-bulk-item]') && e.target.getAttribute('form') === form.id) update();
-    });
-    update();
-    form._cnUpdate = update;
-  }
-  onReady(function () {
-    qsa('form[data-cn-bulk]').forEach(initBulk);
-    // «Отметить все» в таблице
-    qsa('[data-cn-check-all]').forEach(function (all) {
-      var table = qs(all.getAttribute('data-cn-check-all'));
-      if (!table) return;
-      all.addEventListener('change', function () {
-        qsa('[data-cn-bulk-item]', table).forEach(function (i) {
-          if (!i.closest('tr') || !i.closest('tr').classList.contains('is-hidden')) i.checked = all.checked;
-        });
-        qsa('form[data-cn-bulk]').forEach(function (f) { if (f._cnUpdate) f._cnUpdate(); });
-      });
-    });
-  });
+  /* Выбор строк/карточек и панель массовых действий — общие (app.js: ui.select_row + ui.bulkbar);
+     мгновенный поиск по витрине — data-cc-filter (app.js). Своих реализаций здесь больше нет. */
 
-  /* ----------------------------- Витрина: поиск по карточкам ----------------------------- */
+  /* ----------------------------- Заказы: фокус в поиске на вкладке «Ждут выдачи» ----------------------------- */
   onReady(function () {
-    qsa('[data-cn-filter]').forEach(function (input) {
-      var box = qs(input.getAttribute('data-cn-filter'));
-      if (!box) return;
-      var empty = qs('[data-cn-filter-empty]');
-      var run = (CC.debounce || function (f) { return f; })(function () {
-        var words = norm(input.value).split(' ').filter(Boolean);
-        var shown = 0;
-        qsa('[data-search]', box).forEach(function (el) {
-          var hay = el.getAttribute('data-search') || '';
-          var ok = words.every(function (w) { return hay.indexOf(w) !== -1; });
-          el.classList.toggle('is-hidden', !ok);
-          if (ok) shown++;
-        });
-        if (empty) empty.classList.toggle('is-hidden', shown > 0);
-      }, 120);
-      input.addEventListener('input', run);
-    });
+    if (!qs('[data-cn-focus-search]')) return;
+    // только с мышью: на телефоне фокус открыл бы клавиатуру поверх очереди
+    if (!window.matchMedia || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    var input = qs('.cc-list [data-cc-search]');
+    if (input && !input.value && doc.activeElement === doc.body) input.focus({ preventScroll: true });
   });
 
   /* ----------------------------- Витрина: порядок перетаскиванием ----------------------------- */
@@ -128,6 +84,7 @@
     doc.addEventListener('click', function (e) {
       var btn = e.target.closest ? e.target.closest('[data-cn-stock]') : null;
       if (!btn) return;
+      e.preventDefault();   // пункт меню «Склад…» — ссылка-заглушка
       form.setAttribute('action', btn.getAttribute('data-cn-stock'));
       qs('[data-cn-stock-name]', el).textContent = btn.getAttribute('data-title') || '';
       var st = btn.getAttribute('data-stock');
@@ -157,6 +114,7 @@
     doc.addEventListener('click', function (e) {
       var btn = e.target.closest ? e.target.closest('[data-cn-note]') : null;
       if (!btn) return;
+      e.preventDefault();   // пункт меню «Заметка…» — ссылка-заглушка
       form.setAttribute('action', btn.getAttribute('data-cn-note'));
       qs('[data-cn-note-name]', el).textContent = btn.getAttribute('data-title') || '';
       text.value = btn.getAttribute('data-note') || '';
@@ -413,7 +371,7 @@
   /* ----------------------------- Новость абитуриентов: предпросмотр ----------------------------- */
   onReady(function () {
     var media = qs('[data-cn-preview-media]');
-    var form = media ? media.closest('.cn-form-layout').querySelector('form') : null;
+    var form = media ? media.closest('form') : null;
     if (!form) return;
     var map = { title: 'Заголовок новости', description: '' };
     function update() {

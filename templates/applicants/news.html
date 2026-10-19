@@ -1,70 +1,78 @@
-{# Новости абитуриентов (applicant_news): лента во вкладке «Абитуриент», фото, поиск, фильтры, массовое удаление (COINS). #}
+{# Новости абитуриентов (applicant_news): лента во вкладке «Абитуриент» приложения — список, поиск, фильтры,
+   массовое удаление (панель появляется только при выборе) (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
-{% import 'coins/_macros.html' as cn with context %}
 {% block title %}Новости абитуриентов{% endblock %}
 {% block styles %}{{ ui.css('coins') }}{% endblock %}
 {% block scripts %}{{ ui.js('coins') }}{% endblock %}
-{% set here = request.full_path.rstrip('?') %}
 {% block content %}
-{{ ui.page_header('Новости абитуриентов', 'Лента приёмной комиссии во вкладке «Абитуриент» приложения. Студенты и преподаватели её не видят. При публикации абитуриенты получают пуш.', [
-    {'label': 'Новости колледжа', 'href': nav_url('news'), 'icon': 'newspaper', 'variant': 'light'},
-    {'label': 'Новая публикация', 'href': url_for('applicant_news_form'), 'icon': 'plus-lg'},
-], icon='megaphone') }}
+{{ ui.page_header('Новости абитуриентов', 'Лента приёмной во вкладке «Абитуриент»: студенты её не видят, абитуриенты получают пуш', [
+    {'label': 'Новая публикация', 'href': url_for('applicant_news_form'), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Публикаций', stats.total, 'megaphone') }}
-    {{ ui.stat_card('За 30 дней', stats.month, 'calendar-check', tone='success') }}
-    {{ ui.stat_card('С фото', stats.with_photo, 'images', tone='info', href=url_with(photo='with', page=None)) }}
-    {{ ui.stat_card('Последняя', (stats.last|ago) if stats.last else '—', 'clock-history', meta=(stats.last|dt) if stats.last else 'ещё нет публикаций') }}
-</div>
+{%- set sitems = [(stats.total, stats.total|plural('публикация', 'публикации', 'публикаций'))] -%}
+{%- if stats.month %}{% set _ = sitems.append((stats.month, 'за 30 дней')) %}{% endif -%}
+{%- if stats.with_photo %}{% set _ = sitems.append({'value': stats.with_photo, 'label': 'с фото', 'href': url_with(photo='with', page=None)}) %}{% endif -%}
+{%- if stats.last %}{% set _ = sitems.append({'value': '', 'label': 'последняя ' ~ (stats.last|ago), 'title': stats.last|dt}) %}{% endif -%}
+{{ ui.summary_line(sitems) }}
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Заголовок или текст') }}
-    {{ ui.filter_select('category', 'Категория', categories, category, all_label='Все') }}
-    {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], photo, all_label='Неважно') }}
-{% endcall %}
-
-<section class="cc-card">
+<form id="anBulk" method="post" action="{{ url_for('applicant_news_bulk') }}" class="m-0">{{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}"></form>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Заголовок или текст', 'label': 'Поиск публикаций'}, inline=True) %}
+        {{ ui.filter_select('category', 'Категория', categories, category) }}
+        {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], photo, all_label='Неважно') }}
+    {% endcall %}
     {% if page.items %}
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ filtered|num }} {{ filtered|plural('публикация', 'публикации', 'публикаций') }}</h2>
-        <form method="post" action="{{ url_for('applicant_news_bulk') }}" id="cnNewsBulk" class="cn-bulk" data-cn-bulk data-confirm="Удалить отмеченные новости вместе с фото? Это нельзя отменить." data-confirm-title="Удаление новостей" data-confirm-ok="Удалить">
-            <input type="hidden" name="next" value="{{ here }}">
-            <span class="cn-bulk__count" data-cn-bulk-count>Отмечено: 0</span>
-            <button type="submit" class="btn btn-outline-danger btn-sm" name="action" value="delete" disabled data-cn-bulk-btn><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
-        </form>
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--stack cn-news-table" id="cnNews">
+            <thead><tr>
+                <th class="cc-select">{{ ui.select_all('anBulk', 'Выбрать все на странице') }}</th>
+                <th>Публикация</th>
+                <th class="cc-col-md">Категория</th>
+                <th class="cc-col-md">Опубликована</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for n in page.items %}
+            {%- set edit = url_for('applicant_news_form', news_id=n.id, next=here()) -%}
+            <tr id="n-{{ n.id }}" data-href="{{ edit }}">
+                <td class="cc-select">{{ ui.select_row('anBulk', n.id, n.title) }}</td>
+                <td class="cc-cell-primary">
+                    <div class="cn-news-row">
+                        <span class="cn-news-row__cover" aria-hidden="true">
+                            {% if n.cover %}<img src="{{ n.cover|safe_url }}" alt="" loading="lazy" decoding="async">{% else %}<i class="bi bi-image"></i>{% endif %}
+                            {% if n.photos > 1 %}<span class="cn-news-row__photos"><i class="bi bi-images"></i>{{ n.photos }}</span>{% endif %}
+                        </span>
+                        <div class="min-w-0">
+                            <a class="cc-row-link cc-cell-main cn-news-row__title" href="{{ edit }}">{{ n.title }}</a>
+                            {% if n.summary %}<div class="cc-cell-sub cn-news-row__text">{{ n.summary }}</div>{% endif %}
+                            <div class="cc-cell-sub cn-m-only">{{ n.category_label }}{% if n.category_label %} · {% endif %}{{ n.created|dateonly }}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="cc-col-md cc-col-optional">{% if n.category_label %}{{ ui.badge('x', n.category_label, 'outline') }}{% endif %}</td>
+                <td class="cc-col-md cc-col-optional cc-nowrap"><div title="{{ n.created|dt }}">{{ n.created|dateonly }}</div><div class="cc-cell-sub">{% if n.updated and n.created and (n.updated - n.created).total_seconds() > 300 %}изменена {{ n.updated|ago }}{% else %}{{ n.created|ago }}{% endif %}</div></td>
+                <td class="cc-actions">{{ ui.row_menu([
+                    {'label': 'Изменить', 'href': edit, 'icon': 'pencil'},
+                    {'divider': True},
+                    {'label': 'Удалить', 'action': url_for('applicant_news_delete', news_id=n.id), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True,
+                     'confirm': 'Удалить «' ~ n.title ~ '» вместе с фото? Публикация пропадёт из приложения.'},
+                ], label='Действия: ' ~ n.title, quick={'label': 'Изменить', 'href': edit, 'icon': 'pencil'}) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
     </div>
-    <ul class="cn-news" id="cnNews">
-        {% for n in page.items %}
-        <li class="cn-news__item" id="n-{{ n.id }}">
-            <input class="form-check-input cn-news__check" type="checkbox" name="ids" value="{{ n.id }}" form="cnNewsBulk" data-cn-bulk-item aria-label="Отметить «{{ n.title }}»">
-            <a class="cn-news__cover" href="{{ url_for('applicant_news_form', news_id=n.id) }}" tabindex="-1" aria-hidden="true">
-                {% if n.cover %}<img src="{{ n.cover|safe_url }}" alt="" loading="lazy" decoding="async">{% else %}<i class="bi bi-megaphone"></i>{% endif %}
-                {% if n.photos > 1 %}<span class="cn-news__photos"><i class="bi bi-images"></i>{{ n.photos }}</span>{% endif %}
-            </a>
-            <div class="cn-news__body">
-                <div class="cn-news__meta">
-                    {% if n.category_label %}<span class="cn-cat cn-cat--{{ n.category }}">{{ n.category_label }}</span>{% endif %}
-                    <span><i class="bi bi-calendar3" aria-hidden="true"></i>{{ n.created|dt }}</span>
-                    {% if n.updated and n.created and (n.updated - n.created).total_seconds() > 300 %}<span class="cc-subtle">изменено {{ n.updated|ago }}</span>{% endif %}
-                </div>
-                <h3 class="cn-news__title"><a href="{{ url_for('applicant_news_form', news_id=n.id) }}">{{ n.title }}</a></h3>
-                {% if n.summary %}<p class="cn-news__text">{{ n.summary }}</p>{% endif %}
-            </div>
-            <div class="cn-news__actions">
-                {{ ui.button('Изменить', href=url_for('applicant_news_form', news_id=n.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
-                {{ ui.confirm_button(url_for('applicant_news_delete', news_id=n.id), 'Удалить', 'Удалить «' ~ n.title ~ '» вместе с фото? Новость пропадёт из приложения.', icon_only=True, title='Удалить новость', fields={'next': here}) }}
-            </div>
-        </li>
-        {% endfor %}
-    </ul>
-    <div class="cc-card__body pt-0">{{ ui.pagination(page) }}</div>
+    {{ ui.pagination(page) }}
     {% elif q or category or photo %}
-    {{ ui.empty_state('search', 'Ничего не найдено', 'Измените поиск или сбросьте фильтры.', {'label': 'Сбросить', 'href': url_for('applicant_news'), 'variant': 'light'}) }}
+    {{ ui.empty_filtered(url_for('applicant_news')) }}
     {% else %}
     {{ ui.empty_state('megaphone', 'Публикаций пока нет', 'Расскажите абитуриентам о старте приёма, Дне открытых дверей или новой специальности — до 10 фото в одной публикации.', {'label': 'Новая публикация', 'href': url_for('applicant_news_form'), 'icon': 'plus-lg'}) }}
     {% endif %}
-</section>
-{% if truncated %}<p class="cn-hint mt-3"><i class="bi bi-info-circle" aria-hidden="true"></i>Показаны последние 500 публикаций.</p>{% endif %}
+{% endcall %}
+{% if truncated %}{{ ui.hint('Показаны последние 500 публикаций.') }}{% endif %}
+
+{% call ui.bulkbar('anBulk', noun=('публикация', 'публикации', 'публикаций')) %}
+    <button type="submit" class="btn btn-sm btn-outline-danger" form="anBulk" name="action" value="delete" data-confirm="Удалить {items} вместе с фото? Это нельзя отменить." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+{% endcall %}
 {% endblock %}

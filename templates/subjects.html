@@ -1,113 +1,93 @@
-{# Дисциплины (PEOPLE): справочник + использование в расписании. Данные: routes_people.subjects_list. #}
+{# Дисциплины (PEOPLE): справочник + использование в расписании. Данные: routes_people.subjects_list.
+   Добавление (сразу несколько) и переименование — модальные формы. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Дисциплины{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Дисциплины', 'Справочник для конструктора расписания', icon='book') %}
-    <button type="button" class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#subjectAdd" aria-expanded="false" aria-controls="subjectAdd"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить</span></button>
-{% endcall %}
+{{ ui.page_header('Дисциплины', 'Справочник для конструктора расписания', [
+    {'label': 'Добавить', 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#subjectAdd', 'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="collapse" id="subjectAdd">
-    {% call ui.card('Новые дисциплины', icon='plus-square', subtitle='можно сразу несколько — по одной на строку; дубли пропускаются') %}
-        <form method="post" action="{{ url_for('subject_add') }}" novalidate>
-            {{ ui.csrf_field() }}
-            {{ ui.field('names', 'Названия', 'textarea', rows=4, required=True, placeholder='Программирование на Python
-Базы данных', attrs={'maxlength': 6000}, id='s-names') }}
-            {{ ui.button('Добавить', type='submit', icon='check2') }}
-        </form>
-    {% endcall %}
-</div>
-
-<div class="cc-stats">
-    {{ ui.stat_card('Дисциплин', stats.total, 'book') }}
-    {{ ui.stat_card('В расписании', stats.used, 'calendar-check', tone='success') }}
-    {{ ui.stat_card('Не используются', stats.unused, 'calendar-x', tone='warning' if stats.unused else 'success', href=url_with(state='unused') if stats.unused else None) }}
-    {{ ui.stat_card('Дубли', stats.duplicates, 'files', tone='danger' if stats.duplicates else 'success', href=url_with(state='duplicates') if stats.duplicates else None, meta='одинаковые названия') }}
-</div>
-
-{{ ui.tabs([
-    {'key': '', 'label': 'Все', 'href': url_with(state=None), 'count': stats.total},
-    {'key': 'unused', 'label': 'Не используются', 'href': url_with(state='unused'), 'count': stats.unused},
-    {'key': 'duplicates', 'label': 'Дубли', 'href': url_with(state='duplicates'), 'count': stats.duplicates},
-], state, pills=True, label='Фильтр дисциплин') }}
+{% set show_chips = stats.unused or stats.duplicates or state %}
+{% if stats.total and not show_chips %}
+{# сводка не повторяет счётчики чипов: при чипах число дисциплин видно в «Все» #}
+{{ ui.summary_line([(stats.total, plural(stats.total, 'дисциплина', 'дисциплины', 'дисциплин')), (stats.used, 'в расписании')]) }}
+{% endif %}
 
 {% if missing %}
-<div class="pp-hint pp-hint--warning">
-    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-    <div class="min-w-0">
-        <b>{{ missing|length }} {{ plural(missing|length, 'дисциплина', 'дисциплины', 'дисциплин') }} из расписания нет в справочнике</b> — в конструкторе их не выбрать.
-        <div class="pp-chips mt-2">{% for name, n in missing[:12] %}<span class="cc-chip">{{ name }} <span class="cc-chip__count">{{ n }}</span></span>{% endfor %}{% if missing|length > 12 %}<span class="cc-subtle small">и ещё {{ missing|length - 12 }}</span>{% endif %}</div>
-        <form method="post" action="{{ url_for('subject_add') }}" class="mt-2">
-            {{ ui.csrf_field() }}
-            <textarea name="names" class="d-none" aria-hidden="true" tabindex="-1">{% for name, n in missing %}{{ name }}{{ '\n' if not loop.last }}{% endfor %}</textarea>
-            {{ ui.button('Добавить все в справочник', type='submit', icon='plus-lg', variant='light', size='sm') }}
-        </form>
-    </div>
-</div>
-{% endif %}
-
-{% if subjects %}
-{% call ui.data_table('subjectsTable', search=True, placeholder='Поиск дисциплины') %}
-<table class="cc-table" id="subjectsTable" data-sortable>
-    <thead>
-        <tr>
-            <th data-sort="text">Название</th>
-            <th data-sort="num" class="text-end">Занятий</th>
-            <th data-sort="num" class="text-end">Групп</th>
-            <th data-sort="num" class="text-end">Преподавателей</th>
-            <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
-        </tr>
-    </thead>
-    <tbody>
-    {% for s in subjects %}
-        <tr>
-            <td><span class="cc-cell-main">{{ s.name or '(без названия)' }}</span>{% if s.duplicate %} <span class="cc-badge cc-badge--danger">дубль</span>{% endif %}</td>
-            <td class="text-end cc-num" data-value="{{ s.lessons }}">{{ s.lessons or '—' }}</td>
-            <td class="text-end cc-num" data-value="{{ s.groups }}">{{ s.groups or '—' }}</td>
-            <td class="text-end cc-num" data-value="{{ s.teachers }}">{{ s.teachers or '—' }}</td>
-            <td class="cc-actions">
-                <div class="pp-row-actions">
-                    <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-bs-toggle="modal" data-bs-target="#subjectRename"
-                            data-pp-subject-action="{{ url_for('subject_edit', s_id=s.id) }}" data-pp-subject-name="{{ s.name }}" data-pp-subject-lessons="{{ s.lessons }}"
-                            aria-label="Переименовать {{ s.name }}" title="Переименовать"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    {{ ui.confirm_button(url_for('subject_delete', s_id=s.id), 'Удалить',
-                                         'Удалить «' ~ s.name ~ '» из справочника?' ~ (' В расписании ' ~ s.lessons ~ ' ' ~ plural(s.lessons, 'занятие', 'занятия', 'занятий') ~ ' с этой дисциплиной — они не изменятся.' if s.lessons else ''),
-                                         variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
-                </div>
-            </td>
-        </tr>
-    {% endfor %}
-        <tr data-table-empty class="is-hidden"><td colspan="5" class="cc-table-empty">Ничего не найдено</td></tr>
-    </tbody>
-</table>
-{% endcall %}
-{% else %}
-    {% call ui.card() %}
-        {% if state %}{{ ui.empty_state('check2-circle', 'Таких нет', 'По выбранному фильтру дисциплин нет.', {'label': 'Все дисциплины', 'href': url_for('subjects_list'), 'icon': 'list', 'variant': 'light'}) }}
-        {% else %}{{ ui.empty_state('book', 'Справочник пуст', 'Добавьте дисциплины — они появятся в конструкторе расписания.') }}{% endif %}
+    {% call ui.hint(icon='exclamation-triangle', tone='warning') %}
+        <div class="pp-missing">
+            <span><b>{{ missing|length }} {{ plural(missing|length, 'дисциплина', 'дисциплины', 'дисциплин') }} из расписания нет в справочнике</b> — в конструкторе их не выбрать:
+                {% for name, n in missing[:8] %}<span class="pp-missing__item">{{ name }} <span class="cc-subtle">({{ n }})</span></span>{{ ', ' if not loop.last }}{% endfor %}{% if missing|length > 8 %} <span class="cc-subtle">и ещё {{ missing|length - 8 }}</span>{% endif %}.</span>
+            <form method="post" action="{{ url_for('subject_add') }}" class="m-0">
+                {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+                <textarea name="names" class="d-none" aria-hidden="true" tabindex="-1">{% for name, n in missing %}{{ name }}{{ '\n' if not loop.last }}{% endfor %}</textarea>
+                {{ ui.button('Добавить все', type='submit', icon='plus-lg', variant='light', size='sm') }}
+            </form>
+        </div>
     {% endcall %}
 {% endif %}
 
-<div class="modal fade" id="subjectRename" tabindex="-1" aria-labelledby="subjectRenameTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <form method="post" action="#" class="modal-content" novalidate data-pp-subject-form>
-            {{ ui.csrf_field() }}
-            <div class="modal-header">
-                <h2 class="modal-title" id="subjectRenameTitle">Переименовать дисциплину</h2>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-            </div>
-            <div class="modal-body">
-                {{ ui.field('name', 'Новое название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off', 'data-pp-subject-input': ''}, id='s-new-name') }}
-                {{ ui.field('schedules', 'Переименовать и во всех занятиях расписания', 'switch', value=True, help='Без уведомления на каждую пару; изменения попадут в историю расписания.', id='s-sched', classes='mb-0') }}
-                <p class="cc-muted small mt-2 mb-0" data-pp-subject-usage hidden></p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
-                {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-            </div>
-        </form>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Название дисциплины', 'label': 'Поиск дисциплины', 'filter': '#subjectsTable'}, inline=True, ignore=('state',)) %}{% endcall %}
+    {% if show_chips %}
+    <div class="pp-list-chips">
+        {%- set chips = [] -%}
+        {%- if stats.unused or state == 'unused' %}{% set _ = chips.append(('unused', 'Не используются', stats.unused)) %}{% endif -%}
+        {%- if stats.duplicates or state == 'duplicates' %}{% set _ = chips.append(('duplicates', 'Дубли', stats.duplicates)) %}{% endif -%}
+        {{ ui.filter_chips('state', chips, state, all_count=stats.total) }}
     </div>
-</div>
+    {% endif %}
+    {% if subjects %}
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--compact cc-table--stack pp-subjects" id="subjectsTable" data-sortable>
+            <thead><tr>
+                <th data-sort="text">Название</th>
+                <th data-sort="num" class="cc-num-col">Занятий</th>
+                <th data-sort="num" class="cc-num-col">Групп</th>
+                <th data-sort="num" class="cc-num-col cc-col-md">Преподавателей</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for s in subjects %}
+                {%- set rename_attrs = {'data-bs-toggle': 'modal', 'data-bs-target': '#subjectRename', 'data-pp-subject-action': url_for('subject_edit', s_id=s.id),
+                                        'data-pp-subject-name': s.name, 'data-pp-subject-lessons': s.lessons} -%}
+                <tr>
+                    <td class="cc-cell-primary"><span class="cc-cell-main">{{ s.name or '(без названия)' }}</span>{% if s.duplicate %} <span class="cc-badge cc-badge--warning" title="Такое же название уже есть в справочнике">дубль</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col" data-value="{{ s.lessons }}">{% if s.lessons %}{{ s.lessons }}<span class="pp-unit"> {{ plural(s.lessons, 'занятие', 'занятия', 'занятий') }}</span>{% else %}<span class="cc-subtle">не используется</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col{{ ' pp-empty' if not s.groups }}" data-value="{{ s.groups }}">{% if s.groups %}{{ s.groups }}<span class="pp-unit"> {{ plural(s.groups, 'группа', 'группы', 'групп') }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' pp-empty' if not s.teachers }}" data-value="{{ s.teachers }}">{% if s.teachers %}{{ s.teachers }}<span class="pp-unit"> препод.</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-actions">{{ ui.row_menu([
+                        {'label': 'Переименовать…', 'href': '#', 'icon': 'pencil', 'attrs': rename_attrs},
+                        {'divider': True},
+                        {'label': 'Удалить…', 'action': url_for('subject_delete', s_id=s.id), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                         'confirm': 'Удалить «' ~ s.name ~ '» из справочника?' ~ (' В расписании ' ~ s.lessons ~ ' ' ~ plural(s.lessons, 'занятие', 'занятия', 'занятий') ~ ' с этой дисциплиной — они не изменятся.' if s.lessons else '')},
+                    ], label='Действия: ' ~ s.name, quick={'label': 'Переименовать', 'href': '#', 'icon': 'pencil', 'attrs': rename_attrs}) }}</td>
+                </tr>
+            {% endfor %}
+                <tr data-table-empty class="is-hidden"><td colspan="5" class="cc-table-empty">Ничего не найдено</td></tr>
+            </tbody>
+        </table>
+    </div>
+    {% elif q or state %}
+        {{ ui.empty_filtered(url_for('subjects_list')) }}
+    {% else %}
+        {{ ui.empty_state('book', 'Справочник пуст', 'Добавьте дисциплины — они появятся в конструкторе расписания.') }}
+    {% endif %}
+{% endcall %}
+
+{% call ui.modal_form('subjectAdd', 'Новые дисциплины', url_for('subject_add'), submit='Добавить') %}
+    <input type="hidden" name="next" value="{{ here() }}">
+    {{ ui.field('names', 'Названия', 'textarea', rows=5, required=True, placeholder='Программирование на Python
+Базы данных', attrs={'maxlength': 6000}, id='s-names', help='Можно сразу несколько — по одной на строку. Дубли пропускаются.', classes='mb-0') }}
+{% endcall %}
+
+{% call ui.modal_form('subjectRename', 'Переименовать дисциплину', url_for('subjects_list'), submit='Сохранить') %}
+    <input type="hidden" name="next" value="{{ here() }}">
+    {{ ui.field('name', 'Новое название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off', 'data-pp-subject-input': ''}, id='s-new-name') }}
+    {{ ui.field('schedules', 'Переименовать и во всех занятиях расписания', 'switch', value=True, help='Без уведомления на каждую пару; изменения попадут в историю расписания.', id='s-sched', classes='mb-0') }}
+    <p class="cc-muted small mt-2 mb-0" data-pp-subject-usage hidden></p>
+{% endcall %}
 {% endblock %}

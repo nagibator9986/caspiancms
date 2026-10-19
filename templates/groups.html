@@ -1,113 +1,91 @@
 {# Группы (PEOPLE): справочник groups_list + группы из расписания и профилей. Данные: routes_people.groups.
-   Переименование — модалка с обычной формой (название подставляет people.js из data-атрибута). #}
+   Создание и переименование — модальные формы; старое название подставляет people.js из пункта меню строки. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Группы{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Группы', 'Справочник групп для расписания, профилей студентов и уведомлений', icon='collection') %}
-    <button type="button" class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#groupAdd" aria-expanded="false" aria-controls="groupAdd"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Новая группа</span></button>
-{% endcall %}
+{{ ui.page_header('Группы', 'Справочник групп для расписания, профилей студентов и уведомлений', [
+    {'label': 'Новая группа', 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#groupAdd', 'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="collapse" id="groupAdd">
-    {% call ui.card('Новая группа', icon='plus-square') %}
-        <form method="post" action="{{ url_for('group_create') }}" class="pp-inline-form" novalidate>
-            {{ ui.csrf_field() }}
-            {{ ui.field('group_name', 'Название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off'}, placeholder='Например: ПО 26-1', help='Формат «СПЕЦ ГГ-N»: по году набора считается курс', classes='flex-grow-1', id='g-name') }}
-            {{ ui.button('Создать', type='submit', icon='check2') }}
-        </form>
+{% if stats.groups %}
+{% set summary = [(stats.groups, plural(stats.groups, 'группа', 'группы', 'групп')),
+                  {'value': stats.students, 'label': plural(stats.students, 'студент', 'студента', 'студентов') ~ ' в группах', 'href': url_for('admin_users', role='student')}] %}
+{% if stats.no_group %}{% set _ = summary.append({'value': stats.no_group, 'label': 'без группы', 'tone': 'warning', 'href': url_for('admin_users', role='student', group='__none__'), 'title': 'Студенты без группы не получают расписание'}) %}{% endif %}
+{% if stats.no_schedule %}{% set _ = summary.append({'value': stats.no_schedule, 'label': 'без расписания', 'href': url_with(state='no_schedule')}) %}{% endif %}
+{% if stats.not_in_directory %}{% set _ = summary.append({'value': stats.not_in_directory, 'label': 'нет в справочнике', 'href': url_with(state='not_in_directory')}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+{% endif %}
+
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Название группы', 'label': 'Поиск группы', 'filter': '#groupsTable'}, inline=True) %}
+        {{ ui.filter_select('major', 'Специальность', majors, major) }}
+        {{ ui.filter_select('course', 'Курс', courses, course) }}
+        {{ ui.filter_select('state', 'Состояние', [('no_students', 'Нет студентов'), ('no_schedule', 'Нет расписания'), ('not_in_directory', 'Нет в справочнике')], state) }}
     {% endcall %}
-</div>
-
-<div class="cc-stats">
-    {{ ui.stat_card('Групп', stats.groups, 'collection') }}
-    {{ ui.stat_card('Студентов в группах', stats.students, 'backpack', tone='info', href=url_for('admin_users', role='student')) }}
-    {{ ui.stat_card('Студентов без группы', stats.no_group, 'person-exclamation', tone='warning' if stats.no_group else 'success',
-                    href=url_for('admin_users', role='student', group='__none__') if stats.no_group else None) }}
-    {{ ui.stat_card('Без расписания', stats.no_schedule, 'calendar-x', tone='warning' if stats.no_schedule else 'success',
-                    href=url_with(state='no_schedule') if stats.no_schedule else None) }}
-</div>
-
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Название группы') }}
-    {{ ui.filter_select('major', 'Специальность', majors, major) }}
-    {{ ui.filter_select('course', 'Курс', courses, course) }}
-    {{ ui.filter_select('state', 'Состояние', [('no_students', 'Нет студентов'), ('no_schedule', 'Нет расписания'), ('not_in_directory', 'Нет в справочнике (' ~ stats.not_in_directory ~ ')')], state) }}
-{% endcall %}
-
-{% if rows %}
-<section class="cc-card">
-    <div class="cc-table-toolbar"><h2 class="cc-card__title me-auto">{{ rows|length }} {{ plural(rows|length, 'группа', 'группы', 'групп') }}</h2></div>
+    {% if rows %}
     <div class="cc-table-wrap">
-        <table class="cc-table pp-groups" data-sortable>
-            <thead>
-                <tr>
-                    <th data-sort="text">Группа</th>
-                    <th data-sort="num" class="text-end d-none d-md-table-cell">Курс</th>
-                    <th data-sort="num" class="text-end">Студ.</th>
-                    <th data-sort="num" class="text-end">Пар/нед.</th>
-                    <th data-sort="num" class="text-end d-none d-md-table-cell">Преподавателей</th>
-                    <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
-                </tr>
-            </thead>
+        <table class="cc-table cc-table--compact cc-table--stack pp-groups" id="groupsTable" data-sortable>
+            <thead><tr>
+                <th data-sort="text">Группа</th>
+                <th data-sort="num" class="cc-num-col cc-col-md">Курс</th>
+                <th data-sort="num" class="cc-num-col">Студентов</th>
+                <th data-sort="num" class="cc-num-col" title="Пар в неделю: каждая неделя — 1, числитель или знаменатель — 0,5">Пар/нед.</th>
+                <th data-sort="num" class="cc-num-col cc-col-md">Преподавателей</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
             <tbody>
             {% for g in rows %}
-                <tr>
-                    <td>
-                        <span class="cc-cell-main">{{ g.name }}</span>
-                        {% if not g.in_directory %}<div class="cc-cell-sub"><span class="pp-warn-text">нет в справочнике</span> —
-                            <form method="post" action="{{ url_for('group_create') }}" class="d-inline">{{ ui.csrf_field() }}<input type="hidden" name="group_name" value="{{ g.name }}"><button type="submit" class="btn btn-link btn-sm p-0 align-baseline">добавить</button></form></div>{% endif %}
+                {%- set sched_url = nav_url('schedule', group=g.name) -%}
+                {%- set students_url = url_for('admin_users', role='student', group=g.name) -%}
+                <tr data-href="{{ sched_url }}">
+                    <td class="cc-cell-primary">
+                        <a class="cc-row-link cc-cell-main" href="{{ sched_url }}">{{ g.name }}</a>
+                        {% if not g.in_directory %}<span class="pp-warn-text pp-inline-note">нет в справочнике</span>{% endif %}
                     </td>
-                    <td class="text-end cc-num d-none d-md-table-cell" data-value="{{ g.course or 0 }}">{{ g.course or '—' }}</td>
-                    <td class="text-end cc-num" data-value="{{ g.students }}">{% if g.students %}<a class="pp-link" href="{{ url_for('admin_users', role='student', group=g.name) }}">{{ g.students }}</a>{% else %}<span class="cc-subtle">0</span>{% endif %}</td>
-                    <td class="text-end cc-num" data-value="{{ g.lessons }}">{% if g.lessons %}<a class="pp-link" href="{{ nav_url('schedule', group=g.name) }}">{{ g.load }}</a>{% else %}<span class="pp-warn-text">нет</span>{% endif %}</td>
-                    <td class="text-end cc-num d-none d-md-table-cell" data-value="{{ g.teachers }}">{{ g.teachers or '—' }}</td>
+                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' pp-empty' if not g.course }}" data-value="{{ g.course or 0 }}">{% if g.course %}{{ g.course }}<span class="pp-unit"> курс</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col" data-value="{{ g.students }}">{% if g.students %}<a href="{{ students_url }}" title="Студенты группы">{{ g.students }}<span class="pp-unit"> студ.</span></a>{% else %}<span class="cc-subtle">0<span class="pp-unit"> студ.</span></span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col" data-value="{{ g.lessons }}">{% if g.lessons %}{{ g.load }}<span class="pp-unit"> пар/нед.</span>{% else %}<span class="pp-warn-text">нет<span class="pp-unit"> расписания</span></span>{% endif %}</td>
+                    <td class="cc-num-col cc-col-md cc-col-optional" data-value="{{ g.teachers }}">{% if g.teachers %}{{ g.teachers }}{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
                     <td class="cc-actions">
-                        <div class="pp-row-actions">
-                            {{ ui.button('Студенты', href=url_for('admin_users', role='student', group=g.name), icon='people', variant='ghost', size='sm', icon_only=True) }}
-                            {{ ui.button('Расписание', href=nav_url('schedule', group=g.name), icon='calendar-week', variant='ghost', size='sm', icon_only=True) }}
-                            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-bs-toggle="modal" data-bs-target="#groupRename" data-pp-rename="{{ g.name }}" aria-label="Переименовать {{ g.name }}" title="Переименовать"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                            {{ ui.confirm_button(url_for('group_delete', group_name=g.name), 'Удалить',
-                                                 'Удалить группу «' ~ g.name ~ '»?' ~ (' У ' ~ g.students ~ ' ' ~ plural(g.students, 'студента', 'студентов', 'студентов') ~ ' группа очистится.' if g.students else '') ~ (' Занятия расписания (' ~ g.lessons ~ ') останутся — удалите их в разделе «Расписание».' if g.lessons else ''),
-                                                 variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
-                        </div>
+                        {%- set menu = [
+                            {'label': 'Расписание группы', 'href': sched_url, 'icon': 'calendar-week'},
+                            {'label': 'Студенты группы', 'href': students_url, 'icon': 'people'},
+                            {'label': 'Добавить студента', 'href': url_for('admin_add_user', role='student', group=g.name, next=here()), 'icon': 'person-plus'},
+                            {'label': 'Переименовать…', 'href': '#', 'icon': 'pencil', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#groupRename', 'data-pp-rename': g.name}},
+                        ] -%}
+                        {%- if not g.in_directory %}{% set _ = menu.append({'label': 'Добавить в справочник', 'action': url_for('group_create'), 'fields': {'group_name': g.name, 'next': here()}, 'icon': 'plus-square'}) %}{% endif -%}
+                        {%- set _ = menu.append({'divider': True}) -%}
+                        {%- set _ = menu.append({'label': 'Удалить…', 'action': url_for('group_delete', group_name=g.name), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                            'confirm': 'Удалить группу «' ~ g.name ~ '» из справочника?' ~ (' У ' ~ g.students ~ ' ' ~ plural(g.students, 'студента', 'студентов', 'студентов') ~ ' группа очистится.' if g.students else '') ~ (' Занятия расписания (' ~ g.lessons ~ ') останутся — удалите их в разделе «Расписание».' if g.lessons else '')}) -%}
+                        {{ ui.row_menu(menu, label='Действия: ' ~ g.name, quick={'label': 'Студенты группы', 'href': students_url, 'icon': 'people'}) }}
                     </td>
                 </tr>
             {% endfor %}
+                <tr data-table-empty class="is-hidden"><td colspan="6" class="cc-table-empty">Групп не найдено</td></tr>
             </tbody>
         </table>
     </div>
-</section>
-{% else %}
-    {% call ui.card() %}
-        {% if q or major or course or state %}
-            {{ ui.empty_state('search', 'Групп не найдено', 'Измените фильтры.', {'label': 'Сбросить', 'href': url_for('groups'), 'icon': 'x-lg', 'variant': 'light'}) }}
-        {% else %}
-            {{ ui.empty_state('collection', 'Групп пока нет', 'Создайте первую группу кнопкой «Новая группа».') }}
-        {% endif %}
-    {% endcall %}
-{% endif %}
+    {% elif q or major or course or state %}
+        {{ ui.empty_filtered(url_for('groups')) }}
+    {% else %}
+        {{ ui.empty_state('collection', 'Групп пока нет', 'Создайте первую группу кнопкой «Новая группа».') }}
+    {% endif %}
+{% endcall %}
 
-<div class="modal fade" id="groupRename" tabindex="-1" aria-labelledby="groupRenameTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <form method="post" action="{{ url_for('group_rename') }}" class="modal-content" novalidate>
-            {{ ui.csrf_field() }}
-            <input type="hidden" name="old_name" value="" data-pp-rename-old>
-            <div class="modal-header">
-                <h2 class="modal-title" id="groupRenameTitle">Переименовать группу <span data-pp-rename-label></span></h2>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-            </div>
-            <div class="modal-body">
-                {{ ui.field('new_name', 'Новое название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off', 'data-pp-rename-input': ''}, id='g-new-name') }}
-                <input type="hidden" name="schedules_field" value="1">
-                {{ ui.field('schedules', 'Переименовать и в расписании (занятия группы)', 'switch', value=True, help='Студенты группы получат новое название в приложении; занятия переедут без уведомления на каждую пару.', id='g-sched', classes='mb-0') }}
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
-                {{ ui.button('Переименовать', type='submit', icon='check2', attrs={'data-loading': 'Переименовываем…'}) }}
-            </div>
-        </form>
-    </div>
-</div>
+{% call ui.modal_form('groupAdd', 'Новая группа', url_for('group_create'), submit='Создать') %}
+    <input type="hidden" name="next" value="{{ here() }}">
+    {{ ui.field('group_name', 'Название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off'}, placeholder='Например: ПО 26-1',
+                help='Формат «СПЕЦ ГГ-N»: по году набора считается курс', id='g-name', classes='mb-0') }}
+{% endcall %}
+
+{% call ui.modal_form('groupRename', 'Переименовать группу', url_for('group_rename'), submit='Переименовать') %}
+    <input type="hidden" name="old_name" value="" data-pp-rename-old>
+    <p class="cc-muted small" data-pp-rename-label></p>
+    {{ ui.field('new_name', 'Новое название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off', 'data-pp-rename-input': ''}, id='g-new-name') }}
+    <input type="hidden" name="schedules_field" value="1">
+    {{ ui.field('schedules', 'Переименовать и в расписании (занятия группы)', 'switch', value=True, help='Студенты группы получат новое название в приложении; занятия переедут без уведомления на каждую пару.', id='g-sched', classes='mb-0') }}
+{% endcall %}
 {% endblock %}

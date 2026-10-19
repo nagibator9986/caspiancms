@@ -1,4 +1,4 @@
-{# Администрация колледжа (PEOPLE): карточки как в приложении, порядок — перетаскиванием.
+{# Администрация колледжа (PEOPLE): карточки как в приложении (фото 3:4), порядок — перетаскиванием или ↑ ↓.
    Данные: routes_people.administration. Порядок сохраняет people.js (JSON + CSRF). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
@@ -6,43 +6,50 @@
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.lib('sortable') }}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{{ ui.page_header('Администрация', 'Руководство колледжа — экран «Администрация» в профиле приложения',
-                  [{'label': 'Добавить', 'href': url_for('administration_add'), 'icon': 'plus-lg'}], icon='person-vcard') }}
+{{ ui.page_header('Администрация', 'Руководство колледжа — экран «Администрация» в профиле приложения', [
+    {'label': 'Добавить', 'href': url_for('administration_add'), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
 {% if admins %}
-<div class="pp-order-bar" data-pp-order-bar hidden>
-    <span><i class="bi bi-arrows-move" aria-hidden="true"></i> Порядок изменён — сохраните, чтобы приложение показывало так же.</span>
-    <div class="d-flex gap-2">
-        <button type="button" class="btn btn-light btn-sm" data-pp-order-reset>Отменить</button>
-        <button type="button" class="btn btn-primary btn-sm" data-pp-order-save data-url="{{ url_for('administration_update_order') }}"><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить порядок</span></button>
-    </div>
-</div>
-<p class="cc-muted small"><i class="bi bi-grip-vertical" aria-hidden="true"></i> Перетащите карточку за ручку или двигайте кнопками ↑ ↓ — так же порядок будет в приложении.</p>
+{{ ui.summary_line([(admins|length, plural(admins|length, 'человек', 'человека', 'человек') ~ ' в приложении')]) }}
+{{ ui.hint('Порядок карточек — как в приложении: перетащите карточку за ручку или двигайте кнопками ↑ ↓, затем сохраните.', icon='arrows-move', dismiss='mgmt-order') }}
 <ol class="pp-mgmt" data-pp-order-list>
     {% for a in admins %}
+    {%- set edit_url = url_for('administration_edit', admin_id=a.id) -%}
     <li class="pp-mgmt__card" data-id="{{ a.id }}">
         <button type="button" class="pp-mgmt__handle" data-pp-handle aria-label="Перетащить «{{ a.name }}»" title="Перетащить"><i class="bi bi-grip-vertical" aria-hidden="true"></i></button>
         <span class="pp-mgmt__pos cc-num" data-pp-pos>{{ loop.index }}</span>
-        <div class="pp-mgmt__photo">
-            {% if a.image %}<img src="{{ a.image|safe_url }}" alt="" loading="lazy">{% else %}<span>{{ ui.avatar(a.name, size='lg') }}</span>{% endif %}
-        </div>
+        <a class="pp-mgmt__photo" href="{{ edit_url }}" tabindex="-1" aria-hidden="true">
+            {% if a.image %}<img src="{{ a.image|safe_url }}" alt="" loading="lazy">{% else %}<i class="bi bi-person" aria-hidden="true"></i>{% endif %}
+        </a>
         <div class="pp-mgmt__info">
-            <div class="pp-mgmt__name">{{ a.name or 'Без имени' }}</div>
-            <div class="pp-mgmt__pos-title">{{ a.position or 'Должность не указана' }}</div>
+            <a class="pp-mgmt__name" href="{{ edit_url }}">{{ a.name or 'Без имени' }}</a>
+            <div class="pp-mgmt__role">{{ a.position or 'Должность не указана' }}</div>
         </div>
         <div class="pp-mgmt__actions">
-            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-pp-move="-1" aria-label="Выше" title="Выше"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
-            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-pp-move="1" aria-label="Ниже" title="Ниже"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
-            {{ ui.button('Изменить', href=url_for('administration_edit', admin_id=a.id), icon='pencil', variant='ghost', size='sm', icon_only=True) }}
-            {{ ui.confirm_button(url_for('administration_delete', admin_id=a.id), 'Удалить', 'Удалить «' ~ (a.name or 'без имени') ~ '» из администрации? Фото тоже удалится.',
-                                 variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
+            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-pp-move="-1" aria-label="Выше: {{ a.name }}" title="Выше"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-pp-move="1" aria-label="Ниже: {{ a.name }}" title="Ниже"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
+            <span class="ms-auto"></span>
+            {{ ui.row_menu([
+                {'label': 'Изменить', 'href': edit_url, 'icon': 'pencil'},
+                {'divider': True},
+                {'label': 'Удалить…', 'action': url_for('administration_delete', admin_id=a.id), 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                 'confirm': 'Удалить «' ~ (a.name or 'без имени') ~ '» из администрации? Фото тоже удалится, из приложения карточка пропадёт.'},
+            ], label='Действия: ' ~ (a.name or 'без имени'), quick={'label': 'Изменить', 'href': edit_url, 'icon': 'pencil'}) }}
         </div>
     </li>
     {% endfor %}
 </ol>
+<div class="cc-savebar pp-order-bar" data-pp-order-bar hidden role="region" aria-label="Порядок карточек">
+    <div class="cc-savebar__status"><span class="pp-order-bar__text"><span class="cc-savebar__dot" aria-hidden="true"></span>Порядок изменён — сохраните, чтобы в приложении было так же</span></div>
+    <div class="cc-savebar__actions">
+        <button type="button" class="btn btn-light" data-pp-order-reset>Отменить</button>
+        <button type="button" class="btn btn-primary" data-pp-order-save data-url="{{ url_for('administration_update_order') }}"><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить порядок</span></button>
+    </div>
+</div>
 {% else %}
     {% call ui.card() %}
-        {{ ui.empty_state('person-vcard', 'Администрация не заполнена', 'Добавьте директора и заместителей — они появятся в приложении.', {'label': 'Добавить', 'href': url_for('administration_add'), 'icon': 'plus-lg'}) }}
+        {{ ui.empty_state('person-vcard', 'Администрация не заполнена', 'Добавьте директора и заместителей — они появятся в приложении.') }}
     {% endcall %}
 {% endif %}
 {% endblock %}

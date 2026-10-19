@@ -1,131 +1,126 @@
-{# Преподаватели (PEOPLE): нагрузка по расписанию, вход в приложение. Данные: routes_people.teachers_list. #}
+{# Преподаватели (PEOPLE): нагрузка по расписанию, вход в приложение. Данные: routes_people.teachers_list / teacher_add.
+   Добавление — модальная форма: при ошибке страница рендерится с раскрытой формой, значениями и ошибками по полям;
+   тёзка в справочнике — вопрос «всё равно добавить?» (confirm_duplicate=1). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Преподаватели{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Преподаватели', 'Справочник для расписания и входа в приложение', icon='person-badge') %}
-    {{ ui.button('CSV', href=url_with(format='csv', page=None), icon='download', variant='light', attrs={'title': 'Скачать список с нагрузкой'}) }}
-    <button type="button" class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#teacherAdd" aria-expanded="{{ 'true' if open_add else 'false' }}" aria-controls="teacherAdd"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить</span></button>
-{% endcall %}
+{{ ui.page_header('Преподаватели', 'Справочник для расписания и входа в приложение', [
+    {'menu': [
+        {'label': 'Скачать CSV с нагрузкой', 'href': url_with(format='csv', page=None), 'icon': 'download'},
+        {'label': 'Расписание преподавателей', 'href': nav_url('schedule_teachers'), 'icon': 'calendar-week'},
+    ]},
+    {'label': 'Добавить', 'icon': 'plus-lg', 'variant': 'primary',
+     'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#teacherAdd', 'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="collapse{{ ' show' if open_add }}" id="teacherAdd">
-    {% call ui.card('Новый преподаватель', icon='person-plus', subtitle='без пароля — только карточка для расписания; вход можно создать позже') %}
-        <form method="post" action="{{ url_for('teacher_add') }}" class="row g-3 align-items-end" novalidate>
-            {{ ui.csrf_field() }}
-            <div class="col-lg-4 col-md-6">{{ ui.field('name', 'ФИО', required=True, attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='Иванова Анна Сергеевна', classes='', id='t-name') }}</div>
-            <div class="col-lg-3 col-md-6">{{ ui.field('email', 'Email', 'email', attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='для входа в приложение', classes='', id='t-email') }}</div>
-            <div class="col-lg-3 col-md-6">
-                <label class="form-label" for="t-password">Пароль</label>
-                <div class="pp-password-row">
-                    <div class="cc-password flex-grow-1">
-                        <input class="form-control" type="password" id="t-password" name="password" minlength="6" maxlength="128" autocomplete="new-password" placeholder="необязательно">
-                        <button type="button" class="btn btn-ghost cc-btn-icon cc-password__toggle" data-password-toggle="#t-password" aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
-                    </div>
-                    <button type="button" class="btn btn-light cc-btn-icon" data-pp-generate="#t-password" title="Придумать пароль" aria-label="Придумать пароль"><i class="bi bi-magic" aria-hidden="true"></i></button>
-                </div>
-            </div>
-            <div class="col-lg-2 col-md-6">{{ ui.field('phone', 'Телефон', 'tel', attrs={'maxlength': 20}, placeholder='+7…', classes='', id='t-phone') }}</div>
-            <div class="col-12 d-flex flex-wrap gap-2">
-                {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-                <button type="button" class="btn btn-light" data-bs-toggle="collapse" data-bs-target="#teacherAdd">Отмена</button>
-            </div>
-        </form>
+{% if stats.total %}
+{% set summary = [(stats.total, plural(stats.total, 'преподаватель', 'преподавателя', 'преподавателей'))] %}
+{% if stats.accounts_unknown %}{% set _ = summary.append({'value': '', 'label': 'вход не проверен — сервис недоступен', 'tone': 'warning'}) %}
+{% elif stats.no_account %}{% set _ = summary.append({'value': stats.no_account, 'label': 'без входа', 'href': url_with(account='no', page=None)}) %}{% endif %}
+{% if stats.no_lessons %}{% set _ = summary.append({'value': stats.no_lessons, 'label': 'без занятий', 'href': url_with(lessons='no', page=None)}) %}{% endif %}
+{% set _ = summary.append({'value': stats.avg_load, 'label': 'пар в неделю в среднем'}) %}
+{{ ui.summary_line(summary) }}
+{% endif %}
+
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'ФИО, email, телефон, дисциплина', 'label': 'Поиск преподавателя', 'filter': '#teachersTable'}, inline=True) %}
+        {{ ui.filter_select('account', 'Вход', [('yes', 'Есть вход'), ('no', 'Нет входа')], account) }}
+        {{ ui.filter_select('lessons', 'Занятия', [('yes', 'Есть занятия'), ('no', 'Нет занятий')], lessons) }}
+        {{ ui.filter_select('sort', 'Порядок', [('name', 'По ФИО'), ('load', 'По нагрузке')], sort, all_label=None) }}
     {% endcall %}
-</div>
-
-<div class="cc-stats">
-    {{ ui.stat_card('Преподавателей', stats.total, 'person-badge') }}
-    {{ ui.stat_card('С входом в приложение', '—' if stats.accounts_unknown else stats.with_account, 'key', tone='success',
-                    meta=('без входа: ' ~ (stats.total - stats.with_account)) if not stats.accounts_unknown else 'сервис входа недоступен',
-                    href=url_with(account='no', page=None) if not stats.accounts_unknown and stats.total - stats.with_account else None) }}
-    {{ ui.stat_card('Средняя нагрузка', stats.avg_load, 'speedometer', tone='info', meta='пар в неделю') }}
-    {{ ui.stat_card('Без занятий', stats.no_lessons, 'calendar-x', tone='warning' if stats.no_lessons else 'success', meta='нет в расписании') }}
-</div>
-
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'ФИО, email, телефон, дисциплина') }}
-    {{ ui.filter_select('account', 'Вход', [('yes', 'Есть вход'), ('no', 'Нет входа')], account) }}
-    {{ ui.filter_select('sort', 'Сортировка', [('name', 'По ФИО'), ('load', 'По нагрузке')], sort, all_label=None) }}
-{% endcall %}
-
-{% if teachers %}
-<section class="cc-card">
-    <div class="cc-table-toolbar"><h2 class="cc-card__title me-auto">{{ filtered|num }} {{ plural(filtered, 'преподаватель', 'преподавателя', 'преподавателей') }}</h2></div>
+    {% if teachers %}
     <div class="cc-table-wrap">
-        <table class="cc-table pp-teachers">
-            <thead>
-                <tr>
-                    <th class="pp-col-main">Преподаватель</th>
-                    <th class="d-none d-md-table-cell">Вход</th>
-                    <th class="text-end"><span class="d-none d-sm-inline">Пар/нед.</span><span class="d-sm-none" title="Пар в неделю">Пар</span></th>
-                    <th class="d-none d-lg-table-cell">Группы</th>
-                    <th class="d-none d-xl-table-cell">Дисциплины</th>
-                    <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
-                </tr>
-            </thead>
+        <table class="cc-table cc-table--stack pp-teachers" id="teachersTable">
+            <thead><tr>
+                <th>Преподаватель</th>
+                <th class="cc-col-md">Вход</th>
+                <th class="cc-num-col" title="Пар в неделю: каждая неделя — 1, числитель или знаменатель — 0,5">Пар/нед.</th>
+                <th class="cc-col-lg">Группы</th>
+                <th class="cc-col-xl">Дисциплины</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
             <tbody>
             {% for t in teachers %}
-                {% set edit_url = url_for('teacher_edit', uid=t.id, next=request.full_path) %}
-                <tr data-href="{{ edit_url }}" class="cc-row-link">
-                    <td class="pp-col-main">
+                {%- set edit_url = url_for('teacher_edit', uid=t.id, next=here()) -%}
+                {%- set sched_url = nav_url('schedule_teachers', teacher=t.id) -%}
+                <tr data-href="{{ edit_url }}">
+                    <td class="cc-cell-primary">
                         <div class="pp-person">
                             {{ ui.avatar(t.name or t.title, size='sm') }}
                             <div class="min-w-0">
-                                <div class="cc-cell-main cc-truncate">{{ t.title }}</div>
+                                <div class="pp-person__name"><a class="cc-row-link cc-cell-main cc-truncate" href="{{ edit_url }}" data-cc-peek>{{ t.title }}</a>{% if t.dup %}<span class="cc-badge cc-badge--warning" title="В справочнике есть преподаватель с таким же ФИО — проверьте, не дубль ли">тёзка</span>{% endif %}</div>
                                 <div class="cc-cell-sub cc-truncate">{{ t.email or 'без email' }}{% if t.phone %} · {{ t.phone|phone }}{% endif %}</div>
-                                <div class="pp-mobile-meta d-lg-none">
-                                    {% if t.has_account %}<span class="pp-ok-text d-md-none"><i class="bi bi-key" aria-hidden="true"></i> есть вход</span>{% elif t.has_account is sameas false %}<span class="cc-subtle d-md-none">нет входа</span>{% endif %}
-                                    <span class="cc-subtle">{{ t.groups|length }} {{ plural(t.groups|length, 'группа', 'группы', 'групп') }}</span>
-                                    {% if t.subjects %}<span class="cc-subtle cc-truncate">{{ t.subjects[0] }}{% if t.subjects|length > 1 %} +{{ t.subjects|length - 1 }}{% endif %}</span>{% endif %}
-                                </div>
                             </div>
                         </div>
                     </td>
-                    <td class="d-none d-md-table-cell">
-                        {% if t.has_account is none %}<span class="cc-subtle">?</span>
-                        {% elif t.has_account %}{{ ui.badge('active', 'Есть вход', 'success', 'key') }}
-                        {% else %}{{ ui.badge('inactive', 'Нет входа', 'neutral', 'person-slash') }}{% endif %}
+                    <td class="cc-cell-meta cc-col-md cc-nowrap">
+                        {%- if t.has_account is none %}<span class="cc-subtle" title="Сервис входа недоступен">вход: ?</span>
+                        {%- elif t.disabled %}{{ ui.badge('blocked', 'Вход заблокирован', 'danger', 'lock') }}
+                        {%- elif t.has_account %}<span class="pp-login-yes"><i class="bi bi-key" aria-hidden="true"></i>Есть вход</span>
+                        {%- else %}<span class="cc-subtle">Нет входа</span>{% endif -%}
                     </td>
-                    <td class="text-end cc-num cc-nowrap"><b>{{ t.load_label }}</b>{% if t.lessons %}<div class="cc-cell-sub d-none d-md-block">{{ t.lessons }} {{ plural(t.lessons, 'занятие', 'занятия', 'занятий') }}</div>{% endif %}</td>
-                    <td class="d-none d-lg-table-cell">
-                        <div class="pp-chips-line" title="{{ t.groups|join(', ') }}">
-                            {% for g in t.groups[:3] %}<span class="cc-badge cc-badge--outline">{{ g }}</span>{% endfor %}
-                            {% if t.groups|length > 3 %}<span class="cc-subtle small">+{{ t.groups|length - 3 }}</span>{% endif %}
-                            {% if not t.groups %}<span class="cc-subtle">—</span>{% endif %}
-                        </div>
+                    <td class="cc-cell-meta cc-num-col cc-num" data-value="{{ t.load }}"
+                        title="Неделя-числитель: {{ t.week_num }} · неделя-знаменатель: {{ t.week_den }} · занятий в расписании: {{ t.lessons }}">
+                        {%- if t.lessons %}<b>{{ t.load_label }}</b><span class="pp-unit"> пар/нед.</span>
+                        {%- else %}<span class="cc-subtle">0<span class="pp-unit"> пар — нет занятий</span></span>{% endif -%}
                     </td>
-                    <td class="pp-subjects-cell d-none d-xl-table-cell"><span class="cc-cell-sub">{{ t.subjects[:3]|join(', ') or '—' }}{% if t.subjects|length > 3 %} и ещё {{ t.subjects|length - 3 }}{% endif %}</span></td>
+                    <td class="cc-col-lg cc-col-optional"><span class="pp-groups-line" title="{{ t.groups|join(', ') }}"><span class="pp-clip">{{ t.groups[:3]|join(', ') or '—' }}</span>{% if t.groups|length > 3 %}<span class="cc-subtle">+{{ t.groups|length - 3 }}</span>{% endif %}</span></td>
+                    <td class="cc-col-xl cc-col-optional"><span class="pp-clip cc-subtle" title="{{ t.subjects|join(', ') }}">{{ t.subjects|join(', ') or '—' }}</span></td>
                     <td class="cc-actions">
-                        <div class="pp-row-actions">
-                            {{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=t.id), icon='calendar-week', variant='ghost', size='sm', icon_only=True) }}
-                            {{ ui.button('Изменить', href=edit_url, icon='pencil', variant='ghost', size='sm', icon_only=True) }}
-                            <span class="pp-desktop-actions">
-                            {% if t.has_account %}
-                            {{ ui.confirm_button(url_for('admin_reset_password', user_id=t.id), 'Сбросить пароль', 'Пароль «' ~ t.title ~ '» станет Teacher123. Сообщите его лично.',
-                                                 variant='ghost', icon='key', icon_only=True, ok='Сбросить', title='Сброс пароля') }}
-                            {% else %}<span class="pp-icon-gap" aria-hidden="true"></span>{% endif %}
-                            {{ ui.confirm_button(url_for('teacher_delete', uid=t.id), 'Удалить',
-                                                 ('У «' ~ t.title ~ '» ' ~ t.lessons ~ ' ' ~ plural(t.lessons, 'занятие', 'занятия', 'занятий') ~ ' в расписании — они останутся без преподавателя. Удалить преподавателя и его вход?') if t.lessons else ('Удалить «' ~ t.title ~ '» и его вход в приложение?'),
-                                                 variant='ghost', icon='trash', icon_only=True, ok='Удалить', fields={'force': '1'} if t.lessons else {}, classes='pp-danger-ghost') }}
-                            </span>
-                        </div>
+                        {%- set menu = [
+                            {'label': 'Расписание преподавателя', 'href': sched_url, 'icon': 'calendar-week'},
+                            {'label': 'Карточка и вход', 'href': edit_url, 'icon': 'person-vcard'},
+                        ] -%}
+                        {%- if t.has_account and not t.disabled %}{% set _ = menu.append({'label': 'Сбросить пароль…', 'action': url_for('admin_reset_password', user_id=t.id), 'fields': {'next': here()}, 'icon': 'key', 'ok': 'Сбросить',
+                            'confirm': 'Пароль «' ~ t.title ~ '» станет Teacher123. Сообщите его преподавателю лично.'}) %}{% endif -%}
+                        {%- set _ = menu.append({'divider': True}) -%}
+                        {%- set _ = menu.append({'label': 'Удалить…', 'action': url_for('teacher_delete', uid=t.id), 'fields': {'force': '1'} if t.lessons else {}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                            'confirm': ('У «' ~ t.title ~ '» ' ~ t.lessons ~ ' ' ~ plural(t.lessons, 'занятие', 'занятия', 'занятий') ~ ' в расписании — они останутся без преподавателя. Лучше сначала передать их другому (карточка → «Передать занятия…»). Удалить преподавателя и его вход?') if t.lessons else ('Удалить «' ~ t.title ~ '» и его вход в приложение? Действие необратимо.')}) -%}
+                        {{ ui.row_menu(menu, label='Действия: ' ~ t.title, quick={'label': 'Расписание преподавателя', 'href': sched_url, 'icon': 'calendar-week'}) }}
                     </td>
                 </tr>
             {% endfor %}
+                <tr data-table-empty class="is-hidden"><td colspan="6" class="cc-table-empty">На этой странице никого — нажмите Enter, чтобы искать по всем</td></tr>
             </tbody>
         </table>
     </div>
-</section>
-{{ ui.pagination(page) }}
-{% else %}
-    {% call ui.card() %}
-        {% if q or account %}
-            {{ ui.empty_state('search', 'Никого не нашли', 'Измените запрос или фильтры.', {'label': 'Сбросить', 'href': url_for('teachers_list'), 'icon': 'x-lg', 'variant': 'light'}) }}
-        {% else %}
-            {{ ui.empty_state('person-badge', 'Преподавателей пока нет', 'Добавьте преподавателей — они появятся в конструкторе расписания.') }}
-        {% endif %}
-    {% endcall %}
-{% endif %}
+    {{ ui.pagination(page) }}
+    {% elif q or account or lessons %}
+        {{ ui.empty_filtered(url_for('teachers_list')) }}
+    {% else %}
+        {{ ui.empty_state('person-badge', 'Преподавателей пока нет', 'Добавьте преподавателей — они появятся в конструкторе расписания.') }}
+    {% endif %}
+{% endcall %}
+
+{% call ui.modal_form('teacherAdd', 'Новый преподаватель', url_for('teachers_list'), submit='Всё равно добавить' if namesakes else 'Добавить', open=open_add) %}
+    {% if add_errors.get('_form') %}{{ ui.form_errors([add_errors._form]) }}{% endif %}
+    {% if namesakes %}
+        {% call ui.hint(icon='people', tone='warning') %}
+            Уже есть {{ 'преподаватель' if namesakes|length == 1 else 'преподаватели' }} с таким ФИО:
+            {% for n in namesakes %}<a href="{{ url_for('teacher_edit', uid=n.id) }}">«{{ n.title }}»</a>{% if n.email %} ({{ n.email }}){% endif %}{{ ', ' if not loop.last }}{% endfor %}.
+            Всё равно добавить ещё одного?
+        {% endcall %}
+        <input type="hidden" name="confirm_duplicate" value="1" data-pp-dup-confirm data-name="{{ add_values.name }}">
+    {% endif %}
+    {{ ui.field('name', 'ФИО', value=add_values.name, required=True, error=add_errors.get('name'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='Иванова Анна Сергеевна', id='t-name') }}
+    <div class="row g-3">
+        <div class="col-sm-7">{{ ui.field('email', 'Email', 'email', value=add_values.email, error=add_errors.get('email'), attrs={'maxlength': 120, 'autocomplete': 'off'}, placeholder='для входа в приложение', classes='', id='t-email') }}</div>
+        <div class="col-sm-5">{{ ui.field('phone', 'Телефон', 'tel', value=add_values.phone, attrs={'maxlength': 20}, placeholder='+7…', classes='', id='t-phone') }}</div>
+        <div class="col-12">
+            <label class="form-label" for="t-password">Пароль</label>
+            <div class="pp-password-row">
+                <div class="cc-password flex-grow-1">
+                    <input class="form-control{{ ' is-invalid' if add_errors.get('password') }}" type="password" id="t-password" name="password" minlength="6" maxlength="128" autocomplete="new-password" placeholder="необязательно">
+                    <button type="button" class="btn btn-ghost cc-btn-icon cc-password__toggle" data-password-toggle="#t-password" aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                </div>
+                <button type="button" class="btn btn-light cc-btn-icon" data-pp-generate="#t-password" title="Придумать пароль" aria-label="Придумать пароль"><i class="bi bi-magic" aria-hidden="true"></i></button>
+            </div>
+            {% if add_errors.get('password') %}<div class="invalid-feedback d-block">{{ add_errors.password }}</div>
+            {% else %}<div class="form-text">Без email и пароля — только карточка для расписания; вход можно создать позже, uid сохранится.</div>{% endif %}
+        </div>
+    </div>
+{% endcall %}
 {% endblock %}

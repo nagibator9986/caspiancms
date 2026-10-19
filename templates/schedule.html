@@ -3,250 +3,263 @@
 {% import 'schedule_ui.html' as sch with context %}
 {# Расписание по группам (владелец — SCHEDULE): mode='groups' — карточки групп, mode='group' — неделя группы. #}
 {% block title %}{{ selected_group or 'Расписание групп' }}{% endblock %}
+{% block crumbs_extra %}{% if mode == 'group' %}<li><a href="{{ url_for('schedule') }}" data-cc-back>По группам</a></li>{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'group' %}{{ selected_group }}{% else %}{{ super() }}{% endif %}{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{% set day_options = [] %}{% for d in range(7) %}{% set _ = day_options.append((d, day_names[d])) %}{% endfor %}
+{% set here_url = here() %}
 
 {% if mode == 'groups' %}
 {# ============================== СПИСОК ГРУПП ============================== #}
-{% call ui.page_header('Расписание групп', 'Неделя каждой группы, поиск и фильтры по курсу и направлению', icon='collection') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    <div class="dropdown">
-        <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
-        <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='xlsx', course=course or None, major=major or None, week=week or None, q=q or None) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel (.xlsx)</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='csv', course=course or None, major=major or None, week=week or None, q=q or None) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_print', course=course or None, major=major or None, q=q or None) }}"><i class="bi bi-printer" aria-hidden="true"></i>Бланки для печати / PDF</a></li>
-        </ul>
-    </div>
-    {{ ui.button('Конструктор', href=url_for('schedule_builder'), icon='plus-lg') }}
-{% endcall %}
+{% set export_args = {'course': course or None, 'major': major or None, 'week': week or None, 'q': q or None} %}
+{{ ui.page_header('Расписание групп', meta=ui.week_now(current_week, week_number), actions=[
+    {'menu': [
+        {'header': 'Экспорт'},
+        {'label': 'Excel (.xlsx)', 'href': url_for('schedule_all_export', format='xlsx', **export_args), 'icon': 'file-earmark-excel'},
+        {'label': 'CSV', 'href': url_for('schedule_all_export', format='csv', **export_args), 'icon': 'filetype-csv'},
+        {'label': 'Бланки для печати / PDF', 'href': url_for('schedule_print', course=course or None, major=major or None, q=q or None), 'icon': 'printer'},
+        {'divider': True},
+        {'label': 'Единая таблица', 'href': url_for('schedule_all'), 'icon': 'table'},
+        {'label': 'История изменений', 'href': url_for('schedule_logs'), 'icon': 'clock-history'},
+    ], 'label': 'Экспорт и другое'},
+    {'label': 'Добавить занятие', 'href': url_for('schedule_builder'), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Групп', groups_count, 'collection', meta=('без расписания: %d'|format(totals.empty)) if totals.empty else 'у всех есть расписание') }}
-    {{ ui.stat_card('Занятий в неделе', totals.lessons, 'calendar3', href=url_for('schedule_all', course=course or None, major=major or None, week=week or None), meta='единая таблица →') }}
-    {{ ui.stat_card('Пар в числитель', totals.num, '1-circle', tone='info', meta='с «каждую неделю»') }}
-    {{ ui.stat_card('Пар в знаменатель', totals.den, '2-circle', tone='warning', meta='с «каждую неделю»') }}
-</div>
+{% set summary = [(groups_count, groups_count|plural('группа', 'группы', 'групп')),
+                  {'value': totals.lessons, 'label': totals.lessons|plural('занятие', 'занятия', 'занятий') ~ ' в неделю',
+                   'title': 'Числитель: %d · Знаменатель: %d (с занятиями «каждую неделю»)'|format(totals.num, totals.den),
+                   'href': url_for('schedule_all', course=course or None, major=major or None, week=week or None)}] %}
+{% if totals.empty %}{% set _ = summary.append({'value': totals.empty, 'label': 'без расписания', 'tone': 'warning'}) %}{% endif %}
+{% if totals.conflict_groups %}{% set _ = summary.append({'value': totals.conflict_groups, 'label': 'с накладками', 'tone': 'danger', 'href': conflicts_url or url_for('schedule_conflicts')}) %}{% endif %}
+{{ ui.summary_line(summary) }}
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Группа', q, 'Например: ПО 24') }}
-    <div class="cc-filters__field">
-        <label class="form-label" for="flt-course">Курс</label>
-        <select class="form-select" id="flt-course" name="course" data-autosubmit>
-            <option value="">Все курсы</option>
-            {% for c in courses %}<option value="{{ c }}" {{ 'selected' if course == c|string }}>{{ c }} курс</option>{% endfor %}
-        </select>
-    </div>
+{% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Группа, например ПО 24', 'label': 'Поиск группы', 'filter': '#schGroups'}, inline=True) %}
+    {{ ui.filter_select('course', 'Курс', course_options, course) }}
     {{ ui.filter_select('major', 'Направление', majors, major) }}
-    {{ ui.filter_select('day', 'День', day_options, day, 'Все дни') }}
-    {{ ui.filter_select('week', 'Неделя', week_filters, week, 'Все недели') }}
+    {{ ui.filter_select('day', 'День', day_options, day) }}
+    {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
 {% endcall %}
 
 {% if page.items %}
-<div class="sch-group-grid">
+<div class="sch-group-grid" id="schGroups">
     {% for c in page.items %}
-    <article class="sch-group-card{{ ' is-empty' if not c.stats.lessons }}" data-group-card="{{ c.name }}">
-        <div class="sch-group-card__head">
-            <a class="sch-group-card__name stretched-link" href="{{ url_for('schedule', group=c.name, week=week or None, day=day) }}">{{ c.name }}</a>
-            {% if c.course %}<span class="cc-badge cc-badge--neutral">{{ c.course }} курс</span>{% endif %}
-        </div>
+    <a class="sch-group-card{{ ' is-empty' if not c.stats.lessons }}" data-group-card="{{ c.name }}" data-search="{{ c.name }} {{ c.major }}"
+       href="{{ url_for('schedule', group=c.name, week=week or None, day=day) }}">
+        <span class="sch-group-card__head">
+            <span class="sch-group-card__name">{{ c.name }}</span>
+            {% if c.conflicts %}<span class="cc-badge cc-badge--{{ 'danger' if c.conflicts_critical else 'warning' }} sch-group-card__conf" title="{{ c.conflicts }} {{ c.conflicts|plural('накладка', 'накладки', 'накладок') }} в расписании группы"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.conflicts }}</span>{% endif %}
+            {% if c.course %}<span class="sch-group-card__course">{{ c.course }} курс</span>{% endif %}
+        </span>
         {{ sch.mini_days(c.stats.days, today_wd) }}
-        <div class="sch-group-card__foot">
+        <span class="sch-group-card__foot">
             {% if c.stats.lessons %}
             <span><b class="cc-num">{{ c.stats.lessons }}</b> {{ c.stats.lessons|plural('пара', 'пары', 'пар') }}</span>
             <span><b class="cc-num">{{ c.stats.teachers }}</b> преп.</span>
-            {% if c.today %}<span class="cc-badge cc-badge--brand">сегодня {{ c.today }}</span>{% endif %}
-            {% if c.stats.issues %}<span class="cc-badge cc-badge--warning" title="Занятия без дня или с непонятным временем"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.stats.issues }}</span>{% endif %}
+            {% if c.stats.issues %}<span class="sch-group-card__issues" title="Занятия без дня или с непонятным временем"><i class="bi bi-exclamation-circle" aria-hidden="true"></i>{{ c.stats.issues }} без дня/времени</span>{% endif %}
             {% else %}
-            <span class="cc-muted">Нет занятий</span>
-            <a class="btn btn-outline-primary btn-sm sch-group-card__cta" href="{{ url_for('schedule_builder', groupId=c.name) }}"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Составить</span></a>
+            <span>Нет занятий — составить</span>
             {% endif %}
-        </div>
-    </article>
+        </span>
+    </a>
     {% endfor %}
+    <div class="sch-group-grid__empty" data-cc-filter-empty hidden>{{ ui.empty_filtered(url_for('schedule'), 'На этой странице таких групп нет. Нажмите Enter, чтобы искать по всем группам.') }}</div>
 </div>
 {{ ui.pagination(page) }}
 {% else %}
-<section class="cc-card">{{ ui.empty_state('search', 'Группы не найдены', 'Измените поиск или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('schedule'), 'icon': 'x-lg', 'variant': 'light'}) }}</section>
+<section class="cc-card">{{ ui.empty_filtered(url_for('schedule')) }}</section>
 {% endif %}
 
 {% else %}
 {# ============================== НЕДЕЛЯ ГРУППЫ ============================== #}
-{% set here = url_with() %}
-<div class="sch-groupbar cc-no-print">
-    <a class="btn btn-ghost btn-sm" href="{{ url_for('schedule') }}"><i class="bi bi-arrow-left" aria-hidden="true"></i><span>Все группы</span></a>
-    <form method="get" action="{{ url_for('schedule') }}" class="sch-groupbar__switch" role="search">
-        {% if prev_group %}<a class="btn btn-light btn-sm cc-btn-icon" href="{{ url_for('schedule', group=prev_group, view=view, week=week or None) }}" aria-label="Предыдущая группа: {{ prev_group }}" title="{{ prev_group }}"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>{% endif %}
-        <label class="visually-hidden" for="sch-group-switch">Группа</label>
-        <select class="form-select form-select-sm" id="sch-group-switch" name="group" data-autosubmit>
-            {% if selected_group not in all_groups %}<option value="{{ selected_group }}" selected>{{ selected_group }}</option>{% endif %}
-            {% for g in all_groups %}<option value="{{ g }}" {{ 'selected' if g == selected_group }}>{{ g }}</option>{% endfor %}
-        </select>
-        <input type="hidden" name="view" value="{{ view }}">
-        {% if week %}<input type="hidden" name="week" value="{{ week }}">{% endif %}
-        {% if next_group %}<a class="btn btn-light btn-sm cc-btn-icon" href="{{ url_for('schedule', group=next_group, view=view, week=week or None) }}" aria-label="Следующая группа: {{ next_group }}" title="{{ next_group }}"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>{% endif %}
-    </form>
-</div>
-
-{% call ui.page_header(selected_group, (stats.lessons ~ ' ' ~ stats.lessons|plural('занятие', 'занятия', 'занятий') ~ ' · ' ~ stats.teachers ~ ' преп. · ' ~ stats.rooms ~ ' ауд.') if stats.lessons else 'Расписание пока не составлено', icon='people') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    {% if lessons_total %}{{ ui.button('Редактировать', href=url_for('schedule_edit_group', group_id=selected_group, next=here), icon='pencil-square', variant='outline-primary') }}{% endif %}
-    {{ ui.button('Добавить', href=url_for('schedule_builder', groupId=selected_group), icon='plus-lg') }}
-    <div class="dropdown">
-        <button class="btn btn-light cc-btn-icon" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Ещё действия" title="Ещё"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
-        <ul class="dropdown-menu dropdown-menu-end">
-            {% if lessons_total %}
-            <li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#schCopyModal"><i class="bi bi-files" aria-hidden="true"></i>Скопировать в другую группу</button></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='xlsx', group=selected_group) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel (.xlsx)</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='csv', group=selected_group) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_print', group=selected_group) }}"><i class="bi bi-printer" aria-hidden="true"></i>Бланк для печати</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_logs', group=selected_group) }}"><i class="bi bi-clock-history" aria-hidden="true"></i>История изменений</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li>
-                <form method="post" action="{{ url_for('schedule_delete_group', group_id=selected_group) }}" class="m-0"
-                      data-confirm="Удалить все {{ lessons_total }} {{ lessons_total|plural('занятие', 'занятия', 'занятий') }} группы {{ selected_group }}? Студенты получат одно уведомление." data-confirm-title="Очистить расписание" data-confirm-ok="Очистить">
-                    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ url_for('schedule', group=selected_group) }}">
-                    <button type="submit" class="dropdown-item text-danger"><i class="bi bi-trash" aria-hidden="true"></i>Очистить расписание</button>
-                </form>
-            </li>
-            {% else %}
-            <li><span class="dropdown-item-text cc-muted small">Сначала добавьте занятия</span></li>
-            {% endif %}
-        </ul>
+{% set menu = [] %}
+{% if lessons_total %}
+{% set menu = [
+    {'label': 'Редактировать всю неделю', 'href': url_for('schedule_edit_group', group_id=selected_group, next=here_url), 'icon': 'pencil-square'},
+    {'label': 'Копировать расписание…', 'href': '#schCopyModal', 'icon': 'files', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#schCopyModal'}},
+    {'divider': True},
+    {'header': 'Экспорт'},
+    {'label': 'Excel (.xlsx)', 'href': url_for('schedule_all_export', format='xlsx', group=selected_group), 'icon': 'file-earmark-excel'},
+    {'label': 'CSV', 'href': url_for('schedule_all_export', format='csv', group=selected_group), 'icon': 'filetype-csv'},
+    {'label': 'Бланк для печати', 'href': url_for('schedule_print', group=selected_group), 'icon': 'printer'},
+    {'label': 'История изменений', 'href': url_for('schedule_logs', group=selected_group), 'icon': 'clock-history'},
+    {'divider': True},
+    {'label': 'Удалить расписание группы', 'action': url_for('schedule_delete_group', group_id=selected_group), 'icon': 'trash', 'danger': True,
+     'fields': {'next': url_for('schedule', group=selected_group)}, 'ok': 'Удалить',
+     'confirm': 'Удалить все ' ~ lessons_total ~ ' ' ~ lessons_total|plural('занятие', 'занятия', 'занятий') ~ ' группы ' ~ selected_group ~ '? Студенты получат одно уведомление. Вернуть нельзя.'},
+] %}
+{% endif %}
+{% set meta %}{% if course_num %}<span class="sch-meta-course">{{ course_num }} курс</span>{% endif %}{{ ui.week_now(current_week, week_number) }}{% endset %}
+<div class="sch-group-page" data-sch-prev="{{ url_for('schedule', group=prev_group, view=view, week=week or None) if prev_group else '' }}" data-sch-next="{{ url_for('schedule', group=next_group, view=view, week=week or None) if next_group else '' }}">
+{% call ui.page_header(selected_group, back={'href': url_for('schedule'), 'label': 'Все группы'}, meta=meta) %}
+    <div class="sch-pager" role="group" aria-label="Соседние группы">
+        {% if prev_group %}<a class="btn btn-light cc-btn-icon" href="{{ url_for('schedule', group=prev_group, view=view, week=week or None) }}" aria-label="Предыдущая группа: {{ prev_group }}" title="{{ prev_group }} ( [ )"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
+        {% else %}<span class="btn btn-light cc-btn-icon disabled" aria-hidden="true"><i class="bi bi-chevron-left"></i></span>{% endif %}
+        {% if next_group %}<a class="btn btn-light cc-btn-icon" href="{{ url_for('schedule', group=next_group, view=view, week=week or None) }}" aria-label="Следующая группа: {{ next_group }}" title="{{ next_group }} ( ] )"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
+        {% else %}<span class="btn btn-light cc-btn-icon disabled" aria-hidden="true"><i class="bi bi-chevron-right"></i></span>{% endif %}
     </div>
+    {% if menu %}{{ ui.header_menu(menu) }}{% endif %}
+    {{ ui.button('Добавить занятие', href=url_for('schedule_builder', groupId=selected_group, next=here_url), icon='plus-lg', attrs={'data-cc-hotkey': 'n'}) }}
 {% endcall %}
 
 {% if not known_group and not lessons_total %}
-<section class="cc-card">{{ ui.empty_state('question-circle', 'Группа не найдена', 'Группы «' ~ selected_group ~ '» нет в справочнике и у неё нет занятий.', {'label': 'Ко всем группам', 'href': url_for('schedule'), 'icon': 'arrow-left', 'variant': 'light'}) }}</section>
+<section class="cc-card">{{ ui.empty_state('question-circle', 'Группа не найдена', 'Группы «' ~ selected_group ~ '» нет в справочнике и у неё нет занятий.', {'label': 'Ко всем группам', 'href': url_for('schedule'), 'icon': 'arrow-left'}) }}</section>
 {% elif not lessons_total %}
 <section class="cc-card">
-    {{ ui.empty_state('calendar-plus', 'Расписание пока пустое', 'Составьте неделю в конструкторе или скопируйте расписание похожей группы (меню «⋯» на её странице) — потом поправите отличия.', {'label': 'Открыть конструктор', 'href': url_for('schedule_builder', groupId=selected_group), 'icon': 'plus-lg'}) }}
+    {{ ui.empty_state('calendar-plus', 'Расписание пока пустое', 'Добавьте занятия в конструкторе или скопируйте неделю похожей группы (меню «⋯» на её странице) — потом поправите отличия.', {'label': 'Добавить занятия', 'href': url_for('schedule_builder', groupId=selected_group), 'icon': 'plus-lg', 'variant': 'primary'}) }}
 </section>
 {% else %}
 
-<div class="cc-stats sch-stats">
-    {{ ui.stat_card('Пар в числитель', stats.num, '1-circle', tone='info', meta=('идёт сейчас' if current_week == 'numerator' else 'со следующей недели')) }}
-    {{ ui.stat_card('Пар в знаменатель', stats.den, '2-circle', tone='warning', meta=('идёт сейчас' if current_week == 'denominator' else 'со следующей недели')) }}
-    {{ ui.stat_card('Преподавателей', stats.teachers, 'person-badge', href=url_for('schedule_teachers'), meta='по преподавателям →') }}
-    {{ ui.stat_card('Пересечения', overlap_pairs, 'exclamation-diamond', tone=('danger' if overlap_pairs else 'success'), href=conflicts_url, meta=('проверьте в «Накладках»' if overlap_pairs else 'пары не пересекаются')) }}
+{% set summary = [{'value': stats.lessons, 'label': stats.lessons|plural('занятие', 'занятия', 'занятий'),
+                   'title': 'Числитель: %d пар · Знаменатель: %d пар (с занятиями «каждую неделю»)'|format(stats.num, stats.den)},
+                  (stats.teachers, stats.teachers|plural('преподаватель', 'преподавателя', 'преподавателей')),
+                  (stats.rooms, stats.rooms|plural('аудитория', 'аудитории', 'аудиторий'))] %}
+{% if conflicts_critical %}{% set _ = summary.append({'value': conflicts_critical, 'label': conflicts_critical|plural('накладка', 'накладки', 'накладок'), 'tone': 'danger', 'href': group_conflicts_url}) %}{% endif %}
+{% if conflicts_warning %}{% set _ = summary.append({'value': conflicts_warning, 'label': conflicts_warning|plural('предупреждение', 'предупреждения', 'предупреждений'), 'tone': 'warning', 'href': group_conflicts_url}) %}{% endif %}
+{% if stats.issues %}{% set _ = summary.append({'value': stats.issues, 'label': 'без дня или времени', 'tone': 'warning', 'href': url_for('schedule_edit_group', group_id=selected_group, next=here_url)}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+
+<div class="sch-toolbar cc-no-print">
+    {{ ui.segmented([('week', 'Неделя', url_with(view='week'), 'calendar-week'), ('list', 'Список', url_with(view='list'), 'list-check')], view, remember='schedule_group') }}
+    {% call ui.filters_bar(inline=True, ignore=('group', 'view'), id='schGroupFilters') %}
+        {{ ui.filter_select('day', 'День', day_options, day) }}
+        {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+    {% endcall %}
+    {% if view == 'week' %}<div class="sch-toolbar__legend">{{ sch.week_legend(current_week) }}</div>{% endif %}
 </div>
 
-<div class="sch-viewbar cc-no-print">
-    {{ ui.tabs([{'key': 'week', 'label': 'Неделя', 'href': url_with(view='week'), 'icon': 'calendar-week'},
-                {'key': 'list', 'label': 'Список и действия', 'href': url_with(view='list'), 'icon': 'list-check'}], view, pills=True, label='Вид') }}
-    <form method="get" action="{{ url_for('schedule') }}" class="sch-viewbar__filters">
-        <input type="hidden" name="group" value="{{ selected_group }}"><input type="hidden" name="view" value="{{ view }}">
-        <label class="visually-hidden" for="sch-f-day">День</label>
-        <select class="form-select form-select-sm" id="sch-f-day" name="day" data-autosubmit>
-            <option value="">Все дни</option>
-            {% for d, name in day_options %}<option value="{{ d }}" {{ 'selected' if day == d }}>{{ name }}</option>{% endfor %}
-        </select>
-        <label class="visually-hidden" for="sch-f-week">Неделя</label>
-        <select class="form-select form-select-sm" id="sch-f-week" name="week" data-autosubmit>
-            <option value="">Все недели</option>
-            {% for v, label in week_filters %}<option value="{{ v }}" {{ 'selected' if week == v }}>{{ label }}</option>{% endfor %}
-        </select>
-    </form>
-    {{ sch.week_legend(current_week) }}
-</div>
+{% if conflicts_critical or overlap_ids %}
+{% call ui.hint(icon='exclamation-triangle', tone='danger') %}
+    {% if conflicts_critical %}У группы {{ conflicts_critical }} {{ conflicts_critical|plural('накладка', 'накладки', 'накладок') }}{% else %}Есть пересекающиеся занятия{% endif %} — занятия с ними отмечены <i class="bi bi-exclamation-triangle-fill sch-text-danger" aria-hidden="true"></i>. Нажмите на занятие, чтобы исправить{% if group_conflicts_url %}, или <a href="{{ group_conflicts_url }}">откройте в «Накладках»</a>{% endif %}.
+{% endcall %}
+{% endif %}
 
-<div class="sch-layout">
-    <div class="sch-layout__main min-w-0">
-    {% if not lessons %}
-        <section class="cc-card">{{ ui.empty_state('funnel', 'Нет занятий по фильтру', 'Сбросьте день или неделю.', {'label': 'Сбросить', 'href': url_for('schedule', group=selected_group, view=view), 'icon': 'x-lg', 'variant': 'light'}) }}</section>
-    {% elif view == 'week' %}
-        <div class="sch-week" style="--sch-cols: {{ columns|length }}">
-            {% for d in columns %}
-            {% set ls = by_day.get(d, []) %}
-            <section class="sch-day{{ ' is-today' if d == today_wd }}{{ ' sch-day--none' if d is none }}" aria-label="{{ sch.day_title(d) }}">
-                <header class="sch-day__head">
-                    <span class="sch-day__name">{{ sch.day_title(d) }}</span>
-                    {% if d == today_wd %}<span class="cc-badge cc-badge--brand">сегодня</span>{% endif %}
-                    <span class="sch-day__count cc-num">{{ ls|length or '' }}</span>
-                </header>
-                <div class="sch-day__body">
-                    {% for l in ls %}{{ sch.lesson_card(l, current_week, 'teacher', today_wd, now_minutes, l.id in overlap_ids, edit=True, next_url=here) }}{% else %}<p class="sch-day__empty">Нет пар</p>{% endfor %}
-                </div>
-            </section>
-            {% endfor %}
+{% if not lessons %}
+<section class="cc-card">{{ ui.empty_filtered(url_for('schedule', group=selected_group, view=view), 'По выбранному дню и неделе занятий нет.') }}</section>
+{% elif view == 'week' %}
+{% set alert_days = [] %}{% for d in columns %}{% if by_day.get(d, [])|selectattr('id', 'in', overlap_ids)|list %}{% set _ = alert_days.append(d) %}{% endif %}{% endfor %}
+{% if columns|length > 1 %}{{ sch.day_switch(columns, day_counts, focus_day, today_wd, alerts=alert_days) }}{% endif %}
+<div class="sch-week sch-week--switch" id="schWeek" style="--sch-cols: {{ columns|length }}">
+    {% for d in columns %}
+    {% set ls = by_day.get(d, []) %}
+    <section class="sch-day{{ ' is-today' if d == today_wd }}{{ ' sch-day--none' if d is none }}{{ ' is-active-day' if d == focus_day or columns|length == 1 }}" data-day="{{ '' if d is none else d }}" aria-label="{{ sch.day_title(d) }}">
+        <header class="sch-day__head">
+            <span class="sch-day__name">{{ sch.day_title(d) }}</span>
+            {% if d == today_wd %}<span class="sch-day__today">сегодня</span>{% endif %}
+            <span class="sch-day__count cc-num" title="{{ ls|length }} {{ ls|length|plural('занятие', 'занятия', 'занятий') }}">{{ ls|length or '' }}</span>
+            {% if d is not none %}<a class="btn btn-ghost btn-sm cc-btn-icon sch-day__add cc-no-print" href="{{ url_for('schedule_builder', groupId=selected_group, day=d, next=here_url) }}" aria-label="Добавить занятие: {{ day_names[d]|lower }}" title="Добавить занятие"><i class="bi bi-plus-lg" aria-hidden="true"></i></a>{% endif %}
+        </header>
+        <div class="sch-day__body">
+            {% for l in ls %}{{ sch.lesson_card(l, current_week, 'teacher', today_wd, now_minutes, l.id in overlap_ids, edit=True, next_url=here_url, mark=marks.get(l.id)) }}{% else %}<p class="sch-day__empty">Нет пар</p>{% endfor %}
         </div>
-    {% else %}
-        <form id="schBulkForm" method="post" action="{{ url_for('schedule_bulk') }}" class="sch-bulkbar" data-bulk-form hidden>
-            {{ ui.csrf_field() }}<input type="hidden" name="group" value="{{ selected_group }}"><input type="hidden" name="next" value="{{ here }}">
-            <span class="sch-bulkbar__count"><b data-bulk-count>0</b> выбрано</span>
-            <label class="visually-hidden" for="sch-bulk-action">Действие</label>
-            <select class="form-select form-select-sm" id="sch-bulk-action" name="action" data-bulk-action>
-                <option value="week">Сменить тип недели</option>
-                <option value="room">Сменить аудиторию</option>
-                <option value="delete">Удалить</option>
-            </select>
-            <label class="visually-hidden" for="sch-bulk-week">Тип недели</label>
-            <select class="form-select form-select-sm" id="sch-bulk-week" name="week_type" data-bulk-for="week">
-                {% for v, label in week_options %}<option value="{{ v }}">{{ label }}</option>{% endfor %}
-            </select>
-            <label class="visually-hidden" for="sch-bulk-room">Аудитория</label>
-            <input class="form-control form-control-sm" id="sch-bulk-room" name="room" list="schBulkRooms" placeholder="Аудитория" data-bulk-for="room" hidden maxlength="40">
-            <datalist id="schBulkRooms">{% for r in all_rooms %}<option value="{{ r }}"></option>{% endfor %}</datalist>
-            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check2" aria-hidden="true"></i><span>Применить</span></button>
-            <button type="button" class="btn btn-ghost btn-sm" data-bulk-clear>Снять выбор</button>
-        </form>
-        {% for d, ls in by_day.items() %}
-        {% set tid = 'sch-day-' ~ (d if d is not none else 'none') %}
-        {% call ui.data_table(tid, title=sch.day_title(d) ~ ' · ' ~ ls|length) %}
-        <table class="cc-table cc-table--compact sch-list" id="{{ tid }}">
-            <thead><tr>
-                <th class="sch-list__check"><input class="form-check-input" type="checkbox" data-bulk-all aria-label="Выбрать все занятия дня"></th>
-                <th>Время</th><th>Дисциплина</th><th>Преподаватель</th><th>Ауд.</th><th>Неделя</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th>
-            </tr></thead>
-            <tbody>
-            {% for l in ls %}
-            <tr class="{{ 'is-off' if l.week not in ('always', current_week) }}{{ ' is-overlap' if l.id in overlap_ids }}">
-                <td class="sch-list__check"><input class="form-check-input" type="checkbox" name="ids" value="{{ l.id }}" form="schBulkForm" data-bulk-item aria-label="Выбрать «{{ l.subject }}» {{ l|sch_time }}"></td>
-                <td class="cc-nowrap cc-num"><b>{{ l|sch_time }}</b>{% if l.id in overlap_ids %} <i class="bi bi-exclamation-triangle-fill sch-warn-icon" title="Пересекается с другим занятием" aria-label="Пересекается с другим занятием"></i>{% endif %}</td>
-                <td class="cc-cell-main">{{ l.subject or '—' }}</td>
-                <td>{{ (l|sch_teacher) or '—' }}{% set hint = l|sch_teacher_hint %}{% if hint %} <span class="cc-badge cc-badge--warning" title="Ссылка на преподавателя">{{ hint }}</span>{% endif %}</td>
-                <td>{{ l.room or '—' }}</td>
-                <td>{{ ui.week_badge(l.week) }}</td>
-                <td class="cc-actions">
-                    {{ ui.button('Изменить', href=url_for('schedule_edit', schedule_id=l.id, next=here), icon='pencil', variant='ghost', size='sm', icon_only=True) }}
-                    {{ ui.confirm_button(url_for('schedule_delete_item', doc_id=l.id), 'Удалить', 'Удалить «' ~ l.subject ~ '» (' ~ sch.day_title(l.weekday) ~ ', ' ~ (l|sch_time) ~ ')?', fields={'next': here}, icon_only=True, variant='ghost') }}
-                </td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        {% endcall %}
+    </section>
+    {% endfor %}
+</div>
+{% else %}
+{# ---------- Список и массовые действия ---------- #}
+<form id="schBulk" method="post" action="{{ url_for('schedule_bulk') }}" hidden>
+    {{ ui.csrf_field() }}<input type="hidden" name="group" value="{{ selected_group }}"><input type="hidden" name="next" value="{{ here_url }}">
+</form>
+{% call ui.list_card(classes='sch-list-card') %}
+<div class="cc-table-wrap">
+<table class="cc-table cc-table--compact cc-table--stack sch-list" id="schList">
+    <thead><tr>
+        <th class="cc-select">{{ ui.select_all('schBulk', 'Выбрать все занятия') }}</th>
+        <th>Время</th><th>Дисциплина</th><th class="cc-col-md">Преподаватель</th><th>Ауд.</th><th class="cc-col-md">Неделя</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+    </tr></thead>
+    {% for d, ls in by_day.items() %}
+    <tbody class="sch-list__group">
+        <tr class="sch-list__day{{ ' is-today' if d == today_wd }}"><th colspan="7" scope="rowgroup">{{ sch.day_title(d) }} <span class="cc-num">· {{ ls|length }}</span>{% if d == today_wd %} <span class="sch-day__today">сегодня</span>{% endif %}</th></tr>
+        {% for l in ls %}
+        {% set edit_url = url_for('schedule_edit', schedule_id=l.id, next=here_url) %}
+        {% set mark = marks.get(l.id) %}
+        <tr class="{{ 'is-off' if l.week not in ('always', current_week) }}{{ ' is-conflict' if l.id in overlap_ids }}" data-href="{{ edit_url }}">
+            <td class="cc-select">{{ ui.select_row('schBulk', l.id, l.subject ~ ', ' ~ sch.day_title(l.weekday) ~ ' ' ~ (l|sch_time)|time_range) }}</td>
+            <td class="cc-nowrap cc-num cc-cell-meta sch-list__time"><b>{{ (l|sch_time)|time_range }}</b>{% if l.id in overlap_ids %} <i class="bi bi-exclamation-triangle-fill sch-text-danger" title="{{ mark['items']|join('; ') if mark else 'Пересекается с другим занятием' }}" aria-label="Накладка"></i>{% endif %}</td>
+            <td class="cc-cell-primary"><a class="cc-row-link cc-cell-main" href="{{ edit_url }}" data-cc-peek>{{ l.subject or '—' }}</a></td>
+            <td class="cc-cell-meta cc-col-md">{% set tn = l|sch_teacher %}{% if tn and l.teacher_key %}<a href="{{ url_for('schedule_teachers', teacher=l.teacher_key) }}" title="Неделя преподавателя">{{ tn }}</a>{% else %}{{ tn or '—' }}{% endif %}{% set hint = l|sch_teacher_hint %}{% if hint %} <span class="cc-badge cc-badge--warning" title="Ссылка на преподавателя">{{ hint }}</span>{% endif %}</td>
+            <td class="cc-cell-meta">{% if l.room %}<a href="{{ url_for('schedule_rooms', room=l.room) }}" title="Неделя аудитории">{{ l.room }}</a>{% else %}—{% endif %}</td>
+            {# «каждую» — на телефоне шум: в карточке-строке остаётся только бейдж Ч/З #}
+            <td class="cc-cell-meta cc-col-md{% if l.week == 'always' %} cc-col-optional{% endif %}">{% if l.week != 'always' %}{{ ui.week_badge(l.week) }}{% else %}<span class="cc-muted">каждую</span>{% endif %}</td>
+            <td class="cc-actions">{{ ui.row_menu([
+                {'label': 'Изменить', 'href': edit_url, 'icon': 'pencil', 'attrs': {'data-cc-peek': ''}},
+                {'label': 'Дублировать в конструкторе', 'href': url_for('schedule_builder', groupId=selected_group, day=l.weekday, time=l.time, room=l.room or None, teacher=l.teacher or None, next=here_url), 'icon': 'copy'},
+                {'divider': True},
+                {'label': 'Удалить', 'action': url_for('schedule_delete_item', doc_id=l.id), 'icon': 'trash', 'danger': True, 'fields': {'next': here_url},
+                 'confirm': 'Удалить «' ~ l.subject ~ '» (' ~ sch.day_title(l.weekday) ~ ', ' ~ (l|sch_time)|time_range ~ ')? Студенты получат уведомление.'},
+            ], quick={'label': 'Изменить', 'href': edit_url, 'icon': 'pencil', 'attrs': {'data-cc-peek': ''}}) }}</td>
+        </tr>
         {% endfor %}
-    {% endif %}
-    </div>
+    </tbody>
+    {% endfor %}
+</table>
+</div>
+{% endcall %}
 
-    <aside class="sch-layout__aside">
-        {% call ui.card('Преподаватели группы', icon='person-badge', flush=True) %}
-            <ul class="sch-people">
-                {% for key, t in group_teachers.items() %}
-                <li><a href="{{ url_for('schedule_teachers', teacher=key) }}">{{ t.name }}</a><span class="cc-badge cc-badge--neutral cc-num">{{ t.count }}</span></li>
-                {% else %}<li class="cc-muted">Преподаватели не указаны</li>{% endfor %}
-            </ul>
-        {% endcall %}
-        {% call ui.card('Последние изменения', icon='clock-history', actions=[{'label': 'Вся история', 'href': url_for('schedule_logs', group=selected_group)}]) %}
-            {% if recent_logs %}
-            <ul class="sch-logs sch-logs--compact">{% for e in recent_logs %}{{ sch.log_item(e, show_group=False) }}{% endfor %}</ul>
-            {% else %}<p class="cc-muted mb-0">Изменений пока нет</p>{% endif %}
-        {% endcall %}
-    </aside>
+{% call ui.bulkbar('schBulk', noun=('занятие', 'занятия', 'занятий')) %}
+    <div class="dropdown dropup">
+        <button type="button" class="btn btn-light btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Неделя</span></button>
+        <ul class="dropdown-menu">
+            {% for v, label in week_options %}<li><button type="submit" class="dropdown-item" form="schBulk" name="action" value="week:{{ v }}">{{ label }}</button></li>{% endfor %}
+        </ul>
+    </div>
+    <button type="button" class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#schBulkRoom"><i class="bi bi-door-open" aria-hidden="true"></i><span>Аудитория…</span></button>
+    <button type="button" class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#schBulkTeacher"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Преподаватель…</span></button>
+    <button type="submit" class="btn btn-outline-danger btn-sm" form="schBulk" name="action" value="delete" data-confirm="Удалить {items}? Студенты получат одно уведомление." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+{% endcall %}
+
+<div class="modal fade" id="schBulkRoom" tabindex="-1" aria-labelledby="schBulkRoomTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header"><h2 class="modal-title" id="schBulkRoomTitle">Сменить аудиторию</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>
+        <div class="modal-body">
+            <label class="form-label" for="sch-bulk-room">Новая аудитория для выбранных занятий</label>
+            <input class="form-control" id="sch-bulk-room" name="room" form="schBulk" list="schBulkRooms" maxlength="40" placeholder="Например, 204" autocomplete="off">
+            <datalist id="schBulkRooms">{% for r in all_rooms %}<option value="{{ r }}"></option>{% endfor %}</datalist>
+            <div class="form-text">Пустое значение — убрать аудиторию. Свободна ли она — проверит «Накладки».</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button><button type="submit" class="btn btn-primary" form="schBulk" name="action" value="room">Сменить</button></div>
+    </div></div>
+</div>
+<div class="modal fade" id="schBulkTeacher" tabindex="-1" aria-labelledby="schBulkTeacherTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header"><h2 class="modal-title" id="schBulkTeacherTitle">Сменить преподавателя</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>
+        <div class="modal-body">
+            <label class="form-label cc-required" for="sch-bulk-teacher">Новый преподаватель для выбранных занятий</label>
+            <select class="form-select" id="sch-bulk-teacher" name="teacher" form="schBulk">
+                <option value="">Выберите преподавателя…</option>
+                {% for uid, name in teacher_options %}<option value="{{ uid }}">{{ name }}</option>{% endfor %}
+            </select>
+            <div class="form-text">Преподаватели получат одно уведомление об изменениях.</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button><button type="submit" class="btn btn-primary" form="schBulk" name="action" value="teacher" data-confirm="Сменить преподавателя у {items}?" data-confirm-variant="primary" data-confirm-ok="Сменить">Сменить</button></div>
+    </div></div>
 </div>
 {% endif %}
+
+<div class="sch-group-extra cc-no-print">
+    {% call ui.card('Преподаватели группы', subtitle='Нажмите, чтобы открыть неделю преподавателя', flush=True) %}
+        <ul class="sch-people">
+            {% for key, t in group_teachers.items() %}
+            <li><a href="{{ url_for('schedule_teachers', teacher=key) }}">{{ t.name }}</a><span class="sch-people__n cc-num" title="Занятий у группы">{{ t.count }}</span></li>
+            {% else %}<li class="cc-muted">Преподаватели не указаны</li>{% endfor %}
+        </ul>
+    {% endcall %}
+    {% call ui.card('Последние изменения', actions=[{'label': 'Вся история', 'href': url_for('schedule_logs', group=selected_group)}]) %}
+        {% if recent_logs %}
+        <ul class="sch-logs sch-logs--compact">{% for e in recent_logs %}{{ sch.log_item(e, show_group=False) }}{% endfor %}</ul>
+        {% else %}<p class="cc-muted mb-0">Изменений пока нет</p>{% endif %}
+    {% endcall %}
+</div>
+{% endif %}
+</div>
 
 {% if lessons_total %}
 <div class="modal fade" id="schCopyModal" tabindex="-1" aria-labelledby="schCopyTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <form class="modal-content" method="post" action="{{ url_for('schedule_copy_group') }}" data-confirm="Скопировать расписание {{ selected_group }} в выбранную группу?" data-confirm-variant="primary" data-confirm-ok="Скопировать">
+        <form class="modal-content" method="post" action="{{ url_for('schedule_copy_group') }}" data-confirm="Скопировать расписание {{ selected_group }} в выбранную группу?" data-confirm-variant="primary" data-confirm-ok="Скопировать" novalidate>
             <div class="modal-header">
-                <h2 class="modal-title" id="schCopyTitle">Скопировать расписание</h2>
+                <h2 class="modal-title" id="schCopyTitle">Копировать расписание</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
             </div>
             <div class="modal-body">

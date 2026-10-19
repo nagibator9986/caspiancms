@@ -1,55 +1,45 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# Конструктор расписания (владелец — SCHEDULE): занятия на несколько дней сразу, проверка накладок. #}
-{% block title %}Конструктор расписания{% endblock %}
+{# Конструктор расписания (владелец — SCHEDULE): занятия на несколько дней сразу, проверка накладок.
+   Первая строка может прийти предзаполненной (?groupId=&day=&time=&room=, SCH-10). #}
+{% block title %}Добавить занятия{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{% call ui.page_header('Конструктор расписания', 'Добавьте занятия на неделю: строку можно перенести на другой день, продублировать или удалить', icon='plus-square') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    {{ ui.button('К расписанию', href=url_for('schedule', group=preselected_group or None), icon='arrow-left', variant='light') }}
-{% endcall %}
+{{ ui.page_header('Добавить занятия', subtitle='Строки по дням недели: время из сетки звонков, накладки проверяются сразу',
+                  back={'href': cancel_url, 'label': preselected_group or 'Расписание'}, meta=ui.week_now(current_week, week_number)) }}
 
 <form method="post" action="{{ url_for('schedule_builder') }}" class="sch-editor" id="schBuilderForm"
       data-editor="builder" data-check-url="{{ url_for('api_schedule_check') }}" data-custom-time="{{ f.custom_time }}"
       data-group-url="{{ url_for('api_get_group_schedule', group_id='__G__') }}" data-dirty-guard novalidate>
     {{ ui.csrf_field() }}
-    <div class="sch-builder-top">
-        {% call ui.card('Группа', icon='people') %}
-            <label class="form-label cc-required" for="schBuilderGroup">Для какой группы</label>
+    <input type="hidden" name="next" value="{{ cancel_url }}">
+    {{ ui.form_errors(form_errors) }}
+    <section class="cc-card sch-builder-top">
+        <div class="sch-builder-top__group">
+            <label class="form-label cc-required" for="schBuilderGroup">Группа</label>
             <select class="form-select" id="schBuilderGroup" name="groupId" required data-builder-group>
                 <option value="" {{ 'selected' if not preselected_group }}>Выберите группу…</option>
                 {% for g in available_groups %}<option value="{{ g }}" {{ 'selected' if g == preselected_group }}>{{ g }}</option>{% endfor %}
             </select>
             <div class="form-text">Нет нужной группы? Создайте её в разделе «Люди → Группы».</div>
-        {% endcall %}
-        {% call ui.card('Уже в расписании группы', icon='calendar-check', subtitle='Пересечения с этими парами подсвечиваются в строках') %}
+        </div>
+        <div class="sch-builder-top__existing">
+            <div class="sch-builder-top__label">Уже в расписании группы <span class="cc-muted">— пересечения с ними отмечаются в строках</span></div>
             <div class="sch-existing" data-existing aria-live="polite"></div>
-        {% endcall %}
-    </div>
-    {% if form_errors %}
-    <div class="alert alert-danger" role="alert"><ul class="mb-0">{% for e in form_errors %}<li>{{ e }}</li>{% endfor %}</ul></div>
-    {% endif %}
+        </div>
+    </section>
     <div class="sch-editor__colhead" aria-hidden="true">
-        <span>День</span><span>Время</span><span>Дисциплина</span><span>Преподаватель</span><span>Ауд.</span><span>Неделя</span><span></span>
+        <span>Время</span><span>Дисциплина</span><span>Преподаватель</span><span>Ауд.</span><span>Неделя</span><span></span>
     </div>
     {{ sch.editor_sections(rows, f) }}
     <div class="sch-editor__more">
-        <button type="button" class="btn btn-light btn-sm" data-show-sunday><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Показать воскресенье</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" data-show-sunday><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Показать воскресенье</span></button>
     </div>
-    <div class="sch-savebar" role="region" aria-label="Сохранение">
-        <div class="sch-savebar__stats" aria-live="polite">
-            <span><b data-count-filled>0</b> заполнено</span>
-            <span class="sch-savebar__warn" data-count-issues hidden><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><b>0</b> с предупреждениями</span>
-            <span class="cc-subtle d-none d-md-inline">Пустые строки не сохраняются · студенты получат одно уведомление</span>
-        </div>
-        <div class="sch-savebar__actions">
-            <a class="btn btn-light" href="{{ url_for('schedule', group=preselected_group or None) }}">Отмена</a>
-            <button type="submit" class="btn btn-primary" data-loading="Сохраняем…"><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить занятия</span></button>
-        </div>
-    </div>
+    {% set note %}<span class="sch-counters"><b class="cc-num" data-count-filled>0</b> к сохранению<span class="sch-counters__warn" data-count-issues hidden> · <i class="bi bi-exclamation-triangle" aria-hidden="true"></i><b class="cc-num">0</b> с предупреждениями</span> · пустые строки не сохраняются</span>{% endset %}
+    {{ ui.savebar('Сохранить занятия', cancel_href=cancel_url, note=note, submit_attrs={'data-loading': 'Сохраняем…'}) }}
     {{ sch.editor_assets(f) }}
     {{ ui.json_data('schExisting', existing_lessons) }}
 </form>

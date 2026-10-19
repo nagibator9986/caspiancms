@@ -1,128 +1,224 @@
-{# Лиды: поиск, фильтры, вкладки статусов, пагинация, массовые действия, экспорт CSV (APPLICANTS). #}
+{# Лиды: таблица или канбан по статусам, поиск, фильтры (на телефоне — шторка), быстрый просмотр, смена статуса
+   в строке и перетаскиванием, следующий шаг, массовые действия, экспорт CSV (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'applicants/_macros.html' as ap with context %}
 {% block title %}Лиды{% endblock %}
 {% block styles %}{{ ui.css('applicants') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Лиды', 'Абитуриенты и статусы приёмной комиссии' ~ (' · данные на ' ~ (loaded_at|timeonly) if loaded_at else ''), icon='person-lines-fill') %}
-    <form method="post" action="{{ url_for('applicants_refresh') }}" class="m-0">
-        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
-        {{ ui.button('Обновить', type='submit', icon='arrow-clockwise', variant='light', icon_only=True) }}
-    </form>
-    {{ ui.button('Экспорт CSV', href=url_for('applicants_leads_export') ~ ('?' ~ request.query_string.decode() if request.query_string else ''), icon='download', variant='light') }}
-    {{ ui.button('Аналитика', href=url_for('applicants_dashboard'), icon='graph-up-arrow') }}
-{% endcall %}
+{%- set qs = request.query_string.decode() -%}
+{{ ui.page_header('Лиды', None, [
+    {'label': 'Аналитика', 'href': url_for('applicants_dashboard'), 'icon': 'graph-up-arrow'},
+    {'menu': [
+        {'label': 'Экспорт CSV по фильтру', 'href': url_for('applicants_leads_export') ~ ('?' ~ qs if qs else ''), 'icon': 'download'},
+        {'label': 'Обновить данные' ~ (' (сейчас — на ' ~ (loaded_at|timeonly) ~ ')' if loaded_at else ''), 'action': url_for('applicants_refresh'), 'fields': {'next': here()}, 'icon': 'arrow-clockwise'},
+        {'divider': True},
+        {'label': 'QR-источники', 'href': url_for('applicant_sources'), 'icon': 'qr-code'},
+    ]},
+]) }}
 
-{% set more_active = f.city or f.grade or f['from'] or f.to or f.profile or f.kind or f.sort != 'new' or f.per != 25 %}
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', f.q, 'Имя, логин, телефон, школа, заметка') }}
-    {% if opts %}
-    {{ ui.filter_select('source', 'Источник', opts.sources, f.source) }}
-    {{ ui.filter_select('specialty', 'Специальность', opts.specialties, f.specialty) }}
-    {% endif %}
-    {{ ui.filter_select('period', 'Период', periods, f.period, all_label='За всё время') }}
-    <button type="button" class="btn btn-light ap-more-toggle" data-bs-toggle="collapse" data-bs-target="#apMoreFilters" aria-expanded="{{ 'true' if more_active else 'false' }}" aria-controls="apMoreFilters">
-        <i class="bi bi-sliders" aria-hidden="true"></i><span>Ещё фильтры</span>{% if more_active %}<span class="ap-dot" aria-hidden="true"></span><span class="visually-hidden">(есть активные)</span>{% endif %}
-    </button>
-    <div class="collapse ap-more-filters{{ ' show' if more_active }}" id="apMoreFilters">
-        <div class="ap-more-filters__body">
-            {% if opts %}
-            {{ ui.filter_select('city', 'Город', opts.cities, f.city) }}
-            {{ ui.filter_select('grade', 'Класс', opts.grades, f.grade) }}
-            {% endif %}
-            {{ ui.filter_input('from', 'С даты', f['from'].isoformat() if f['from'] else '', 'date') }}
-            {{ ui.filter_input('to', 'По дату', f.to.isoformat() if f.to else '', 'date') }}
-            {{ ui.filter_select('profile', 'Профиль', [('complete', 'Заполнен'), ('incomplete', 'Не заполнен')], f.profile) }}
-            {{ ui.filter_select('kind', 'Кто', [('applicant', 'Абитуриенты'), ('converted', 'Уже студенты')], f.kind) }}
-            {{ ui.filter_select('sort', 'Сортировка', sorts, f.sort, all_label=None) }}
-            {{ ui.filter_select('per', 'На странице', per_options|map('string')|list, f.per|string, all_label=None) }}
-        </div>
-    </div>
-    {% if f.status %}<input type="hidden" name="status" value="{{ f.status }}">{% endif %}
-{% endcall %}
+{% if summary %}
+{%- set sitems = [(summary.total, summary.total|plural('абитуриент', 'абитуриента', 'абитуриентов'))] -%}
+{%- if summary.new %}{% set _ = sitems.append({'value': summary.new, 'label': 'ждут звонка', 'href': url_for('applicants_leads', status='new'), 'title': 'Статус «Новый»: с ними ещё не связывались'}) %}{% endif -%}
+{%- if summary.overdue %}{% set _ = sitems.append({'value': summary.overdue, 'label': summary.overdue|plural('просроченный шаг', 'просроченных шага', 'просроченных шагов'), 'href': url_for('applicants_leads', step='overdue'), 'tone': 'danger'}) %}{% endif -%}
+{%- if summary.today %}{% set _ = sitems.append({'value': summary.today, 'label': 'на сегодня', 'href': url_for('applicants_leads', step='today'), 'tone': 'warning'}) %}{% endif -%}
+{%- if summary.week %}{% set _ = sitems.append({'value': summary.week, 'label': 'новых за 7 дней', 'href': url_for('applicants_leads', period='7')}) %}{% endif -%}
+{{ ui.summary_line(sitems) }}
+{% endif %}
 
 {% if page is none %}
     <section class="cc-card">{{ ui.empty_state('cloud-slash', 'Список не загрузился', 'Проверьте соединение и обновите страницу.') }}</section>
 {% else %}
-{% set tabs = [] %}
-{% for t in status_tabs %}{% set _ = tabs.append({'key': t.key, 'label': t.label, 'count': t.count, 'href': url_with(status=t.key or None, page=None)}) %}{% endfor %}
-{{ ui.tabs(tabs, f.status, label='Статус лида') }}
+<div class="ap-viewbar">
+    {% if view == 'board' %}
+    <p class="ap-viewbar__hint"><i class="bi bi-arrows-move" aria-hidden="true"></i>Перетащите карточку в другую колонку, чтобы сменить статус</p>
+    {% else %}
+    {%- set tabs = [] -%}
+    {%- for t in status_tabs %}{% set _ = tabs.append({'key': t.key, 'label': t.label, 'count': t.count, 'href': url_with(status=t.key or None, page=None)}) %}{% endfor -%}
+    {{ ui.tabs(tabs, f.status, label='Статус лида') }}
+    {% endif %}
+    {{ ui.segmented([('table', 'Таблица', url_with(view='table', page=None), 'list-ul'), ('board', 'Канбан', url_with(view='board', page=None, status=None), 'kanban')], view, label='Вид списка', remember='applicants_leads') }}
+</div>
 
-<form id="apBulk" method="post" action="{{ url_for('applicants_bulk') }}" class="m-0">
-    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
-</form>
-
-<section class="cc-card">
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ page.total|num }} {{ page.total|plural('абитуриент', 'абитуриента', 'абитуриентов') }}{% if page.total != total %} <span class="cc-muted fw-normal">из {{ total|num }}</span>{% endif %}</h2>
-        <div class="ap-bulk" data-ap-bulk hidden>
-            <span class="cc-muted small">Выбрано: <b data-ap-bulk-count>0</b></span>
-            <select class="form-select form-select-sm" name="status" form="apBulk" aria-label="Новый статус">
-                {% for k, lbl in statuses %}<option value="{{ k }}">{{ lbl }}</option>{% endfor %}
-            </select>
-            <button type="submit" form="apBulk" name="action" value="status" class="btn btn-sm btn-primary"><i class="bi bi-flag" aria-hidden="true"></i><span>Сменить статус</span></button>
-            <button type="button" class="btn btn-sm btn-light" data-bs-toggle="collapse" data-bs-target="#apBulkCoins" aria-expanded="false" aria-controls="apBulkCoins"><i class="bi bi-coin" aria-hidden="true"></i><span>Начислить коины</span></button>
+{% call ui.list_card(classes='ap-leads-card') %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': f.q, 'placeholder': 'Имя, логин, телефон, школа, заметка', 'label': 'Поиск абитуриентов'}, inline=True, ignore=('status', 'view'), sheet_title='Фильтры') %}
+        {% if opts %}{{ ui.filter_select('source', 'Источник', opts.sources, f.source) }}{% endif %}
+        {{ ui.filter_select('period', 'Период', periods, f.period, all_label='Всё время') }}
+        {{ ui.filter_select('step', 'Шаг', step_filters, f.step) }}
+        <div class="dropdown ap-more">
+            <button type="button" class="ap-more__toggle cc-fsel{{ ' is-active' if more_n }}" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                <i class="bi bi-sliders" aria-hidden="true"></i><span>Ещё фильтры</span>{% if more_n %}<span class="cc-filters__count">{{ more_n }}</span>{% endif %}
+            </button>
+            <div class="dropdown-menu dropdown-menu-end ap-more__menu">
+                <div class="ap-more__grid">
+                    {% if opts %}
+                    <div><label class="form-label" for="apfSpec">Специальность</label>
+                        <select class="form-select" id="apfSpec" name="specialty"><option value="">Все</option>{% for v, l in opts.specialties %}<option value="{{ v }}" {{ 'selected' if v == f.specialty }}>{{ l }}</option>{% endfor %}</select></div>
+                    <div><label class="form-label" for="apfCity">Город</label>
+                        <select class="form-select" id="apfCity" name="city"><option value="">Все</option>{% for v, l in opts.cities %}<option value="{{ v }}" {{ 'selected' if v == f.city }}>{{ l }}</option>{% endfor %}</select></div>
+                    <div><label class="form-label" for="apfGrade">Класс</label>
+                        <select class="form-select" id="apfGrade" name="grade"><option value="">Все</option>{% for v, l in opts.grades %}<option value="{{ v }}" {{ 'selected' if v == f.grade }}>{{ l }}</option>{% endfor %}</select></div>
+                    {% endif %}
+                    <div><label class="form-label" for="apfProfile">Профиль</label>
+                        <select class="form-select" id="apfProfile" name="profile"><option value="">Любой</option><option value="complete" {{ 'selected' if f.profile == 'complete' }}>Заполнен</option><option value="incomplete" {{ 'selected' if f.profile == 'incomplete' }}>Не заполнен</option></select></div>
+                    <div><label class="form-label" for="apfFrom">Регистрация с</label>
+                        <input class="form-control" type="date" id="apfFrom" name="from" value="{{ f['from'].isoformat() if f['from'] else '' }}"></div>
+                    <div><label class="form-label" for="apfTo">по</label>
+                        <input class="form-control" type="date" id="apfTo" name="to" value="{{ f.to.isoformat() if f.to else '' }}"></div>
+                    <div><label class="form-label" for="apfKind">Кто</label>
+                        <select class="form-select" id="apfKind" name="kind"><option value="">Все</option><option value="applicant" {{ 'selected' if f.kind == 'applicant' }}>Абитуриенты</option><option value="converted" {{ 'selected' if f.kind == 'converted' }}>Уже студенты</option></select></div>
+                    <div><label class="form-label" for="apfSort">Порядок</label>
+                        <select class="form-select" id="apfSort" name="sort">{% for v, l in sorts %}<option value="{{ v }}" {{ 'selected' if v == f.sort }}>{{ l }}</option>{% endfor %}</select></div>
+                    <div><label class="form-label" for="apfPer">На странице</label>
+                        <select class="form-select" id="apfPer" name="per">{% for n in per_options %}<option value="{{ n }}" {{ 'selected' if n == f.per }}>{{ n }}</option>{% endfor %}</select></div>
+                </div>
+                <div class="ap-more__foot">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check2" aria-hidden="true"></i><span>Применить</span></button>
+                </div>
+            </div>
         </div>
-    </div>
-    <div class="collapse" id="apBulkCoins">
-        <div class="ap-bulk-coins">
-            <label class="form-label" for="apBulkAmount">Коинов каждому</label>
-            <input class="form-control form-control-sm" type="number" min="1" max="100000" step="1" id="apBulkAmount" name="amount" form="apBulk" placeholder="50">
-            <label class="form-label" for="apBulkReason">Причина (её увидит абитуриент)</label>
-            <input class="form-control form-control-sm" type="text" maxlength="200" id="apBulkReason" name="reason" form="apBulk" placeholder="Например: участие в дне открытых дверей">
-            <button type="submit" form="apBulk" name="action" value="coins" class="btn btn-sm btn-primary" data-confirm="Начислить коины всем выбранным абитуриентам?" data-confirm-variant="primary" data-confirm-ok="Начислить"><i class="bi bi-check2" aria-hidden="true"></i><span>Начислить</span></button>
-        </div>
-    </div>
+    {% endcall %}
 
-    {% if page.total %}
+    {% if view == 'table' and (has_filters or f.status) and page.total %}
+    <p class="cc-list__summary ap-found">Найдено {{ page.total|num }} {{ page.total|plural('абитуриент', 'абитуриента', 'абитуриентов') }} из {{ total|num }}</p>
+    {% endif %}
+    {% if view == 'board' %}
+    {# ---------------- Канбан: колонки статусов, перенос карточки = смена статуса ---------------- #}
+    <div class="ap-board" data-ap-board data-status-url="{{ url_for('applicant_set_status', uid='__UID__') }}">
+        {% for col in board %}
+        <section class="ap-board__col" data-status="{{ col.key }}" aria-labelledby="apCol-{{ col.key }}">
+            <header class="ap-board__head">
+                <h2 class="ap-board__title" id="apCol-{{ col.key }}"><span class="ap-status-dot ap-status-dot--{{ col.key }}" aria-hidden="true"></span>{{ col.label }}</h2>
+                <span class="ap-board__count cc-num" data-ap-col-count>{{ col.count }}</span>
+            </header>
+            <div class="ap-board__list" data-ap-board-list="{{ col.key }}">
+                {% for x in col['items'] %}
+                {%- set card = url_for('applicant_detail', uid=x.uid, next=here()) -%}
+                <article class="ap-card" data-uid="{{ x.uid }}" data-search="{{ x.search }}">
+                    <div class="ap-card__top">
+                        <a class="ap-card__name cc-truncate" href="{{ card }}" data-cc-peek>{{ x.title }}</a>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon ap-card__menu" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" aria-label="Перевести: {{ x.title }}" title="Сменить статус"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><h6 class="dropdown-header">Перевести в</h6></li>
+                                {% for k, lbl in statuses if k != x.status %}
+                                <li><form method="post" action="{{ url_for('applicant_set_status', uid=x.uid) }}" class="m-0">{{ ui.csrf_field() }}<input type="hidden" name="status" value="{{ k }}"><input type="hidden" name="next" value="{{ here() }}"><button type="submit" class="dropdown-item"><span class="ap-status-dot ap-status-dot--{{ k }}" aria-hidden="true"></span>{{ lbl }}</button></form></li>
+                                {% endfor %}
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="{{ card }}"><i class="bi bi-person-vcard" aria-hidden="true"></i>Открыть карточку</a></li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="ap-card__meta cc-truncate">{{ [x.phone_fmt, x.city]|select|join(' · ') or (x.login if x.login != x.title else '—') }}</div>
+                    {{ ap.step_cell(x, compact=True) }}
+                    <div class="ap-card__foot">
+                        {{ ap.source_label(x.source_title, x.source_icon, x.source) }}
+                        <span class="ap-card__ago" title="{{ x.created|dt }}">{{ x.created|ago }}</span>
+                    </div>
+                </article>
+                {% endfor %}
+                {% if col.more %}<a class="ap-board__more" href="{{ url_with(view='table', status=col.key, page=None) }}">Ещё {{ col.more }} — в таблице</a>{% endif %}
+                <p class="ap-board__empty"{% if col['items'] %} hidden{% endif %}>Пусто</p>
+            </div>
+        </section>
+        {% endfor %}
+    </div>
+    {% elif page.total %}
+    {# ---------------- Таблица ---------------- #}
     <div class="cc-table-wrap">
-        <table class="cc-table ap-leads" id="apLeads">
+        <table class="cc-table cc-table--stack ap-leads" id="apLeads">
             <thead><tr>
-                <th class="ap-check"><input class="form-check-input" type="checkbox" data-ap-check-all aria-label="Выбрать всех на странице"></th>
+                <th class="cc-select">{{ ui.select_all('apBulk', 'Выбрать всех на странице') }}</th>
                 <th>Абитуриент</th>
-                <th class="d-none d-lg-table-cell">Источник</th>
                 <th>Статус</th>
-                <th class="d-none d-md-table-cell">Профиль</th>
-                <th class="text-end d-none d-xxl-table-cell">Коины</th>
-                <th class="d-none d-sm-table-cell">Регистрация</th>
+                <th class="cc-col-md">Следующий шаг</th>
+                <th class="cc-col-lg">Источник</th>
+                <th class="cc-col-xl">Профиль</th>
+                <th class="cc-col-md">Регистрация</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
             </tr></thead>
             <tbody>
             {% for x in page.items %}
-                <tr data-href="{{ url_for('applicant_detail', uid=x.uid) }}">
-                    <td class="ap-check"><input class="form-check-input" type="checkbox" name="uids" value="{{ x.uid }}" form="apBulk" data-ap-check aria-label="Выбрать {{ x.title }}"></td>
-                    <td>
+                {%- set card = url_for('applicant_detail', uid=x.uid, next=here()) -%}
+                <tr data-href="{{ card }}" id="l-{{ x.uid }}">
+                    <td class="cc-select">{{ ui.select_row('apBulk', x.uid, x.title) }}</td>
+                    <td class="cc-cell-primary">
                         <div class="ap-person">
                             {{ ui.avatar(x.title, size='sm') }}
                             <div class="min-w-0">
-                                <a class="cc-cell-main ap-person__name" href="{{ url_for('applicant_detail', uid=x.uid) }}">{{ x.title }}</a>
-                                <div class="cc-cell-sub cc-truncate">
-                                    {% if x.name %}{{ x.login }}{% else %}имя не указано{% endif %}{% if x.phone_fmt and x.phone_fmt != x.login %} · {{ x.phone_fmt }}{% endif %}{% if x.city %} · {{ x.city }}{% endif %}
-                                    {% if x.converted %} · <span class="ap-tag ap-tag--success">студент{% if x.group %} {{ x.group }}{% endif %}</span>{% endif %}
-                                    {% if x.must_change %} · <span class="ap-tag" title="Пароль сброшен — ждём, пока абитуриент придумает новый">сброс пароля</span>{% endif %}
+                                <div class="ap-person__line">
+                                    <a class="cc-row-link cc-cell-main ap-person__name" href="{{ card }}" data-cc-peek>{{ x.title }}</a>
+                                    <span class="ap-m-only">{{ ui.badge(x.status) }}</span>
                                 </div>
+                                <div class="cc-cell-sub ap-person__sub">
+                                    {%- set sub = [] -%}
+                                    {%- if x.name and x.login %}{% set _ = sub.append(x.login) %}{% endif -%}
+                                    {%- if x.phone_fmt and x.phone_fmt != x.login and x.phone_fmt != x.title %}{% set _ = sub.append(x.phone_fmt) %}{% endif -%}
+                                    {%- if x.city %}{% set _ = sub.append(x.city) %}{% endif -%}
+                                    <span class="cc-truncate">{{ sub|join(' · ') if sub else 'имя не указано' }}</span>
+                                    {% if x.converted %}<span class="ap-tag ap-tag--success">студент{% if x.group %} {{ x.group }}{% endif %}</span>{% endif %}
+                                    {% if x.must_change %}<span class="ap-tag" title="Пароль сброшен — ждём, пока абитуриент придумает новый">сброс пароля</span>{% endif %}
+                                </div>
+                                <div class="ap-m-only ap-person__src">{{ ap.source_label(x.source_title, x.source_icon, x.source) }}</div>
+                                <div class="ap-m-only">{{ ap.step_cell(x, compact=True) }}</div>
                             </div>
                         </div>
                     </td>
-                    <td class="d-none d-lg-table-cell ap-src-cell">{{ ap.source_label(x.source_title, x.source_icon, x.source) }}</td>
-                    <td>{{ ui.badge(x.status) }}</td>
-                    <td class="d-none d-md-table-cell">{{ ap.profile_meter(x.filled, x.complete) }}</td>
-                    <td class="text-end cc-num d-none d-xxl-table-cell">{{ x.balance|num }}</td>
-                    <td class="cc-nowrap d-none d-sm-table-cell"><div title="{{ x.created|dt }}">{{ x.created|dateonly }}</div><div class="cc-cell-sub">{{ x.created|ago }}</div></td>
+                    <td class="ap-c-status cc-col-optional">{{ ap.status_select(x, here()) }}</td>
+                    <td class="cc-col-md cc-col-optional ap-c-step">{{ ap.step_cell(x) }}</td>
+                    <td class="cc-col-lg cc-col-optional ap-c-src">{{ ap.source_label(x.source_title, x.source_icon, x.source) }}</td>
+                    <td class="cc-col-xl cc-col-optional">{{ ap.profile_meter(x.filled, x.complete) }}</td>
+                    <td class="cc-col-md cc-col-optional cc-nowrap ap-c-reg" title="{{ x.created|dt }}">{{ x.created|ago }}</td>
+                    <td class="cc-actions">{{ ap.lead_menu(x, card) }}</td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
     </div>
+    {{ ui.pagination(page) }}
+    {% elif has_filters or f.status %}
+        {{ ui.empty_state('search', 'Никого не нашли', 'Измените условия поиска или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('applicants_leads'), 'icon': 'x-lg'}) }}
     {% else %}
-        {% if has_filters or f.status %}
-            {{ ui.empty_state('search', 'Никого не нашли', 'Измените условия поиска или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('applicants_leads'), 'icon': 'x-lg', 'variant': 'light'}) }}
-        {% else %}
-            {{ ui.empty_state('person-plus', 'Абитуриентов пока нет', 'Они появятся после регистрации в приложении или по QR-коду со стенда.', {'label': 'QR-источники', 'href': url_for('applicant_sources'), 'icon': 'qr-code'}) }}
-        {% endif %}
+        {{ ui.empty_state('person-plus', 'Абитуриентов пока нет', 'Они появятся после регистрации в приложении или по QR-коду со стенда.', {'label': 'QR-источники', 'href': url_for('applicant_sources'), 'icon': 'qr-code'}) }}
     {% endif %}
-</section>
-{{ ui.pagination(page) }}
+{% endcall %}
+
+{# ---------------- Массовые действия (панель появляется при выборе строк) ---------------- #}
+<form id="apBulk" method="post" action="{{ url_for('applicants_bulk') }}" class="m-0">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+</form>
+{% call ui.bulkbar('apBulk', noun=('абитуриент', 'абитуриента', 'абитуриентов')) %}
+    <label class="visually-hidden" for="apBulkStatus">Новый статус</label>
+    <select class="form-select form-select-sm ap-bulk-status" id="apBulkStatus" name="status" form="apBulk">
+        {% for k, lbl in statuses %}<option value="{{ k }}">{{ lbl }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-light" form="apBulk" name="action" value="status" data-confirm="Сменить статус: {items}?" data-confirm-variant="primary" data-confirm-ok="Сменить"><i class="bi bi-flag" aria-hidden="true"></i><span>Сменить статус</span></button>
+    <button type="button" class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#apBulkCoins"><i class="bi bi-coin" aria-hidden="true"></i><span>Начислить коины…</span></button>
+    <button type="submit" class="btn btn-sm btn-light" form="apBulk" name="action" value="export"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
+{% endcall %}
+
+<div class="modal fade" id="apBulkCoins" tabindex="-1" aria-labelledby="apBulkCoinsTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="apBulkCoinsTitle">Начислить коины выбранным</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                <p class="cc-muted small" data-ap-bulk-who aria-live="polite"></p>
+                <label class="form-label" for="apBulkAmount">Коинов каждому</label>
+                <input class="form-control" type="number" min="1" max="100000" step="1" inputmode="numeric" id="apBulkAmount" name="amount" form="apBulk" placeholder="50">
+                <label class="form-label mt-3" for="apBulkReason">Причина — её увидит абитуриент</label>
+                <input class="form-control" type="text" maxlength="200" id="apBulkReason" name="reason" form="apBulk" list="apReasons" placeholder="Например: участие в дне открытых дверей">
+                <datalist id="apReasons"><option value="Участие в дне открытых дверей"><option value="Победа в конкурсе"><option value="Квиз на стенде"></datalist>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" class="btn btn-primary" form="apBulk" name="action" value="coins" data-loading><i class="bi bi-check2" aria-hidden="true"></i><span>Начислить</span></button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endif %}
 {% endblock %}
-{% block scripts %}{{ ui.js('applicants') }}{% endblock %}
+{% block scripts %}{% if view == 'board' %}{{ ui.lib('sortable') }}{% endif %}{{ ui.js('applicants') }}{% endblock %}

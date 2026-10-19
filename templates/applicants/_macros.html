@@ -1,16 +1,23 @@
 {#
-  Общие макросы раздела «Абитуриенты» (APPLICANTS).
+  Общие макросы раздела «Абитуриенты» (CRM).
       {% import 'applicants/_macros.html' as ap with context %}
 #}
+{% import '_ui.html' as ui with context %}
 
 {# Горизонтальные полосы: items — [{key, label, count, pct, width}] из compute_analytics.
-   param — фильтр списка лидов для ссылки (specialty, city, grade, status, source); None — без ссылок. #}
-{% macro bars(items, param=None, empty='Пока нет данных', tone=None, show_pct=True) -%}
+   param — фильтр списка лидов для ссылки (specialty, city, grade, status, source); None — без ссылок.
+   highlight: 'first' — выделить первое место (список отсортирован по убыванию), 'max' — наибольшее значение,
+   None — все полосы нейтральные (UX_SPEC_v2 §1.8: бренд — только у выделенного). #}
+{% macro bars(items, param=None, empty='Пока нет данных', tone=None, show_pct=True, highlight='first') -%}
 {% if items and items|sum(attribute='count') %}
+{#- «Не указан» (пустой ключ) не подсвечиваем: акцент — только на реальном лидере -#}
+{%- set known = items|rejectattr('key', 'none')|rejectattr('key', 'equalto', '')|list -%}
+{%- set top = (known|map(attribute='count')|max) if known else 0 -%}
 <ul class="ap-bars{{ ' ap-bars--' ~ tone if tone }}">
     {% for it in items %}
     {%- set key = ('none' if (param == 'grade' and it.key == '') else it.key) -%}
-    <li>
+    {%- set hl = it.count and it.key is not none and it.key != '' and ((highlight == 'first' and loop.first) or (highlight == 'max' and it.count == top)) -%}
+    <li{% if hl %} class="is-top"{% endif %}>
         {% if param and (it.key or param == 'grade') %}<a class="ap-bars__row" href="{{ url_for('applicants_leads', **{param: key}) }}">{% else %}<div class="ap-bars__row">{% endif %}
             <span class="ap-bars__label" title="{{ it.label }}">{{ it.label }}</span>
             <span class="ap-bars__track" aria-hidden="true"><span style="width: {{ it.width }}%"></span></span>
@@ -24,9 +31,9 @@
 {% endif %}
 {%- endmacro %}
 
-{# Источник абитуриента: иконка канала + название #}
+{# Источник абитуриента: иконка канала (нейтральная) + название с многоточием #}
 {% macro source_label(title, icon, code=None) -%}
-<span class="ap-source" {% if code %}title="Код: {{ code }}"{% endif %}><i class="bi bi-{{ icon or 'tag' }}" aria-hidden="true"></i><span class="cc-truncate">{{ title }}</span></span>
+<span class="ap-source" title="{{ title }}{% if code %} · код {{ code }}{% endif %}"><i class="bi bi-{{ icon or 'tag' }}" aria-hidden="true"></i><span class="cc-truncate">{{ title }}</span></span>
 {%- endmacro %}
 
 {# Заполненность профиля: n из 6 #}
@@ -34,4 +41,44 @@
 <span class="ap-meter{{ ' is-complete' if complete }}" title="Профиль: {{ filled }} из 6 полей" aria-label="Профиль заполнен на {{ filled }} из 6">
     {% for i in range(6) %}<span class="{{ 'on' if i < filled }}"></span>{% endfor %}
 </span>
+{%- endmacro %}
+
+{# Статус лида прямо в ячейке таблицы: маленькая POST-форма, отправляется при выборе (без подтверждения —
+   в тосте «Отменить»). next — куда вернуться (обычно here()). #}
+{% macro status_select(x, next) -%}
+<form method="post" action="{{ url_for('applicant_set_status', uid=x.uid) }}" class="ap-status-form">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ next }}">
+    <span class="ap-status-pick ap-status-pick--{{ x.status }}">
+        <span class="ap-status-pick__dot" aria-hidden="true"></span>
+        <select name="status" class="ap-status-pick__select" data-autosubmit aria-label="Статус: {{ x.title }}">
+            {% for k, lbl in statuses %}<option value="{{ k }}" {{ 'selected' if k == x.status }}>{{ lbl }}</option>{% endfor %}
+        </select>
+    </span>
+    <noscript><button type="submit" class="btn btn-light btn-sm">OK</button></noscript>
+</form>
+{%- endmacro %}
+
+{# Следующий шаг лида (или последний контакт): просрочен — красным, сегодня — жёлтым #}
+{% macro step_cell(x, compact=False) -%}
+{% if x.next_state != 'none' and x.status not in ('enrolled', 'declined') %}
+<div class="ap-step ap-step--{{ x.next_state }}">
+    <i class="bi bi-{{ 'exclamation-circle' if x.next_state == 'overdue' else 'signpost' }}" aria-hidden="true"></i>
+    <span class="ap-step__text cc-truncate" title="{{ x.next_step }}">{{ x.next_step or 'Шаг' }}</span>
+    {% if x.next_date %}<span class="ap-step__date">{{ ap_step_label(x.next_state, x.next_date) }}</span>{% endif %}
+</div>
+{% elif not compact %}
+<span class="cc-cell-sub">{% if x.last_contact %}контакт {{ x.last_contact|ago }}{% elif x.status == 'new' %}ещё не связывались{% else %}—{% endif %}</span>
+{% endif %}
+{%- endmacro %}
+
+{# Меню строки лида: карточка, быстрый просмотр, связь, заказы и журнал коинов #}
+{% macro lead_menu(x, card) -%}
+{%- set items = [{'label': 'Открыть карточку', 'href': card, 'icon': 'person-vcard'},
+                 {'label': 'Быстрый просмотр', 'href': card, 'icon': 'layout-sidebar-reverse', 'attrs': {'data-cc-peek': ''}}] -%}
+{%- if x.tel %}{% set _ = items.append({'label': 'Позвонить', 'href': 'tel:' ~ x.tel, 'icon': 'telephone'}) %}{% endif -%}
+{%- if x.wa %}{% set _ = items.append({'label': 'WhatsApp', 'href': x.wa, 'icon': 'whatsapp', 'attrs': {'target': '_blank', 'rel': 'noopener'}}) %}{% endif -%}
+{%- set _ = items.append({'divider': True}) -%}
+{%- set _ = items.append({'label': 'Заказы мерча', 'href': nav_url('coins_orders', uid=x.uid, status='all'), 'icon': 'box-seam'}) -%}
+{%- set _ = items.append({'label': 'Журнал коинов', 'href': nav_url('coins_journal', uid=x.uid), 'icon': 'journal-text'}) -%}
+{{ ui.row_menu(items, label='Действия: ' ~ x.title, quick={'label': 'Написать в WhatsApp', 'href': x.wa, 'icon': 'whatsapp', 'attrs': {'target': '_blank', 'rel': 'noopener'}} if x.wa else None) }}
 {%- endmacro %}

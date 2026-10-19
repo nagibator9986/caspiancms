@@ -24,7 +24,7 @@ from functools import wraps
 from urllib.parse import quote, unquote, urlencode, urlparse
 
 import requests
-from flask import (abort, current_app, flash, g, jsonify, redirect, render_template,
+from flask import (abort, current_app, flash, g, get_flashed_messages, jsonify, redirect, render_template,
                    request, session, url_for)
 from firebase_admin import auth, credentials, firestore, initialize_app, storage
 import firebase_admin
@@ -1358,53 +1358,95 @@ def public_lang():
 
 # ==================== НАВИГАЦИЯ (САЙДБАР) ====================
 
-# Разделы сайдбара: (заголовок группы, иконка, [(endpoint, подпись, иконка, ключевые слова)]).
-# Порядок и состав — по SPEC §6.3. Бейджи: функции nav_badges() модулей → {endpoint: число}.
+# Разделы сайдбара: порядок = приоритет ежедневной работы (UX_SPEC_v2 §2).
+# Форма кортежей не меняется: (заголовок группы, иконка, [(endpoint, подпись, иконка, ключевые слова)]).
+# Бейджи: функции nav_badges() модулей → {endpoint: число}.
 NAV_SECTIONS = [
     ('Главная', 'house', [
-        ('dashboard', 'Обзор', 'speedometer2', 'дашборд главная kpi'),
+        ('dashboard', 'Обзор', 'speedometer2', 'дашборд главная сегодня обзор'),
     ]),
+    ('Расписание', 'calendar-week', [
+        ('schedule', 'По группам', 'collection', 'расписание группы неделя'),
+        ('schedule_teachers', 'По преподавателям', 'person-workspace', 'расписание преподаватели нагрузка'),
+        ('schedule_all', 'Единая таблица', 'table', 'расписание все группы таблица сетка'),
+        ('schedule_conflicts', 'Накладки', 'exclamation-diamond', 'накладки конфликты пересечения'),
+        ('schedule_rooms', 'Аудитории', 'door-open', 'аудитории кабинеты фонд свободные загрузка'),
+        ('schedule_logs', 'История', 'clock-history', 'история изменения журнал расписания'),
+    ]),
+    ('Контент', 'newspaper', [
+        ('news', 'Новости', 'newspaper', 'новости лента публикации'),
+        ('polls', 'Опросы', 'ui-checks', 'опросы голосование'),
+        ('events', 'События', 'calendar-event', 'события мероприятия'),
+        ('clubs', 'Клубы', 'stars', 'клубы кружки секции'),
+        ('products', 'Товары колледжа', 'cart', 'товары магазин колледжа тенге'),
+    ]),
+    ('Люди', 'people', [
+        ('admin_users', 'Пользователи', 'people', 'пользователи студенты аккаунты пароль'),
+        ('teachers_list', 'Преподаватели', 'person-badge', 'преподаватели учителя справочник'),
+        ('groups', 'Группы', 'collection', 'группы курсы'),
+        ('subjects_list', 'Дисциплины', 'book', 'дисциплины предметы'),
+        ('administration', 'Администрация', 'person-vcard', 'администрация руководство'),
+    ]),
+    ('Сервис', 'gear', [
+        ('feedback_list', 'Обратная связь', 'chat-dots', 'обратная связь обращения отзывы линия доверия'),
+        ('audit_log', 'Аудит', 'shield-check', 'аудит журнал действий'),
+    ]),
+    # ---- второстепенное: ниже всего и свёрнуто по умолчанию (NAV_COLLAPSED) ----
     ('Абитуриенты', 'mortarboard', [
-        ('applicants_dashboard', 'Аналитика', 'graph-up-arrow', 'абитуриенты статистика воронка источники'),
         ('applicants_leads', 'Лиды', 'person-lines-fill', 'абитуриенты crm заявки лиды'),
+        ('applicants_dashboard', 'Аналитика', 'graph-up-arrow', 'абитуриенты статистика воронка источники'),
         ('applicant_sources', 'QR-источники', 'qr-code', 'qr стенд источник ссылка'),
         ('applicant_news', 'Новости абитуриентов', 'megaphone', 'новости абитуриент'),
         ('admissions_settings', 'Приёмная', 'building-gear', 'приёмная настройки специальности документы faq дедлайн'),
     ]),
     ('Caspian Coin', 'coin', [
-        ('coins_shop', 'Магазин', 'bag', 'магазин мерч товары коины'),
         ('coins_orders', 'Заказы', 'box-seam', 'заказы выдача мерч'),
-        ('coins_campaigns', 'Кампании', 'ticket-perforated', 'коды кампании коины'),
-        ('coins_journal', 'Журнал', 'journal-text', 'журнал транзакции коины начисление'),
+        ('coins_shop', 'Магазин мерча', 'bag', 'магазин мерч товары коины кампании журнал'),
     ]),
-    ('Расписание', 'calendar-week', [
-        ('schedule', 'По группам', 'collection', 'расписание группы'),
-        ('schedule_all', 'Единая таблица', 'table', 'расписание все группы таблица'),
-        ('schedule_teachers', 'По преподавателям', 'person-workspace', 'расписание преподаватели'),
-        ('schedule_rooms', 'Аудиторный фонд', 'door-open', 'аудитории кабинеты фонд'),
-        ('schedule_conflicts', 'Накладки', 'exclamation-diamond', 'накладки конфликты пересечения'),
-        ('schedule_free_rooms', 'Свободные аудитории', 'door-closed', 'свободные аудитории кабинеты'),
-        ('schedule_builder', 'Конструктор', 'plus-square', 'конструктор добавить занятие'),
-        ('schedule_logs', 'История', 'clock-history', 'история изменения логи'),
-    ]),
-    ('Контент', 'newspaper', [
-        ('news', 'Новости', 'newspaper', 'новости'),
-        ('polls', 'Опросы', 'ui-checks', 'опросы голосование'),
-        ('events', 'События', 'calendar-event', 'события мероприятия'),
-        ('clubs', 'Клубы', 'stars', 'клубы кружки'),
-        ('products', 'Товары', 'cart', 'товары магазин'),
-    ]),
-    ('Люди', 'people', [
-        ('admin_users', 'Пользователи', 'people', 'пользователи студенты аккаунты'),
-        ('teachers_list', 'Преподаватели', 'person-badge', 'преподаватели учителя'),
-        ('administration', 'Администрация', 'person-vcard', 'администрация руководство'),
-        ('groups', 'Группы', 'collection', 'группы'),
-        ('subjects_list', 'Дисциплины', 'book', 'дисциплины предметы'),
-    ]),
-    ('Сервис', 'gear', [
-        ('feedback_list', 'Обратная связь', 'chat-dots', 'обратная связь отзывы линия доверия'),
-        ('audit_log', 'Аудит', 'shield-check', 'аудит журнал действий'),
-    ]),
+]
+
+# Группы, свёрнутые по умолчанию (раскрываются сами, если в них активный пункт; выбор пользователя запоминается
+# в localStorage['cc-nav']).
+NAV_COLLAPSED = frozenset({'Абитуриенты', 'Caspian Coin'})
+
+# Пункты только для поиска Ctrl+K (в сайдбаре их нет): (endpoint, подпись, иконка, ключевые слова, раздел).
+NAV_EXTRA = [
+    ('schedule_builder', 'Добавить занятие (конструктор)', 'plus-square', 'конструктор добавить занятие пару', 'Расписание'),
+    ('schedule_free_rooms', 'Свободные аудитории', 'door-closed', 'свободные аудитории кабинеты сейчас', 'Расписание'),
+    ('news_form', 'Новая новость', 'plus-lg', 'создать добавить новость', 'Команды'),
+    ('poll_form', 'Новый опрос', 'plus-lg', 'создать добавить опрос', 'Команды'),
+    ('event_form', 'Новое событие', 'plus-lg', 'создать добавить событие', 'Команды'),
+    ('admin_add_user', 'Новый пользователь', 'person-plus', 'создать добавить пользователя студента', 'Команды'),
+    ('coins_campaigns', 'Кампании (коды)', 'ticket-perforated', 'коды кампании коины', 'Caspian Coin'),
+    ('coins_journal', 'Журнал коинов', 'journal-text', 'журнал транзакции коины начисление', 'Caspian Coin'),
+]
+
+# Дочерняя страница → пункт сайдбара (подсветка и хлебные крошки). Проверяется ДО сравнения префиксов URL.
+NAV_PARENT = {
+    'schedule_edit': 'schedule', 'schedule_edit_group': 'schedule', 'schedule_builder': 'schedule',
+    'schedule_print': 'schedule', 'schedule_free_rooms': 'schedule_rooms',
+    'news_form': 'news', 'poll_form': 'polls', 'poll_results': 'polls',
+    'event_form': 'events', 'event_registrations': 'events', 'club_form': 'clubs', 'club_registrations': 'clubs',
+    'product_form': 'products',
+    'admin_add_user': 'admin_users', 'admin_edit_user': 'admin_users', 'teacher_edit': 'teachers_list',
+    'administration_add': 'administration', 'administration_edit': 'administration',
+    'applicant_detail': 'applicants_leads', 'applicant_source_edit': 'applicant_sources',
+    'applicant_source_poster': 'applicant_sources', 'applicant_news_form': 'applicant_news',
+    'coins_product_form': 'coins_shop', 'coins_campaigns': 'coins_shop', 'coins_campaign_form': 'coins_shop',
+    'coins_campaign_detail': 'coins_shop', 'coins_campaign_present': 'coins_shop', 'coins_journal': 'coins_shop',
+}
+
+# Тон бейджа пункта: danger — требует действия сегодня, brand — ждёт ответа, остальные — приглушённые (muted).
+NAV_BADGE_TONES = {'schedule_conflicts': 'danger', 'feedback_list': 'brand'}
+_TONE_RANK = {'danger': 3, 'brand': 2, 'muted': 1}
+
+# Пункты быстрого создания (кнопка «+» в топбаре): (endpoint, подпись, иконка).
+NAV_CREATE = [
+    ('schedule_builder', 'Занятие', 'calendar-plus'),
+    ('news_form', 'Новость', 'newspaper'),
+    ('poll_form', 'Опрос', 'ui-checks'),
+    ('event_form', 'Событие', 'calendar-event'),
+    ('admin_add_user', 'Пользователь', 'person-plus'),
 ]
 
 _nav_modules = []  # модули с функцией nav_badges() (заполняет cms.register_all)
@@ -1436,14 +1478,31 @@ def nav_badges():
     return result
 
 
+def set_nav_active(endpoint):
+    """Подсветить пункт сайдбара для страницы, которой нет в NAV_PARENT: set_nav_active('applicants_leads')."""
+    g.nav_active = endpoint
+
+
+def _sidebar_endpoints():
+    return {endpoint for _t, _i, items in NAV_SECTIONS for endpoint, _l, _ic, _kw in items}
+
+
 def _active_endpoint():
-    """Пункт сайдбара для текущей страницы: точный endpoint, иначе самый длинный префикс URL."""
+    """Пункт сайдбара для текущей страницы: g.nav_active → точный endpoint → NAV_PARENT → самый длинный
+    префикс URL (запасной вариант)."""
+    forced = getattr(g, 'nav_active', None)
+    sidebar = _sidebar_endpoints()
+    if forced in sidebar:
+        return forced
     ep = request.endpoint
+    if ep in sidebar:
+        return ep
+    parent = NAV_PARENT.get(ep)
+    if parent in sidebar:
+        return parent
     best, best_len = None, -1
     for _title, _icon, items in NAV_SECTIONS:
         for endpoint, _label, _ic, _kw in items:
-            if endpoint == ep:
-                return endpoint
             url = nav_url(endpoint)
             if url in ('#', '/'):
                 continue
@@ -1453,37 +1512,217 @@ def _active_endpoint():
 
 
 def build_nav():
-    """Структура сайдбара для base.html: [{title, icon, active, items:[{endpoint,label,icon,url,active,badge}]}]."""
+    """Структура сайдбара для base.html → (sections, crumbs).
+
+    sections: [{title, icon, active, badge, badge_tone, collapsed_default, secondary,
+                items: [{endpoint, label, icon, url, active, badge, badge_tone}]}]
+    crumbs: ['Раздел', 'Пункт'] (строки, как раньше). Ссылки крошек — nav_crumb_links()."""
     active = _active_endpoint()
     try:
         badges = nav_badges() if session.get('uid') else {}
     except Exception:
         badges = {}
     sections, crumbs = [], []
+    links = []
     for title, icon, items in NAV_SECTIONS:
         sec_items = []
         for endpoint, label, ic, kw in items:
             is_active = endpoint == active
+            url = nav_url(endpoint)
             sec_items.append({'endpoint': endpoint, 'label': label, 'icon': ic, 'keywords': kw,
-                              'url': nav_url(endpoint), 'active': is_active,
-                              'badge': badges.get(endpoint)})
+                              'url': url, 'active': is_active, 'badge': badges.get(endpoint),
+                              'badge_tone': NAV_BADGE_TONES.get(endpoint, 'muted')})
             if is_active:
                 crumbs = [title, label] if title != 'Главная' else [label]
-        sections.append({'title': title, 'icon': icon, 'items': sec_items,
-                         'active': any(i['active'] for i in sec_items),
-                         'badge': sum(i['badge'] or 0 for i in sec_items)})
+                links = ([{'label': title, 'url': None}] if title != 'Главная' else []) + [{'label': label, 'url': url}]
+        sec_active = any(i['active'] for i in sec_items)
+        tones = [i['badge_tone'] for i in sec_items if i['badge']]
+        sections.append({'title': title, 'icon': icon, 'items': sec_items, 'active': sec_active,
+                         'badge': sum(i['badge'] or 0 for i in sec_items),
+                         'badge_tone': max(tones, key=lambda t: _TONE_RANK.get(t, 0)) if tones else 'muted',
+                         'secondary': title in NAV_COLLAPSED,
+                         'collapsed_default': title in NAV_COLLAPSED and not sec_active})
+    g._nav_crumb_links = links
+    g._nav_is_child = bool(links) and request.endpoint != active
     return sections, crumbs
 
 
+def nav_crumb_links():
+    """Хлебные крошки ссылками: [{label, url}] (раздел без ссылки, пункт — ссылка на список).
+    Текущую дочернюю страницу base.html добавляет сам (текст {% block title %})."""
+    return list(getattr(g, '_nav_crumb_links', None) or [])
+
+
 def nav_index():
-    """Плоский список разделов для поиска Ctrl+K: [{label, section, url, icon, keywords}]."""
+    """Плоский список для поиска Ctrl+K: разделы сайдбара + NAV_EXTRA → [{label, section, url, icon, keywords}]."""
     out = []
     for title, _icon, items in NAV_SECTIONS:
         for endpoint, label, ic, kw in items:
             url = nav_url(endpoint)
             if url != '#':
                 out.append({'label': label, 'section': title, 'url': url, 'icon': ic, 'keywords': kw})
+    for endpoint, label, ic, kw, section in NAV_EXTRA:
+        url = nav_url(endpoint)
+        if url != '#':
+            out.append({'label': label, 'section': section, 'url': url, 'icon': ic, 'keywords': kw,
+                        'kind': 'command' if section == 'Команды' else 'section'})
     return out
+
+
+def nav_create_items():
+    """Пункты меню «+ Создать» в топбаре: [{label, url, icon}] (неизвестные endpoint'ы пропускаются)."""
+    out = []
+    for endpoint, label, ic in NAV_CREATE:
+        url = nav_url(endpoint)
+        if url != '#':
+            out.append({'label': label, 'url': url, 'icon': ic})
+    return out
+
+
+# ==================== UI-ХЕЛПЕРЫ (UX_SPEC_v2 §4.15) ====================
+
+class _Here:
+    """Текущий путь с query (без завершающего '?'): в Jinja и {{ here() }}, и {{ here }}.
+    Ссылки из списков на правку: url_for('news_form', news_id=n.id, next=here())."""
+
+    def __call__(self):
+        try:
+            return request.full_path.rstrip('?')
+        except RuntimeError:  # вне запроса
+            return ''
+
+    def __str__(self):
+        return self()
+
+    def __html__(self):
+        from markupsafe import escape
+        return str(escape(self()))
+
+
+here = _Here()
+
+
+def next_target():
+    """Безопасный next из формы или query (только относительный путь этого сайта) или None."""
+    try:
+        return safe_next_url(request.form.get('next')) or safe_next_url(request.args.get('next'))
+    except RuntimeError:
+        return None
+
+
+def back_url(default_endpoint='dashboard', **values):
+    """Цель redirect после сохранения: безопасный next (форма/query), иначе url_for(default_endpoint, **values).
+
+        return redirect(back_url('news'))"""
+    return next_target() or nav_url(default_endpoint, **values)
+
+
+def flash_action(message, label, href=None, post=None, fields=None, category='success'):
+    """Тост с действием: обычный flash (category, message) + служебный ('cc-action', json) — base.html
+    склеивает их (pop_toasts). href — ссылка, post — URL для маленькой POST-формы (CSRF добавит шаблон),
+    fields — скрытые поля POST. Небезопасный URL (не относительный путь сайта) — действие не показывается.
+
+        flash_action('Обращение закрыто', 'Отменить', post=url_for('feedback_status', feedback_id=fid),
+                     fields={'status': 'new'})"""
+    flash(message, category)
+    href = safe_next_url(href) if href else None
+    post = safe_next_url(post) if post else None
+    if not (href or post) or not label:
+        return
+    payload = {'label': str(label)[:40]}
+    if post:
+        payload['post'] = post
+        payload['fields'] = {str(k): '' if v is None else str(v) for k, v in (fields or {}).items()}
+    else:
+        payload['href'] = href
+    flash(json.dumps(payload, ensure_ascii=False), 'cc-action')
+
+
+def _toast_category(c):
+    c = str(c or 'info').lower()
+    if c in ('error', 'danger'):
+        return 'danger'
+    return c if c in ('success', 'warning') else 'info'
+
+
+def pop_toasts():
+    """Забрать flash-сообщения для тостов: [{category, message, action}], служебные ('cc-action', json)
+    прикрепляются к предыдущему сообщению (flash_action)."""
+    out = []
+    for category, message in get_flashed_messages(with_categories=True):
+        if category == 'cc-action':
+            if out and out[-1]['action'] is None:
+                try:
+                    data = json.loads(message)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(data, dict) and data.get('label') and (data.get('href') or data.get('post')):
+                    out[-1]['action'] = data
+            continue
+        out.append({'category': _toast_category(category), 'message': message, 'action': None})
+    return out
+
+
+VIEW_COOKIE_PREFIX = 'cc_view_'
+
+
+def view_param(key, allowed, default):
+    """Вид страницы: ?view= → cookie cc_view_<key> (ставит ui.segmented(remember=key)) → default.
+
+        view = view_param('schedule_teachers', ('table', 'cards'), 'table')"""
+    v = (request.args.get('view') or '').strip()
+    if v in allowed:
+        return v
+    v = (request.cookies.get(VIEW_COOKIE_PREFIX + key) or '').strip()
+    return v if v in allowed else default
+
+
+def is_partial():
+    """Запрос быстрого просмотра (заголовок X-CC-Partial: 1): base.html отдаёт только {% block peek %}."""
+    try:
+        return request.headers.get('X-CC-Partial') == '1'
+    except RuntimeError:
+        return False
+
+
+# Параметры, которые не считаются фильтрами («Сбросить · N»).
+FILTER_SKIP_PARAMS = frozenset({'page', 'cursor', 'p', 'view', 'format', 'sort', 'next', 'per'})
+
+
+def filter_state(ignore=(), search_name=None):
+    """Для ui.filters_bar: сколько фильтров активно и куда ведёт «Сбросить».
+    → {'count': N, 'sheet_count': N без поиска, 'reset': URL (сохраняет ignore и view), 'keep': [(k, v)]}"""
+    ignore = set(ignore or ())
+    active = []
+    for k in request.args.keys():
+        if k in FILTER_SKIP_PARAMS or k in ignore:
+            continue
+        if any(str(v).strip() for v in request.args.getlist(k)):
+            active.append(k)
+    keep = [(k, v) for k in request.args.keys() if k in ignore or k == 'view'
+            for v in request.args.getlist(k) if str(v).strip()]
+    reset = request.path + ('?' + urlencode(keep) if keep else '')
+    return {'count': len(active), 'sheet_count': len([k for k in active if k != search_name]),
+            'reset': reset, 'keep': [(k, v) for k, v in keep if k in ignore]}
+
+
+_TIME_RANGE_RE = re.compile(r'^\s*(\d{1,2})[.:](\d{2})\s*(?:[-–—]\s*(\d{1,2})[.:](\d{2}))?\s*$')
+
+
+def fmt_time_range(value):
+    """'13.00-13.50' / '13:00-13:50' / '8.30 – 9.50' → '13:00–13:50' / '08:30–09:50'; одно время → '08:30';
+    некорректное — как есть."""
+    if value is None:
+        return ''
+    s = str(value)
+    m = _TIME_RANGE_RE.match(s)
+    if not m:
+        return s
+    h1, m1, h2, m2 = m.groups()
+    if int(h1) > 23 or int(m1) > 59 or (h2 is not None and (int(h2) > 23 or int(m2) > 59)):
+        return s
+    start = '%02d:%s' % (int(h1), m1)
+    return start if h2 is None else '%s–%02d:%s' % (start, int(h2), m2)
 
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ ====================
@@ -1583,6 +1822,7 @@ def init_app(app):
         'plural': lambda n, one, few, many: plural(n, one, few, many),
         'input_dt': local_input_value,
         'images_of': images_of,
+        'time_range': fmt_time_range,
     }
     for name, fn in filters.items():
         app.add_template_filter(fn, name)
@@ -1594,15 +1834,31 @@ def init_app(app):
     app.add_template_global(fmt_pct, 'pct')
     app.add_template_global(plural, 'plural')
     app.add_template_global(public_lang, 'public_lang')
+    # UX_SPEC_v2 §4.15: хелперы UI для шаблонов
+    app.add_template_global(here, 'here')
+    app.add_template_global(back_url, 'back_url')
+    app.add_template_global(next_target, 'next_target')
+    app.add_template_global(view_param, 'view_param')
+    app.add_template_global(pop_toasts, 'pop_toasts')
+    app.add_template_global(filter_state, 'filter_state')
+    app.add_template_global(set_nav_active, 'set_nav_active')
+
+    @app.after_request
+    def _vary_partial(resp):
+        # Быстрый просмотр (X-CC-Partial) и полная страница — разные ответы по одному URL.
+        if request.headers.get('X-CC-Partial'):
+            resp.headers.add('Vary', 'X-CC-Partial')
+        return resp
 
     @app.context_processor
     def _layout_context():
-        ctx = {'asset_version': ASSET_VERSION, 'is_emulator': IS_EMULATOR}
+        ctx = {'asset_version': ASSET_VERSION, 'is_emulator': IS_EMULATOR, 'is_partial': is_partial()}
         try:
             if session.get('uid') and request.endpoint != 'static':
                 sections, crumbs = build_nav()
                 ctx.update(nav_sections=sections, nav_crumbs=crumbs, nav_search=nav_index(),
-                           admin=current_admin())
+                           nav_crumb_links=nav_crumb_links(), nav_is_child=getattr(g, '_nav_is_child', False),
+                           nav_create=nav_create_items(), admin=current_admin())
         except Exception:
             log.warning('Сайдбар не построен', exc_info=True)
         return ctx

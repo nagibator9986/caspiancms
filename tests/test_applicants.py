@@ -8,6 +8,7 @@
 
 import csv
 import io
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -309,7 +310,7 @@ class ApplicantsAdminTest(CmsTestCase):
 
     def test_leads_list_search_filters_pagination(self):
         html = self.get_ok('/applicants/leads')
-        self.assertIn('42 абитуриента', html)
+        self.assertRegex(html, r'>42</b> абитуриента<')        # сводка под заголовком (summary_line)
         self.assertIn('+7 701 123 45 67', self.get_ok('/applicants/leads?per=100'))
         # поиск по телефону в любом формате
         html = self.get_ok('/applicants/leads?q=8 701 123 45 67')
@@ -366,7 +367,8 @@ class ApplicantsAdminTest(CmsTestCase):
     def test_detail_page(self):
         html = self.get_ok('/applicants/ap_001')
         self.assertIn('+7 701 123 45 67', html)
-        self.assertIn('Сбросить пароль до abiturient123', html)
+        self.assertIn('Сбросить пароль', html)
+        self.assertIn('Пароль станет «abiturient123»', html)   # новый пароль — в тексте подтверждения
         self.assertIn('Пригласил', html)
         self.assertIn('Зачислить в студенты', html)
         self.assertIn('ПО 24-1', html)                 # группы для зачисления
@@ -526,6 +528,189 @@ class ApplicantActionsTest(CmsTestCase):
         self.assertEqual(r.status_code, 302)
 
 
+# ==================== CRM: СПИСОК, КАНБАН, КАРТОЧКА, БЫСТРЫЙ ПРОСМОТР (UX v2) ====================
+
+class LeadsCrmUxTest(CmsTestCase):
+    fresh_seed_each_test = False
+
+    def action_of_last_flash(self):
+        """Служебный flash ('cc-action', json) — кнопка в тосте (flash_action)."""
+        import json
+        cat, payload = self.flashes()[-1]
+        self.assertEqual(cat, 'cc-action')
+        return json.loads(payload)
+
+    def test_list_has_inline_status_peek_and_bulkbar(self):
+        html = self.get_ok('/applicants/leads?per=100')
+        self.assertIn('class="ap-status-form"', html)                 # статус прямо в строке
+        self.assertIn('data-autosubmit', html)
+        self.assertIn('data-cc-peek', html)                           # быстрый просмотр
+        self.assertIn('data-cc-bulkbar="apBulk"', html)               # общая панель выбора
+        self.assertIn('name="ids" value="ap_001" form="apBulk"', html)
+        self.assertNotIn('data-ap-bulk', html.replace('data-ap-bulk-who', ''))   # своей панели больше нет
+        self.assertIn('cc-table--stack', html)
+        # ссылка на карточку несёт next — «‹ Лиды» вернёт в тот же список
+        self.assertIn('/applicants/ap_001?next=/applicants/leads?per%3D100', html)
+        # в шапке одна основная кнопка — нет (Аналитика — light), экспорт и обновление — в меню ⋯
+        header = html.split('class="cc-page-header"', 1)[1].split('cc-summary', 1)[0]
+        self.assertNotIn('btn-primary', header)
+        self.assertIn('Экспорт CSV по фильтру', header)
+
+    def test_inline_status_change_is_undoable(self):
+        uid = 'ap_022'
+        before = self.doc('applicant_crm', uid)['status']
+        target = 'declined' if before != 'declined' else 'new'
+        r = self.post('/applicants/%s/status' % uid, {'status': target, 'next': '/applicants/leads?status=new'})
+        self.assertRedirectsTo(r, '/applicants/leads?status=new')
+        self.assertEqual(self.doc('applicant_crm', uid)['status'], target)
+        action = self.action_of_last_flash()
+        self.assertEqual(action['label'], 'Отменить')
+        self.assertEqual(action['post'], '/applicants/%s/status' % uid)
+        self.assertEqual(action['fields']['status'], before)
+        self.assertEqual(action['fields']['next'], '/applicants/leads?status=new')
+        self.post(action['post'], action['fields'])
+        self.assertEqual(self.doc('applicant_crm', uid)['status'], before)
+
+    def test_status_json_for_kanban(self):
+        uid = 'ap_023'
+        old = self.doc('applicant_crm', uid)['status']
+        new = 'applied' if old != 'applied' else 'contacted'
+        r = self.post_json('/applicants/%s/status' % uid, {'status': new}, headers={'Accept': 'application/json'})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        data = r.get_json()
+        self.assertTrue(data['ok'])
+        self.assertEqual((data['status'], data['old']), (new, old))
+        self.assertEqual(data['undo']['fields'], {'status': old})
+        self.assertEqual(self.doc('applicant_crm', uid)['status'], new)
+        r = self.post_json('/applicants/%s/status' % uid, {'status': 'bogus'}, headers={'Accept': 'application/json'})
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(r.get_json()['ok'])
+        r = self.post_json('/applicants/no_such/status', {'status': 'new'}, headers={'Accept': 'application/json'})
+        self.assertEqual(r.status_code, 404)
+
+    def test_board_view(self):
+        html = self.get_ok('/applicants/leads?view=board')
+        self.assertIn('data-ap-board', html)
+        for key in ('new', 'contacted', 'applied', 'enrolled', 'declined'):
+            self.assertIn('data-ap-board-list="%s"' % key, html)
+        self.assertIn('sortablejs@1.15.2', html)
+        self.assertIn('class="ap-card"', html)
+        # вид запоминается: cookie → без ?view снова канбан
+        self.client.set_cookie('cc_view_applicants_leads', 'board')
+        self.assertIn('data-ap-board', self.get_ok('/applicants/leads'))
+        self.client.set_cookie('cc_view_applicants_leads', 'table')
+        self.assertNotIn('data-ap-board', self.get_ok('/applicants/leads'))
+
+    def test_next_step_save_overdue_filter_done_and_undo(self):
+        from cms.core import ALMATY, db
+        uid = 'ap_024'
+        self.post('/applicants/%s/next-step' % uid, {'next_step': 'Позвонить после ДОД', 'next_step_at': '2026-10-01',
+                                                      'action': 'save'})
+        crm = self.doc('applicant_crm', uid)
+        self.assertEqual(crm['nextStep'], 'Позвонить после ДОД')
+        self.assertEqual(crm['nextStepAt'].astimezone(ALMATY).date().isoformat(), '2026-10-01')
+        self.assertEqual(crm['history'][-1]['action'], 'next_step')
+        if crm.get('status') in ('enrolled', 'declined'):
+            db.collection('applicant_crm').document(uid).update({'status': 'contacted'})
+        html = self.get_ok('/applicants/leads?step=overdue&per=100')
+        self.assertIn('/applicants/%s?' % uid, html)
+        self.assertIn('Позвонить после ДОД', html)
+        self.assertIn('просрочен', html)
+        self.assertNotIn('/applicants/ap_025?', html)
+        # неверная дата и пустой шаг — ошибка, данные не тронуты
+        self.post('/applicants/%s/next-step' % uid, {'next_step': '', 'next_step_at': '', 'action': 'save'})
+        self.post('/applicants/%s/next-step' % uid, {'next_step': 'x', 'next_step_at': '31.02.2026', 'action': 'save'})
+        self.assertEqual(self.doc('applicant_crm', uid)['nextStep'], 'Позвонить после ДОД')
+        # выполнено: поля удалены, в истории — «Выполнен», в тосте — «Вернуть»
+        self.post('/applicants/%s/next-step' % uid, {'action': 'done', 'next': '/applicants/%s' % uid})
+        crm = self.doc('applicant_crm', uid)
+        self.assertNotIn('nextStep', crm)
+        self.assertNotIn('nextStepAt', crm)
+        self.assertIn('Выполнен: Позвонить после ДОД', crm['history'][-1]['details'])
+        action = self.action_of_last_flash()
+        self.assertEqual(action['fields']['next_step'], 'Позвонить после ДОД')
+        self.assertEqual(action['fields']['next_step_at'], '2026-10-01')
+        self.post(action['post'], action['fields'])
+        self.assertEqual(self.doc('applicant_crm', uid)['nextStep'], 'Позвонить после ДОД')
+        self.assertTrue(self.audit_entries('next_step'))
+
+    def test_step_helpers(self):
+        from datetime import date
+        from cms.routes_applicants import next_step_info, step_label
+        today = date(2026, 10, 19)
+        self.assertEqual(next_step_info({}, today)['state'], 'none')
+        self.assertEqual(next_step_info({'nextStep': 'x'}, today)['state'], 'planned')
+        at = datetime(2026, 10, 18, 19, 0, tzinfo=timezone.utc)   # 19.10 00:00 Алматы
+        self.assertEqual(next_step_info({'nextStepAt': at}, today)['state'], 'today')
+        self.assertEqual(next_step_info({'nextStepAt': at - timedelta(days=2)}, today)['state'], 'overdue')
+        self.assertEqual(step_label('overdue', date(2026, 10, 17), today), 'просрочен на 2 дня')
+        self.assertEqual(step_label('overdue', date(2026, 10, 14), today), 'просрочен на 5 дней')
+        self.assertEqual(step_label('planned', date(2026, 10, 20), today), 'завтра')
+        self.assertEqual(step_label('planned', date(2026, 10, 25), today), '25.10')
+
+    def test_detail_feed_neighbors_and_layout(self):
+        html = self.get_ok('/applicants/ap_001?next=/applicants/leads?sort%3Dname')
+        self.assertIn('Лента активности', html)
+        self.assertIn('Реферал +30', html)                      # автоматическое начисление — в ленте
+        self.assertIn('data-ap-feed-filter="coins"', html)
+        self.assertIn('Работа с лидом', html)
+        self.assertIn('href="/applicants/leads?sort=name" data-cc-back', html)   # «‹ Лиды» с фильтрами
+        self.assertIn('data-ap-next', html)                     # ‹ / › по текущему фильтру
+        self.assertRegex(html, r'\d+ из 42')
+        self.assertIn('data-cc-ctrl-enter', html)               # Ctrl+Enter в комментарии и заметке
+        # одна основная кнопка на карточке — «Записать контакт»
+        self.assertEqual(html.count('btn btn-primary'), 1)
+        self.assertIn('Записать контакт', html)
+        # формы карточки возвращают на карточку (с её ?next)
+        self.assertIn('name="next" value="/applicants/ap_001?next=/applicants/leads?sort%3Dname"', html)
+
+    def test_peek_fragment(self):
+        r = self.client.get('/applicants/ap_002?next=/applicants/leads?status%3Dnew', headers={'X-CC-Partial': '1'})
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self.assertNotIn('cc-sidebar', html)
+        self.assertIn('cc-peek-fragment', html)
+        self.assertIn('ap-peek', html)
+        self.assertIn('action="/applicants/ap_002/status"', html)
+        self.assertIn('action="/applicants/ap_002/contact"', html)
+        self.assertIn('action="/applicants/ap_002/notes"', html)
+        self.assertIn('Открыть карточку', html)
+        # формы панели возвращают в список, из которого её открыли
+        self.assertIn('name="next" value="/applicants/leads?status=new"', html)
+        self.assertNotIn('Зачислить в студенты', html)          # в панели только быстрые действия
+
+    def test_bulk_accepts_ids_and_exports_selected(self):
+        r = self.post('/applicants/leads/bulk', {'action': 'export', 'ids': ['ap_003', 'ap_004', 'ghost']})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('text/csv', r.headers['Content-Type'])
+        rows = list(csv.reader(io.StringIO(r.get_data(as_text=True).lstrip('\ufeff')), delimiter=';'))
+        self.assertEqual(sorted(row[0] for row in rows[1:]), ['ap_003', 'ap_004'])
+        self.assertIn('Следующий шаг', rows[0])
+        self.post('/applicants/leads/bulk', {'action': 'status', 'status': 'applied', 'ids': ['ap_026']})
+        self.assertEqual(self.doc('applicant_crm', 'ap_026')['status'], 'applied')
+
+    def test_dashboard_neutral_charts_and_details(self):
+        html = self.get_ok('/applicants')
+        self.assertIn('cc-stat-strip', html)                    # KPI здесь разрешены (§4.3)
+        self.assertIn('data-cc-collapse-key="ap-more"', html)   # второстепенное — в «Подробнее»
+        self.assertIn('class="is-top"', html)                   # бренд — только у первого места
+        self.assertIn('cc-segmented', html)                     # период графика — сегменты
+        # «Не указан» (класс) не подсвечивается как лидер, даже если таких больше всех
+        unknown = re.search(r'<li[^>]*>\s*<a class="ap-bars__row" href="[^"]*grade=none"', html)
+        self.assertIsNotNone(unknown)
+        self.assertNotIn('is-top', unknown.group(0))
+
+    def test_bars_never_highlight_unknown(self):
+        from flask import render_template_string
+        items = [{'key': '', 'label': 'Не указан', 'count': 9, 'width': 100, 'pct': 60.0},
+                 {'key': '11', 'label': '11 класс', 'count': 6, 'width': 66, 'pct': 40.0}]
+        tpl = "{% import 'applicants/_macros.html' as ap with context %}{{ ap.bars(items, highlight='max') }}"
+        with self.app.test_request_context('/'):
+            html = render_template_string(tpl, items=items)
+        self.assertEqual(html.count('is-top'), 1)
+        self.assertRegex(html, r'<li class="is-top">\s*<div class="ap-bars__row">\s*<span class="ap-bars__label" title="11 класс"')
+
+
 # ==================== QR-ИСТОЧНИКИ ====================
 
 class SourcesTest(CmsTestCase):
@@ -579,6 +764,33 @@ class SourcesTest(CmsTestCase):
         self.post('/applicants/sources/TMP123/delete')
         self.assertIsNone(self.doc('applicant_sources', 'TMP123'))
         self.assertEqual(self.client.get('/applicants/sources/NOPE42/edit').status_code, 404)
+
+    def test_create_errors_reopen_modal_and_toggle_undo(self):
+        r = self.post('/applicants/sources/new', {'code': 'BAD-CODE', 'title': 'Мой стенд', 'channel': 'event'})
+        self.assertEqual(r.status_code, 400)
+        html = r.get_data(as_text=True)
+        self.assertIn('data-cc-open-on-load', html)              # модалка откроется сама
+        self.assertIn('латинские заглавные буквы', html)
+        self.assertIn('value="Мой стенд"', html)                 # введённое не теряется
+        r = self.post('/applicants/sources/new', {'code': 'STAND1', 'title': 'Дубль', 'channel': 'event'})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('уже есть', r.get_data(as_text=True))
+        # вкл/выкл — без подтверждения, с «Отменить»
+        import json
+        before = self.doc('applicant_sources', 'SCHOOL25')['active']
+        self.post('/applicants/sources/SCHOOL25/toggle', {'next': '/applicants/sources'})
+        self.assertIs(self.doc('applicant_sources', 'SCHOOL25')['active'], not before)
+        cat, payload = self.flashes()[-1]
+        action = json.loads(payload)
+        self.assertEqual((cat, action['label']), ('cc-action', 'Отменить'))
+        self.post(action['post'], action['fields'])
+        self.assertIs(self.doc('applicant_sources', 'SCHOOL25')['active'], before)
+        html = self.get_ok('/applicants/sources')
+        self.assertIn('cc-row-menu', html)
+        self.assertIn('data-bs-target="#new-source"', html)
+        self.assertIn('data-cc-filter="#apSources"', html)
+        self.assertIn('Keruen', self.get_ok('/applicants/sources?q=keruen'))
+        self.assertNotIn('Instagram @caspian.college', self.get_ok('/applicants/sources?q=keruen'))
 
     def test_poster(self):
         html = self.get_ok('/applicants/sources/STAND1/poster')

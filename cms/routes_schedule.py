@@ -24,16 +24,17 @@ import io
 import re
 import zipfile
 from collections import Counter, OrderedDict, defaultdict
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
 from flask import Response, flash, g, jsonify, redirect, render_template, request, session, url_for
 
 from . import conflicts as conflicts_engine
 from . import schedule_model as sm
-from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, admin_required, audit, cache, chunked,
-                   csv_response, db, doc_dict, fmt_dt, get_docs, humanize_ago, log, now_almaty,
-                   paginate_list, plural, safe_next_url, send_push, url_with, where)
+from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, admin_required, audit, back_url, cache, chunked,
+                   csv_response, db, doc_dict, flash_action, fmt_dt, get_docs, humanize_ago, log, next_target,
+                   now_almaty, paginate_list, plural, safe_next_url, send_push, url_with, view_param,
+                   where)
 from .schedule_model import (CALL_SCHEDULE, DAY_NAMES_FULL, DAY_SHORT, WEEK_LABELS, WEEK_TYPES,
                              build_teacher_index, call_slots, current_week_type, day_fields, get_all_groups,
                              get_all_rooms, get_all_subjects, get_all_teachers, get_week_parity, group_sort_key,
@@ -45,8 +46,8 @@ routes = Routes()
 
 # ==================== КОНСТАНТЫ ====================
 
-WEEK_FILTERS = [('current', 'Текущая неделя'), ('numerator', 'Числитель (+ каждую неделю)'),
-                ('denominator', 'Знаменатель (+ каждую неделю)')]
+# Фильтр недели (пилюля «Неделя: …»): числитель/знаменатель включают занятия «каждую неделю»
+WEEK_FILTERS = [('current', 'Текущая'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель')]
 WEEK_OPTIONS = [('always', 'Каждую неделю'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель')]
 CUSTOM_TIME = '__custom__'
 FIELD_LIMITS = {'groupId': 60, 'time': 40, 'subject': 120, 'teacher': 120, 'room': 40}
@@ -212,6 +213,75 @@ def week_context():
             'week_number': sm.academic_week_number(today), 'today_wd': today.weekday(),
             'today_label': '%s, %s' % (DAY_NAMES_FULL[today.weekday()], today.strftime('%d.%m.%Y')),
             'is_even_week': cur == 'numerator'}  # старое имя: True = ЧИСЛИТЕЛЬ
+
+
+def focus_day(columns, today_wd):
+    """День, который переключатель дня на телефоне показывает первым: сегодня, в воскресенье
+    (если воскресной колонки нет) — понедельник, иначе первая колонка."""
+    cols = [c for c in columns if c is not None]
+    if today_wd in cols:
+        return today_wd
+    if 0 in cols:
+        return 0
+    return cols[0] if cols else None
+
+
+_SEV_RANK = {'critical': 0, 'warning': 1}
+
+
+def conflict_marks():
+    """Накладки из движка (cms.conflicts) для подсветки там, где правят расписание.
+
+    → (marks, by_group, by_teacher):
+      marks      — {id занятия: {'severity': худшая, 'items': ['Преподаватель занят: ВТ 24-1 13:00–13:50', …]}};
+      by_group   — {группа: {'critical': n, 'warning': n, 'dims': Counter(dim)}} — уникальные накладки;
+      by_teacher — {ключ преподавателя: {'critical': n, 'warning': n}} (вкладка «Преподаватели»).
+    Без «инфо» (потоки) и без принятых. Движок упал — пусто (страница работает)."""
+    try:
+        analysis = conflicts_engine.get_analysis()
+    except Exception:
+        log.exception('Накладки для подсветки не посчитаны')
+        return {}, {}, {}
+    try:
+        acks = conflicts_engine.load_acks() or {}
+    except Exception:
+        log.warning('Принятые накладки недоступны', exc_info=True)
+        acks = {}
+    marks = {}
+    groups = defaultdict(dict)
+    group_dims = defaultdict(Counter)
+    teachers = defaultdict(dict)
+    for c in analysis.all_clusters():
+        sev = c['severity']
+        if sev not in _SEV_RANK or c['hash'] in acks:
+            continue
+        lessons = {l['id']: l for l in c['lessons']}
+        for lid in c['ids']:
+            others = ', '.join('%s %s' % (o['groupId'] or '—', o['time_label'] or o['time'])
+                               for oid, o in lessons.items() if oid != lid)
+            m = marks.setdefault(lid, {'severity': sev, 'items': []})
+            if _SEV_RANK[sev] < _SEV_RANK[m['severity']]:
+                m['severity'] = sev
+            text = c['title'] + (': ' + others if others else '')
+            if text not in m['items']:
+                m['items'].append(text)
+        for gname in c['groups']:
+            prev = groups[gname].get(c['hash'])
+            if prev is None or _SEV_RANK[sev] < _SEV_RANK[prev]:
+                groups[gname][c['hash']] = sev
+            group_dims[gname][c['dim']] += 1
+        if c['dim'] == 'teacher':
+            teachers[c['key']][c['hash']] = sev
+    by_group = {g: dict(Counter(v.values()), dims=group_dims[g]) for g, v in groups.items()}
+    by_teacher = {k: dict(Counter(v.values())) for k, v in teachers.items()}
+    return marks, by_group, by_teacher
+
+
+def group_conflicts_url(gname, info):
+    """Ссылка на «Накладки» с фильтром по группе — на вкладку, где их больше всего."""
+    dims = (info or {}).get('dims') or Counter()
+    dim = dims.most_common(1)[0][0] if dims else 'teacher'
+    return _schedule_conflicts_url(dim=dim, group=gname)
 
 
 def _redirect_next(default):
@@ -921,8 +991,9 @@ def schedule():
     courses = sorted({group_course(x) for x in all_groups if group_course(x)})
     common = dict(wk, all_groups=all_groups, majors=majors, courses=courses, q=q, course=course, major=major,
                   day=day, week=week, week_filters=WEEK_FILTERS, day_names=DAY_NAMES_FULL, day_short=DAY_SHORT,
-                  selected_group=selected_group)
+                  day_options=[(d, DAY_NAMES_FULL[d]) for d in range(7)], selected_group=selected_group)
 
+    marks, conf_groups, _conf_teachers = conflict_marks()
     if not selected_group:
         groups = _filter_groups(all_groups, q, course, major)
         cards = []
@@ -935,16 +1006,26 @@ def schedule():
             totals['num'] += st['num']
             totals['den'] += st['den']
             totals['empty'] += 0 if st['lessons'] else 1
+            info = conf_groups.get(gname) or {}
+            n_conf = info.get('critical', 0) + info.get('warning', 0)
+            totals['conflict_groups'] += 1 if info.get('critical') else 0
             cards.append({'name': gname, 'course': group_course(gname), 'major': group_major(gname), 'stats': st,
+                          'conflicts': n_conf, 'conflicts_critical': info.get('critical', 0),
                           'today': sum(1 for l in lessons if l['weekday'] == wk['today_wd'] and lesson_is_current(l, cur))})
         page = paginate_list(cards, request.args.get('page', 1), GROUPS_PER_PAGE)
         return render_template('schedule.html', mode='groups', page=page, totals=totals,
-                               groups_count=len(groups), **common)
+                               groups_count=len(groups), course_options=[(c, '%s курс' % c) for c in courses],
+                               **common)
 
     lessons_all = snap.by_group.get(selected_group, [])
     lessons = [l for l in lessons_all if week_matches(l['week'], week, cur) and (day is None or l['weekday'] == day)]
-    view = request.args.get('view') if request.args.get('view') in ('week', 'list') else 'week'
+    view = view_param('schedule_group', ('week', 'list'), 'week')
     overlap_ids, overlap_pairs = _overlap_ids(lessons_all)
+    group_marks = {l['id']: marks[l['id']] for l in lessons_all if l['id'] in marks}
+    # подсветка: накладки движка (по всему колледжу) + пересечения внутри группы (на случай, если движок недоступен)
+    for lid in overlap_ids:
+        group_marks.setdefault(lid, {'severity': 'critical', 'items': ['Пересекается с другим занятием группы']})
+    conf_info = conf_groups.get(selected_group) or {}
     try:
         idx = all_groups.index(selected_group)
         prev_group = all_groups[idx - 1] if idx > 0 else None
@@ -956,13 +1037,21 @@ def schedule():
         if l['teacher_key']:
             teachers.setdefault(l['teacher_key'], {'name': teacher_label(l), 'count': 0})
             teachers[l['teacher_key']]['count'] += 1
+    columns = _day_columns(lessons)
+    by_day = _by_day(lessons)
     return render_template(
         'schedule.html', mode='group', view=view, known_group=selected_group in all_groups, lessons=lessons,
-        lessons_total=len(lessons_all), columns=_day_columns(lessons), by_day=_by_day(lessons),
-        stats=_group_stats(lessons_all, cur), overlap_ids=overlap_ids, overlap_pairs=overlap_pairs,
-        prev_group=prev_group, next_group=next_group, recent_logs=load_recent_logs(limit=8, group_id=selected_group),
-        group_teachers=teachers, now_minutes=_now_minutes(),
+        lessons_total=len(lessons_all), columns=columns, by_day=by_day,
+        day_counts={d: len(v) for d, v in by_day.items()},
+        focus_day=focus_day(columns, wk['today_wd']),
+        stats=_group_stats(lessons_all, cur), overlap_ids=set(group_marks), marks=group_marks,
+        overlap_pairs=overlap_pairs, conflicts_critical=conf_info.get('critical', 0),
+        conflicts_warning=conf_info.get('warning', 0),
+        group_conflicts_url=group_conflicts_url(selected_group, conf_info),
+        prev_group=prev_group, next_group=next_group, recent_logs=load_recent_logs(limit=6, group_id=selected_group),
+        group_teachers=teachers, now_minutes=_now_minutes(), course_num=group_course(selected_group),
         copy_targets=[x for x in all_groups if x != selected_group], week_options=WEEK_OPTIONS,
+        teacher_options=[(uid, name) for uid, name in get_all_teachers().items()],
         all_rooms=get_all_rooms(), conflicts_url=_schedule_conflicts_url(), **common)
 
 
@@ -1142,21 +1231,41 @@ def _row_view(row, errors=None):
 def _render_builder(rows, group, status=200, errors=None):
     snap = load_lessons_snapshot()
     existing = [_lesson_json(l) for l in snap.by_group.get(group, [])] if group else []
+    cancel = safe_next_url(request.values.get('next')) or url_for('schedule', group=group or None)
     return render_template('schedule_builder.html', rows=rows, preselected_group=group,
-                           available_groups=get_all_groups(), existing_lessons=existing,
+                           available_groups=get_all_groups(), existing_lessons=existing, cancel_url=cancel,
                            form_errors=errors or [], f=form_context(), **week_context()), status
+
+
+def _prefill_time(raw, day):
+    """?time=HH:MM-HH:MM → значение для селекта времени: метка слота сетки звонков с тем же
+    интервалом ('08.25-09.15'), иначе нормализованное 'HH.MM-HH.MM' (покажется «не из сетки»)."""
+    start, end = parse_time_range(raw)
+    if start is None or end is None or end <= start:
+        return ''
+    for label, s, e in call_slots(day if day is not None else 1):
+        if (s, e) == (start, end):
+            return label
+    return '%02d.%02d-%02d.%02d' % (start // 60, start % 60, end // 60, end % 60)
 
 
 @routes.route('/schedule/builder', methods=['GET', 'POST'])
 @admin_required
 def schedule_builder():
     """Конструктор: несколько дней и занятий за раз, живая проверка накладок, существующие пары
-    группы рядом. Запись — day_index + date, notify:false, один пуш на группу."""
+    группы рядом. Запись — day_index + date, notify:false, один пуш на группу.
+
+    Предзаполнение первой строки (SCH-10): ?groupId=&day=0..6&time=HH:MM-HH:MM&room= — из «+» в колонке
+    дня, «Добавить занятие здесь» (шахматка аудиторий) и главной."""
     if request.method == 'POST':
         return handle_schedule_builder_post()
-    group = (request.args.get('groupId') or request.args.get('group') or '').strip()
+    group = (request.args.get('groupId') or request.args.get('group') or '').strip()[:FIELD_LIMITS['groupId']]
     day = _parse_day(request.args.get('day'))
-    return _render_builder([_row_view({'key': 'n0', 'day': 0 if day is None else day})], group)
+    row = {'key': 'n0', 'day': 0 if day is None else day,
+           'time': _prefill_time(request.args.get('time'), day),
+           'room': _clip(request.args.get('room'), FIELD_LIMITS['room']),
+           'teacher': _clip(request.args.get('teacher'), FIELD_LIMITS['teacher'])}
+    return _render_builder([_row_view(row)], group)
 
 
 def handle_schedule_builder_post():
@@ -1474,17 +1583,27 @@ def schedule_copy_group():
     return redirect(url_for('schedule', group=target))
 
 
-BULK_ACTIONS = OrderedDict([('week', 'Сменить тип недели'), ('room', 'Сменить аудиторию'), ('delete', 'Удалить')])
+BULK_ACTIONS = OrderedDict([('week', 'Сменить тип недели'), ('room', 'Сменить аудиторию'),
+                            ('teacher', 'Сменить преподавателя'), ('delete', 'Удалить')])
 
 
 @routes.route('/schedule/bulk', methods=['POST'])
 @admin_required
 def schedule_bulk():
-    """Массовые действия над выбранными занятиями: сменить тип недели, аудиторию, удалить.
-    group — ограничение «только занятия этой группы» (защита от чужих id)."""
-    action = request.form.get('action')
+    """Массовые действия над выбранными занятиями: сменить тип недели, аудиторию, преподавателя, удалить.
+
+    Поля: ids (id занятий), action, next. Ограничения выборки (защита от чужих id):
+      group        — только занятия этой группы;
+      teacher_from — только занятия этого преподавателя (uid или ФИО — сравнение по ключу справочника).
+    action=week: week_type (или короткая форма action='week:numerator'); action=room: room;
+    action=teacher: teacher — uid из справочника преподавателей (SCH-11, контракт для PEOPLE)."""
+    action = request.form.get('action') or ''
+    value = None
+    if ':' in action:   # кнопки панели выбора: «week:numerator» — действие и значение одной кнопкой
+        action, value = action.split(':', 1)
     ids = [i for i in dict.fromkeys(request.form.getlist('ids')) if i][:MAX_EDITOR_LESSONS]
     group = _clip(request.form.get('group'), FIELD_LIMITS['groupId'])
+    teacher_from = _clip(request.form.get('teacher_from'), FIELD_LIMITS['teacher'])
     back = url_for('schedule', group=group, view='list') if group else url_for('schedule')
     if action not in BULK_ACTIONS:
         flash('Неизвестное действие', 'error')
@@ -1492,17 +1611,28 @@ def schedule_bulk():
     if not ids:
         flash('Не выбрано ни одного занятия', 'warning')
         return _redirect_next(back)
-    value = None
+    index = None
     if action == 'week':
-        value = request.form.get('week_type')
+        value = value or request.form.get('week_type')
         if value not in WEEK_TYPES:
             flash('Выберите тип недели', 'error')
             return _redirect_next(back)
     elif action == 'room':
         value = _clip(request.form.get('room'), FIELD_LIMITS['room'])
+    elif action == 'teacher':
+        value = _clip(request.form.get('teacher'), FIELD_LIMITS['teacher'])
+        if value not in get_all_teachers():
+            flash('Выберите преподавателя из справочника', 'error')
+            return _redirect_next(back)
     docs = get_docs('schedules', ids)
     if group:
         docs = {k: v for k, v in docs.items() if v.get('groupId') == group}
+    if teacher_from:
+        index = build_teacher_index()
+        want = teacher_from if teacher_from.startswith(('uid:', 'name:')) else \
+            (resolve_teacher(teacher_from, index)['key'] or teacher_from)
+        docs = {k: v for k, v in docs.items()
+                if resolve_teacher(v.get('teacher') or v.get('teacherId'), index)['key'] == want}
     batch = ScheduleBatch(quiet=True)
     for doc_id, data in docs.items():
         if action == 'delete':
@@ -1511,6 +1641,11 @@ def schedule_bulk():
             batch.update(doc_id, data, _with_day(data, {'week_type': value}))
         elif action == 'room' and _old_value(data, 'room') != value:
             batch.update(doc_id, data, _with_day(data, {'room': value}))
+        elif action == 'teacher' and _old_value(data, 'teacher') != value:
+            fields = {'teacher': value}
+            if 'teacherId' in data:
+                fields['teacherId'] = DELETE_FIELD  # функции берут teacherId раньше teacher
+            batch.update(doc_id, data, _with_day(data, fields))
     if not len(batch):
         flash('Изменений нет', 'info')
         return _redirect_next(back)
@@ -1521,7 +1656,11 @@ def schedule_bulk():
         flash('Не удалось выполнить действие. Попробуйте ещё раз.', 'error')
         return _redirect_next(back)
     audit('schedule_bulk', 'schedule', group or None, dict(counts, action=action, value=value))
-    flash('Готово: %s' % _summary(counts), 'success')
+    if action == 'teacher':
+        n = counts.get('update', 0)
+        flash('Преподаватель заменён в %d %s' % (n, plural(n, 'занятии', 'занятиях', 'занятиях')), 'success')
+    else:
+        flash('Готово: %s' % _summary(counts), 'success')
     return _redirect_next(back)
 
 
@@ -1579,7 +1718,8 @@ def schedule_edit(schedule_id):
         flash('Проверьте поля формы — изменения не сохранены', 'error')
         return _edit_view(schedule_id, old, form_values=data, errors=errors, status=400, conflicts=[])
     fields = plan_update(old, data)
-    target = _redirect_next(url_for('schedule', group=data['groupId']))
+    group_url = url_for('schedule', group=data['groupId'])
+    target = redirect(back_url('schedule', group=data['groupId']))
     if not fields:
         flash('Изменений нет', 'info')
         return target
@@ -1599,7 +1739,12 @@ def schedule_edit(schedule_id):
         invalidate_schedule_caches()
     audit('schedule_update', 'schedule', schedule_id,
           {'group': data['groupId'], 'fields': sorted(k for k in fields if k != 'updatedAt')})
-    flash('Занятие сохранено', 'success')
+    # «Открыть группу» — если возвращаемся не на её неделю (например, из накладок или аудиторий)
+    nxt = urlparse(next_target() or url_for('schedule', group=data['groupId']))
+    if nxt.path == url_for('schedule') and parse_qs(nxt.query).get('group') == [data['groupId']]:
+        flash('Занятие сохранено', 'success')
+    else:
+        flash_action('Занятие сохранено', 'Открыть группу', href=group_url)
     _flash_conflicts([('', check_conflicts(dict(lesson_doc(data), id=schedule_id), exclude_id=schedule_id))],
                      'Сохранено, но есть накладки')
     return target
@@ -1651,11 +1796,26 @@ def schedule_all():
     per_page = (len(groups) or 1) if per == 'all' else TABLE_GROUPS_PER_PAGE
     page = paginate_list(groups, request.args.get('page', 1), per_page)
     all_groups = get_all_groups()
+    hide_empty = request.args.get('hide_empty') == '1'
+    if day is not None:
+        columns = [day]
+    elif hide_empty:
+        columns = [d for d in range(7) if any(d in grid[g] for g in page.items)] or _day_columns(lessons)
+    else:
+        columns = _day_columns(lessons)
+    marks, _cg, _ct = conflict_marks()
+    day_counts = Counter()
+    for g in page.items:
+        for wd, ls in grid[g].items():
+            day_counts[wd] += len(ls)
+    courses = sorted({group_course(x) for x in all_groups if group_course(x)})
     return render_template(
-        'schedule_all.html', page=page, grid=grid, columns=[day] if day is not None else _day_columns(lessons),
-        total_lessons=len(lessons), groups_count=len(groups), course=course, major=major, week=week, day=day, q=q,
-        per=per, majors=sorted({group_major(x) for x in all_groups if group_major(x)}),
-        courses=sorted({group_course(x) for x in all_groups if group_course(x)}), week_filters=WEEK_FILTERS,
+        'schedule_all.html', page=page, grid=grid, columns=columns, focus_day=focus_day(columns, wk['today_wd']),
+        day_counts=day_counts, total_lessons=len(lessons), groups_count=len(groups), course=course, major=major,
+        week=week, day=day, q=q, per=per, hide_empty=hide_empty, marks=marks,
+        majors=sorted({group_major(x) for x in all_groups if group_major(x)}), courses=courses,
+        course_options=[(c, '%s курс' % c) for c in courses], week_filters=WEEK_FILTERS,
+        day_options=[(d, DAY_NAMES_FULL[d]) for d in range(7)],
         day_names=DAY_NAMES_FULL, day_short=DAY_SHORT, update_time=fmt_dt(now_almaty()), **wk)
 
 
@@ -1998,32 +2158,50 @@ def schedule_teachers():
     q = (request.args.get('q') or '').strip()
     day = day_param()
     week = week_param()
-    view = request.args.get('view') if request.args.get('view') in ('cards', 'table') else 'cards'
+    # по умолчанию — таблица (SCH-7); выбор запоминается (ui.segmented(remember='schedule_teachers'))
+    view = view_param('schedule_teachers', ('table', 'cards'), 'table')
+    marks, _cg, conf_teachers = conflict_marks()
+    known = get_all_teachers()
     cards = []
     total_overlap = 0
     for tkey, b in _teacher_buckets(snap, cur, key, q, day, week).items():
         ids, pairs = _overlap_ids(b['all'])
-        total_overlap += pairs
+        ids = set(ids) | {l['id'] for l in b['all'] if l['id'] in marks}
+        info = conf_teachers.get(tkey) or {}
+        conf = info.get('critical', 0) + info.get('warning', 0)
+        total_overlap += conf or pairs
         lessons = b['lessons']
+        uid = tkey[4:] if tkey.startswith('uid:') else ''
+        removed = bool(uid) and uid not in known and 'uid не найден' in b['hints']
         cards.append({
-            'key': tkey, 'name': b['name'], 'hints': b['hints'], 'lessons': lessons, 'by_day': _by_day(lessons),
+            'key': tkey, 'uid': uid, 'name': 'Удалённый преподаватель' if removed else b['name'], 'removed': removed,
+            'raw': b['name'], 'hints': [h for h in b['hints'] if not (removed and h == 'uid не найден')],
+            'lessons': lessons, 'by_day': _by_day(lessons),
             'days': Counter(l['weekday'] for l in lessons if l['weekday'] is not None),
             'overlaps': [l for l in lessons if l['id'] in ids],
             'groups': sorted({l['groupId'] for l in lessons if l['groupId']}, key=group_sort_key),
             'num': sum(1 for l in lessons if l['week'] in ('always', 'numerator')),
             'den': sum(1 for l in lessons if l['week'] in ('always', 'denominator')),
+            'current': sum(1 for l in lessons if l['week'] in ('always', cur)),
             'hours': round(_week_minutes(lessons, cur) / 60.0, 1), 'overlap_ids': ids, 'overlap_pairs': pairs,
+            'conflicts': conf or pairs, 'conflicts_critical': info.get('critical', 0),
             'today': sum(1 for l in lessons if l['weekday'] == wk['today_wd'] and lesson_is_current(l, cur)),
+            'ids': [l['id'] for l in b['all']],
         })
-    cards.sort(key=lambda c: norm_name(c['name']))
-    page = paginate_list(cards, request.args.get('page', 1), TEACHERS_PER_PAGE)
+    cards.sort(key=lambda c: (c['removed'], norm_name(c['name'])))
+    single = cards[0] if key and len(cards) == 1 else None
+    per_page = TEACHERS_PER_PAGE if view == 'cards' else TEACHERS_PER_PAGE * 2
+    page = paginate_list(cards, request.args.get('page', 1), per_page)
+    columns = [day] if day is not None else _day_columns([l for c in cards for l in c['lessons']])
     return render_template(
-        'schedule_teachers.html', page=page, teachers_count=len(cards),
+        'schedule_teachers.html', page=page, teachers_count=len(cards), single=single,
         total_lessons=sum(len(c['lessons']) for c in cards), total_overlap=total_overlap,
+        teachers_with_conflicts=sum(1 for c in cards if c['conflicts']),
         no_teacher=sum(1 for l in snap.lessons if not l['teacher_key']), teacher_options=snap.teachers(),
-        teacher=key, q=q, day=day, week=week, view=view,
-        columns=[day] if day is not None else _day_columns([l for c in cards for l in c['lessons']]),
+        teacher=key, q=q, day=day, week=week, view=view, columns=columns, marks=marks,
+        focus_day=focus_day(columns, wk['today_wd']), teacher_choices=list(known.items()),
         week_filters=WEEK_FILTERS, day_names=DAY_NAMES_FULL, day_short=DAY_SHORT,
+        day_options=[(d, DAY_NAMES_FULL[d]) for d in range(7)],
         conflicts_url=_schedule_conflicts_url(), now_minutes=_now_minutes(), update_time=fmt_dt(now_almaty()), **wk)
 
 

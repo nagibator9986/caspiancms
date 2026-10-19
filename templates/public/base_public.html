@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <meta name="theme-color" content="#FF6200">
+    <meta name="theme-color" content="#A84100">
     <meta name="format-detection" content="telephone=no">
     <title>{% block title %}Caspian College{% endblock %}</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -54,16 +54,7 @@
 {% endblock %}
 {% endblock %}
 
-<div class="cc-toasts" id="ccToasts" aria-live="polite">
-    {% for category, message in get_flashed_messages(with_categories=true) %}
-    {% set cat = 'danger' if category in ('error', 'danger') else (category if category in ('success', 'warning') else 'info') %}
-    <div class="cc-toast cc-toast--{{ cat }}" role="{{ 'alert' if cat == 'danger' else 'status' }}" data-category="{{ cat }}">
-        <i class="cc-toast__icon bi bi-{{ {'success': 'check-circle-fill', 'danger': 'exclamation-octagon-fill', 'warning': 'exclamation-triangle-fill'}.get(cat, 'info-circle-fill') }}" aria-hidden="true"></i>
-        <div class="cc-toast__text">{{ message }}</div>
-        <button type="button" class="cc-toast__close" aria-label="Закрыть"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-    </div>
-    {% endfor %}
-</div>
+{% include '_toasts.html' %}
 
 <script src="{{ static_url('js/app.js') }}"></script>
 {% block scripts %}{% endblock %}

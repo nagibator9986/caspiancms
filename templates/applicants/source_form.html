@@ -1,50 +1,57 @@
-{# Редактирование QR-источника: поля, статистика, QR-код и ссылки (APPLICANTS). #}
+{# Редактирование QR-источника: поля, статистика, QR-код и ссылки (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Источник {{ code }}{% endblock %}
 {% block page_title %}Источник {{ code }}{% endblock %}
 {% block styles %}{{ ui.css('applicants') }}{% endblock %}
 {% block content %}
-{{ ui.page_header(form.title or code, 'QR-источник ' ~ code ~ (' · создан ' ~ (created|dateonly) if created else '') ~ (' · ' ~ created_by if created_by else ''), [
-    {'label': 'К списку', 'href': url_for('applicant_sources'), 'icon': 'arrow-left', 'variant': 'light'},
-    {'label': 'Плакат', 'href': url_for('applicant_source_poster', code=code), 'icon': 'printer', 'variant': 'light', 'attrs': {'target': '_blank', 'rel': 'noopener'}},
-    {'label': 'Абитуриенты', 'href': url_for('applicants_leads', source=code), 'icon': 'people'},
-], icon='qr-code') }}
+{%- set back = back_url('applicant_sources') -%}
+{% call ui.page_header(form.title or code, 'QR-источник ' ~ code ~ (' · создан ' ~ (created|dateonly) if created else '') ~ (' · ' ~ created_by if created_by else ''), back={'href': back, 'label': 'QR-источники'}) %}
+    {{ ui.button('Плакат', href=url_for('applicant_source_poster', code=code), icon='printer', variant='light', attrs={'target': '_blank', 'rel': 'noopener'}) }}
+    {{ ui.header_menu([
+        {'label': 'Абитуриенты источника', 'href': url_for('applicants_leads', source=code), 'icon': 'people'},
+        {'label': 'Скопировать ссылку', 'href': '#', 'icon': 'link-45deg', 'attrs': {'data-copy': url, 'data-copy-message': 'Ссылка скопирована'}},
+    ]) }}
+{% endcall %}
 
 {% if stats %}
-<div class="cc-stats">
-    {{ ui.stat_card('Сканы', stats.scans, 'phone', meta=('последний ' ~ (stats.last_scan|ago)) if stats.last_scan else None) }}
-    {{ ui.stat_card('Регистрации', stats.registrations, 'person-plus', tone='success', href=url_for('applicants_leads', source=code), meta=('+' ~ stats.week ~ ' за 7 дней') if stats.week else None) }}
-    {{ ui.stat_card('Конверсия', ('%.0f%%'|format(stats.conv)) if stats.conv is not none else '—', 'funnel', tone='info', meta='регистраций от сканов') }}
-    {{ ui.stat_card('Поступили', stats.enrolled, 'mortarboard', tone='warning', meta=(stats.complete ~ ' заполнили профиль')) }}
-</div>
+{%- set sitems = [(stats.scans, stats.scans|plural('скан', 'скана', 'сканов')),
+                  {'value': stats.registrations, 'label': stats.registrations|plural('регистрация', 'регистрации', 'регистраций'), 'href': url_for('applicants_leads', source=code)}] -%}
+{%- if stats.conv is not none %}{% set _ = sitems.append({'value': '%.0f%%'|format(stats.conv), 'label': 'конверсия'}) %}{% endif -%}
+{%- if stats.week %}{% set _ = sitems.append((stats.week, 'за 7 дней')) %}{% endif -%}
+{%- if stats.enrolled %}{% set _ = sitems.append((stats.enrolled, 'поступили')) %}{% endif -%}
+{%- if stats.last_scan %}{% set _ = sitems.append({'value': '', 'label': 'последний скан ' ~ (stats.last_scan|ago)}) %}{% endif -%}
+{{ ui.summary_line(sitems) }}
 {% endif %}
 
-<div class="ap-source-edit">
-    {% call ui.card('Настройки', icon='sliders') %}
-        <form method="post" action="{{ url_for('applicant_source_edit', code=code) }}" class="row g-3" data-dirty-guard>
-            {{ ui.csrf_field() }}
-            <div class="col-12">{{ ui.field('title', 'Название', value=form.title, required=True, error=errors.title, attrs={'maxlength': 120}, classes='') }}</div>
-            <div class="col-md-6">{{ ui.field('channel', 'Канал', 'select', value=form.channel, options=channels, error=errors.channel, classes='') }}</div>
-            <div class="col-md-6">{{ ui.field('welcomeCoins', 'Приветственные коины', 'number', value=form.welcomeCoins, error=errors.welcomeCoins, attrs={'min': 0, 'max': max_welcome, 'step': 1}, help='0 — без коинов. Начисляются, только пока источник включён', classes='') }}</div>
-            <div class="col-12">{{ ui.field('note', 'Заметка', 'textarea', value=form.note, error=errors.note, rows=3, attrs={'maxlength': 500}, classes='') }}</div>
-            <div class="col-12">{{ ui.field('active', 'Источник включён', 'switch', value=form.active, help='Выключенный источник не начисляет приветственные коины, но регистрация по QR работает', classes='') }}</div>
-            <div class="col-12 d-flex flex-wrap gap-2">
-                {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-                {{ ui.button('Отмена', href=url_for('applicant_sources'), variant='light') }}
-            </div>
-        </form>
-    {% endcall %}
-
-    {% call ui.card('QR-код', icon='qr-code', subtitle='Генерируется в браузере') %}
-        <div class="ap-qr-big" data-ap-qr="{{ url }}" data-ap-qr-size="big"></div>
-        <p class="ap-qr-url"><a href="{{ url }}?preview=1" target="_blank" rel="noopener">{{ url }}</a></p>
-        <div class="d-flex flex-wrap gap-2 justify-content-center">
-            <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="svg" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-svg" aria-hidden="true"></i><span>SVG</span></button>
-            <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="png" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-png" aria-hidden="true"></i><span>PNG</span></button>
-            <button type="button" class="btn btn-light btn-sm" data-copy="{{ url }}" data-copy-message="Ссылка скопирована"><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Ссылка</span></button>
+<form method="post" action="{{ url_for('applicant_source_edit', code=code) }}" data-dirty-guard novalidate>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors(errors) }}
+            {% call ui.card('Настройки') %}
+                {{ ui.field('title', 'Название', value=form.title, required=True, error=errors.title, attrs={'maxlength': 120}) }}
+                <div class="row g-3">
+                    <div class="col-md-6">{{ ui.field('channel', 'Канал', 'select', value=form.channel, options=channels, error=errors.channel, classes='') }}</div>
+                    <div class="col-md-6">{{ ui.field('welcomeCoins', 'Приветственные коины', 'number', value=form.welcomeCoins, error=errors.welcomeCoins, attrs={'min': 0, 'max': max_welcome, 'step': 1, 'inputmode': 'numeric'}, help='0 — без коинов. Начисляются, только пока источник включён', classes='') }}</div>
+                </div>
+                {{ ui.field('note', 'Заметка', 'textarea', value=form.note, error=errors.note, rows=3, attrs={'maxlength': 500}, classes='mt-3 mb-3') }}
+                {{ ui.field('active', 'Источник включён', 'switch', value=form.active, help='Выключенный источник не начисляет приветственные коины, но регистрация по QR работает', classes='mb-0') }}
+            {% endcall %}
         </div>
-    {% endcall %}
-</div>
+        <aside class="cc-form-aside">
+            {% call ui.card('QR-код', subtitle='Генерируется в браузере') %}
+                <div class="ap-qr-big" data-ap-qr="{{ url }}" data-ap-qr-size="big"></div>
+                <p class="ap-qr-url"><a class="cc-link-quiet" href="{{ url }}?preview=1" target="_blank" rel="noopener">{{ url }}</a></p>
+                <div class="d-flex flex-wrap gap-2 justify-content-center">
+                    <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="svg" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-svg" aria-hidden="true"></i><span>SVG</span></button>
+                    <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="png" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-png" aria-hidden="true"></i><span>PNG</span></button>
+                    <button type="button" class="btn btn-light btn-sm" data-copy="{{ url }}" data-copy-message="Ссылка скопирована"><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Ссылка</span></button>
+                </div>
+            {% endcall %}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить', cancel_href=back) }}
+</form>
 {% endblock %}
 {% block scripts %}{{ ui.lib('qrcode') }}{{ ui.js('applicants') }}{% endblock %}

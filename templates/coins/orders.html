@@ -1,135 +1,139 @@
-{# Заказы мерча: выдача, отмена с возвратом коинов (возврат делает сервер), заметки, массовые действия (COINS). #}
+{# Заказы мерча — очередь выдачи: «Выдать» одной кнопкой (без модалки, тост со ссылкой «Журнал»), отмена с
+   возвратом коинов (возврат делает сервер), заметки, выбор строк и массовые действия, поиск по странице (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'coins/_macros.html' as cn with context %}
 {% block title %}Заказы мерча{% endblock %}
 {% block styles %}{{ ui.css('coins') }}{% endblock %}
 {% block scripts %}{{ ui.js('coins') }}{% endblock %}
-{% set here = request.full_path.rstrip('?') %}
 {% block content %}
-{{ ui.page_header('Заказы мерча', 'Абитуриент обменял коины на товар — коины уже списаны, товар зарезервирован. Выдайте его в приёмной или отмените: коины вернутся автоматически.', [
-    {'label': 'Экспорт CSV', 'href': url_for('coins_orders_export', **request.args), 'icon': 'download', 'variant': 'light'},
-    {'label': 'Товары', 'href': url_for('coins_shop'), 'icon': 'bag', 'variant': 'light'},
-], icon='box-seam') }}
+{%- set queue = f.status == 'reserved' -%}
+{%- set sitems = [] -%}
+{%- if kpi.reserved -%}
+{%- set _ = sitems.append({'value': kpi.reserved, 'label': kpi.reserved|plural('ждёт', 'ждут', 'ждут') ~ ' выдачи', 'tone': 'warning', 'href': url_with(status='reserved', page=None)}) -%}
+{%- if kpi.oldest %}{% set _ = sitems.append({'value': '', 'label': 'самый старый — ' ~ (kpi.oldest|ago), 'title': kpi.oldest|dt}) %}{% endif -%}
+{%- set _ = sitems.append({'value': kpi.reserved_coins, 'label': 'коинов в резерве'}) -%}
+{%- else -%}
+{%- set _ = sitems.append({'value': '', 'label': 'Очередь выдачи пуста'}) -%}
+{%- endif -%}
+{%- set _ = sitems.append({'value': kpi.issued_week, 'label': 'выдано за 7 дней', 'href': url_with(status='issued', page=None)}) -%}
+{%- if kpi.stuck %}{% set _ = sitems.append({'value': kpi.stuck, 'label': 'зависли — сервер не обработал', 'tone': 'danger', 'href': url_with(status='pending', page=None)}) %}{% endif -%}
+{{ ui.page_header('Заказы мерча', None, meta=ui.summary_line(sitems), actions=[
+    {'menu': [
+        {'label': 'Экспорт CSV', 'href': url_for('coins_orders_export', **request.args), 'icon': 'download'},
+        {'label': 'Журнал коинов', 'href': url_for('coins_journal'), 'icon': 'journal-text'},
+    ]},
+]) }}
 {{ cn.section_tabs('orders') }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Ждут выдачи', kpi.reserved, 'hourglass-split', tone='warning', meta=('на ' ~ (kpi.reserved_coins|num) ~ ' коинов') if kpi.reserved else 'очередь пуста', href=url_with(status='reserved', page=None)) }}
-    {{ ui.stat_card('Ждёт дольше всех', (kpi.oldest|ago) if kpi.oldest else '—', 'clock-history', meta=(kpi.oldest|dt) if kpi.oldest else 'нет ожидающих') }}
-    {{ ui.stat_card('Выдано за 7 дней', kpi.issued_week, 'bag-check', tone='success', meta='всего выдано: ' ~ (kpi.issued|num), href=url_with(status='issued', page=None)) }}
-    {% if kpi.stuck %}
-    {{ ui.stat_card('Зависли', kpi.stuck, 'exclamation-octagon', tone='danger', meta='сервер не обработал за 10 минут', href=url_with(status='pending', page=None)) }}
-    {% else %}
-    {{ ui.stat_card('Отменено', counts.cancelled, 'arrow-counterclockwise', tone='info', meta='коины возвращены', href=url_with(status='cancelled', page=None)) }}
-    {% endif %}
-</div>
-
-{% set tab_items = [] %}
-{% for k, label in statuses %}{% set _ = tab_items.append({'key': k, 'label': label, 'href': url_with(status=k, page=None), 'count': counts[k]}) %}{% endfor %}
-{% if counts.pending %}{% set _ = tab_items.append({'key': 'pending', 'label': 'Обрабатываются', 'href': url_with(status='pending', page=None), 'count': counts.pending}) %}{% endif %}
-{% set _ = tab_items.append({'key': 'all', 'label': 'Все', 'href': url_with(status='all', page=None)}) %}
-{{ ui.tabs(tab_items, f.status, pills=True, label='Статус заказа') }}
-
 {% if who %}
-<div class="cn-who">
-    {{ cn.person_cell(who) }}
-    <span class="cc-subtle small">— показаны заказы этого абитуриента</span>
-    <a class="btn btn-light btn-sm ms-auto" href="{{ url_with(uid=None, page=None) }}"><i class="bi bi-x-lg" aria-hidden="true"></i><span>Все абитуриенты</span></a>
-</div>
+{% call ui.hint(icon='person', tone='info') %}
+    Заказы абитуриента <b>{{ who.title }}</b>{% if who.login and who.login != who.title %} ({{ who.login }}){% endif %}.
+    <a href="{{ url_with(uid=None, page=None) }}">Все абитуриенты</a>{% if who.link %} · <a href="{{ who.link }}">Карточка</a>{% endif %}
+{% endcall %}
 {% endif %}
 
-{% call ui.filters_bar(reset=url_for('coins_orders', status=f.status)) %}
-    <input type="hidden" name="status" value="{{ f.status }}">
-    {% if f.uid %}<input type="hidden" name="uid" value="{{ f.uid }}">{% endif %}
-    {{ ui.filter_search('q', 'Поиск', f.q, 'Имя, логин, телефон, товар или № заказа') }}
-    {{ ui.filter_select('product', 'Товар', product_options, f.product, all_label='Все товары') }}
-    {{ ui.filter_select('period', 'Период', periods, f.period, all_label='Всё время') }}
-{% endcall %}
+{% if truncated %}{{ ui.hint('Показаны последние 1500 заказов и все, что ждут выдачи. Старые заказы — в экспорте журнала коинов.') }}{% endif %}
 
-{% if truncated %}<p class="cn-hint"><i class="bi bi-info-circle" aria-hidden="true"></i>Показаны последние 1500 заказов и все, что ждут выдачи. Старые заказы — в экспорте журнала коинов.</p>{% endif %}
-
-<section class="cc-card">
-    {% if page.items %}
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ filtered|num }} {{ filtered|plural('заказ', 'заказа', 'заказов') }}</h2>
-        {% if f.status == 'reserved' %}
-        <form method="post" action="{{ url_for('coins_orders_bulk') }}" id="cnOrdersBulk" class="cn-bulk" data-cn-bulk data-confirm="Применить действие к отмеченным заказам?" data-confirm-title="Массовое действие" data-confirm-ok="Применить" data-confirm-variant="primary">
-            <input type="hidden" name="next" value="{{ here }}">
-            <span class="cn-bulk__count" data-cn-bulk-count>Отмечено: 0</span>
-            <input class="form-control form-control-sm cn-bulk__note" type="text" name="note" maxlength="500" placeholder="Заметка (необязательно)" aria-label="Заметка к отмеченным заказам">
-            <button type="submit" class="btn btn-primary btn-sm" name="action" value="issue" disabled data-cn-bulk-btn><i class="bi bi-bag-check" aria-hidden="true"></i><span>Выдать</span></button>
-            <button type="submit" class="btn btn-outline-danger btn-sm" name="action" value="cancel" disabled data-cn-bulk-btn><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Отменить</span></button>
-        </form>
-        {% endif %}
+<form id="cnOrdersBulk" method="post" action="{{ url_for('coins_orders_bulk') }}" class="m-0">{{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}"></form>
+{% call ui.list_card(classes='cn-orders-card') %}
+    <div class="cn-orders-bar">
+    {%- set chips = [] -%}
+    {%- for k, label in statuses %}{% set _ = chips.append((k, label, counts[k])) %}{% endfor -%}
+    {%- if counts.pending %}{% set _ = chips.append(('pending', 'Обрабатываются', counts.pending)) %}{% endif -%}
+    {%- set _ = chips.append(('all', 'Все')) -%}
+    {{ ui.filter_chips('status', chips, f.status, all_label=None) }}
+    {% call ui.filters_bar(search={'name': 'q', 'value': f.q, 'placeholder': 'Имя, логин, телефон, товар или № заказа', 'label': 'Поиск заказов', 'filter': '#cnOrders'}, inline=True, ignore=('status', 'uid')) %}
+        {{ ui.filter_select('product', 'Товар', product_options, f.product) }}
+        {{ ui.filter_select('period', 'Период', periods, f.period, all_label='Всё время') }}
+    {% endcall %}
     </div>
+    {% if queue %}<span hidden data-cn-focus-search></span>{% endif %}
+    {% if page.items %}
     <div class="cc-table-wrap">
-        <table class="cc-table cn-orders cn-stack" id="cnOrders" data-sortable>
+        <table class="cc-table cc-table--stack cn-orders" id="cnOrders" data-sortable>
             <thead><tr>
-                {% if f.status == 'reserved' %}<th class="cn-col-check"><input class="form-check-input" type="checkbox" data-cn-check-all="#cnOrders" aria-label="Отметить все на странице"></th>{% endif %}
+                {% if queue %}<th class="cc-select">{{ ui.select_all('cnOrdersBulk', 'Выбрать все заказы на странице') }}</th>{% endif %}
                 <th data-sort="text">Заказ</th>
                 <th data-sort="text">Абитуриент</th>
-                <th class="text-end" data-sort="num">Цена</th>
-                <th class="d-none d-md-table-cell" data-sort="num">Оформлен</th>
-                <th>Статус</th>
+                <th class="cc-num-col" data-sort="num">Цена</th>
+                <th class="cc-col-md" data-sort="num">Оформлен</th>
+                <th>{{ 'Ожидает' if queue else 'Статус' }}</th>
+                {% if queue %}<th class="cn-c-issue"><span class="visually-hidden">Выдать</span></th>{% endif %}
                 <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
             </tr></thead>
             <tbody>
             {% for o in page.items %}
+            {%- set menu = [{'label': 'Заметка…', 'href': '#', 'icon': 'sticky', 'attrs': {'data-cn-note': url_for('coins_order_note', order_id=o.id), 'data-note': o.note, 'data-title': o.title ~ ' — ' ~ o.person.title}}] -%}
+            {%- if o.person.link %}{% set _ = menu.append({'label': 'Карточка абитуриента', 'href': o.person.link, 'icon': 'person-vcard'}) %}{% endif -%}
+            {%- if o.uid %}{% set _ = menu.append({'label': 'Все заказы абитуриента', 'href': url_for('coins_orders', uid=o.uid, status='all'), 'icon': 'box-seam'}) %}{% endif -%}
+            {%- if o.status == 'reserved' -%}
+            {%- set _ = menu.extend([{'divider': True}, {'label': 'Отменить заказ', 'action': url_for('coins_order_cancel', order_id=o.id), 'fields': {'next': here()}, 'icon': 'arrow-counterclockwise', 'danger': True, 'ok': 'Отменить заказ',
+                'confirm': 'Отменить заказ «' ~ o.title ~ '» — ' ~ o.person.title ~ '? ' ~ o.price ~ ' ' ~ o.price|plural('коин', 'коина', 'коинов') ~ ' вернутся абитуриенту, товар — на склад.'}]) -%}
+            {%- endif -%}
             <tr id="o-{{ o.id }}" class="{{ 'is-stuck' if o.stuck }}">
-                {% if f.status == 'reserved' %}<td class="cn-col-check cn-c-check"><input class="form-check-input" type="checkbox" name="ids" value="{{ o.id }}" form="cnOrdersBulk" data-cn-bulk-item aria-label="Отметить заказ {{ o.title }}"></td>{% endif %}
-                <td class="cn-c-order" data-value="{{ o.title }}">
+                {% if queue %}<td class="cc-select">{{ ui.select_row('cnOrdersBulk', o.id, o.title) }}</td>{% endif %}
+                <td class="cc-cell-primary cn-c-order" data-value="{{ o.title }}">
                     <div class="cn-order">
                         {{ cn.thumb(o.image) }}
                         <div class="min-w-0">
-                            <div class="cc-cell-main cn-order__title">{{ o.title }}</div>
-                            <div class="cc-cell-sub">{% if o.variant %}<span class="cn-variant">{{ o.variant }}</span> {% endif %}<span class="cn-order__id" title="Номер заказа">№ {{ o.id[:8] }}</span><span class="d-md-none"> · {{ o.created|dt }}</span></div>
+                            <div class="cc-cell-main cn-order__title">{{ o.title }}{% if o.variant %} <span class="cn-variant">{{ o.variant }}</span>{% endif %}</div>
+                            <div class="cc-cell-sub"><span class="cn-order__id" title="Номер заказа">№ {{ o.id[:8] }}</span> · {{ cn.coins(o.price) }}</div>
                         </div>
                     </div>
                 </td>
                 <td class="cn-c-person" data-value="{{ o.person.title }}">{{ cn.person_cell(o.person) }}</td>
-                <td class="text-end cc-nowrap cn-c-amount" data-value="{{ o.price }}">{{ cn.coins(o.price) }}</td>
-                <td class="d-none d-md-table-cell cc-nowrap cn-c-when" data-value="{{ o.created.timestamp() if o.created else 0 }}">
+                <td class="cc-num-col cc-nowrap cc-col-optional" data-value="{{ o.price }}">{{ cn.coins(o.price) }}</td>
+                <td class="cc-col-md cc-col-optional cc-nowrap" data-value="{{ o.created.timestamp() if o.created else 0 }}">
                     <div>{{ o.created|dt }}</div><div class="cc-cell-sub">{{ o.created|ago }}</div>
                 </td>
                 <td class="cn-c-status">
-                    {{ ui.badge(o.status) }}
+                    {% if queue %}<span class="cn-wait{{ ' is-long' if o.created and (now - o.created).days >= 3 }}" title="{{ o.created|dt }}">{{ o.created|ago }}</span>{% else %}{{ ui.badge(o.status) }}{% endif %}
                     {% if o.status == 'issued' and o.issued_at %}<div class="cc-cell-sub">{{ o.issued_at|dt }}{% if o.by %} · {{ o.by }}{% endif %}</div>{% endif %}
                     {% if o.status == 'cancelled' %}<div class="cc-cell-sub">{{ o.cancelled_at|dt }}{% if o.by %} · {{ o.by }}{% endif %}{% if o.refunded %} · коины возвращены{% endif %}</div>{% endif %}
                     {% if o.reason %}<div class="cc-cell-sub cn-reason">{{ o.reason }}</div>{% endif %}
                     {% if o.stuck %}<div class="cc-cell-sub cn-reason">не обработан сервером — проверьте функции</div>{% endif %}
                     {% if o.note %}<div class="cn-note" title="Заметка"><i class="bi bi-sticky" aria-hidden="true"></i><span>{{ o.note }}</span></div>{% endif %}
                 </td>
-                <td class="cc-actions cn-c-actions">
-                    <div class="cn-row-actions">
-                        {% if o.status == 'reserved' %}
-                        {{ ui.confirm_button(url_for('coins_order_issue', order_id=o.id), 'Выдать', 'Выдать «' ~ o.title ~ (' (' ~ o.variant ~ ')' if o.variant else '') ~ '» — ' ~ o.person.title ~ '? Проверьте логин в приложении абитуриента.', variant='primary', icon='bag-check', title='Выдача заказа', ok='Выдать', fields={'next': here ~ '#o-' ~ o.id}) }}
-                        {{ ui.confirm_button(url_for('coins_order_cancel', order_id=o.id), 'Отменить', 'Отменить заказ «' ~ o.title ~ '»? ' ~ o.price ~ ' ' ~ o.price|plural('коин', 'коина', 'коинов') ~ ' вернутся абитуриенту, товар — на склад.', icon='arrow-counterclockwise', icon_only=True, title='Отмена заказа', ok='Отменить заказ', fields={'next': here}) }}
-                        {% endif %}
-                        {{ ui.button('Заметка', icon='sticky', variant='light', size='sm', icon_only=True, attrs={'data-cn-note': url_for('coins_order_note', order_id=o.id), 'data-note': o.note, 'data-title': o.title ~ ' — ' ~ o.person.title}) }}
-                    </div>
+                {% if queue %}
+                <td class="cn-c-issue">
+                    <form method="post" action="{{ url_for('coins_order_issue', order_id=o.id) }}" class="m-0">
+                        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+                        <button type="submit" class="btn btn-light btn-sm cn-issue-btn" data-loading><i class="bi bi-bag-check" aria-hidden="true"></i><span>Выдать</span></button>
+                    </form>
                 </td>
+                {% endif %}
+                <td class="cc-actions">{{ ui.row_menu(menu, label='Действия: заказ ' ~ o.title) }}</td>
             </tr>
             {% endfor %}
+            <tr data-table-empty class="is-hidden"><td colspan="8" class="cc-table-empty">На этой странице не найдено — нажмите Enter, чтобы искать по всем заказам</td></tr>
             </tbody>
         </table>
     </div>
-    <div class="cc-card__body pt-0">{{ ui.pagination(page) }}</div>
+    {{ ui.pagination(page) }}
+    {% elif f.q or f.product or f.period or f.uid %}
+    {{ ui.empty_filtered(url_for('coins_orders', status=f.status)) }}
+    {% elif queue %}
+    {{ ui.empty_state('check2-circle', 'Все заказы выданы', 'Когда абитуриент обменяет коины на мерч, заказ появится здесь, а в сайдбаре — счётчик.', {'label': 'Открыть магазин', 'href': url_for('coins_shop'), 'icon': 'bag'}) }}
     {% else %}
-        {% if f.q or f.product or f.period or f.uid %}
-        {{ ui.empty_state('search', 'Ничего не найдено', 'Измените поиск или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('coins_orders', status=f.status), 'variant': 'light'}) }}
-        {% elif f.status == 'reserved' %}
-        {{ ui.empty_state('check2-circle', 'Все заказы выданы', 'Когда абитуриент обменяет коины на мерч, заказ появится здесь, а в сайдбаре — счётчик.', {'label': 'Открыть магазин', 'href': url_for('coins_shop'), 'icon': 'bag', 'variant': 'light'}) }}
-        {% else %}
-        {{ ui.empty_state('inbox', 'Заказов нет', 'В этом статусе пока ничего нет.') }}
-        {% endif %}
+    {{ ui.empty_state('inbox', 'Заказов нет', 'В этом статусе пока ничего нет.') }}
     {% endif %}
-</section>
+{% endcall %}
+
+{% if queue %}
+{% call ui.bulkbar('cnOrdersBulk', noun=('заказ', 'заказа', 'заказов')) %}
+    <label class="visually-hidden" for="cnBulkNote">Заметка к выбранным заказам</label>
+    <input class="form-control form-control-sm cn-bulk-note" type="text" id="cnBulkNote" name="note" form="cnOrdersBulk" maxlength="500" placeholder="Заметка (необязательно)">
+    <button type="submit" class="btn btn-light btn-sm" form="cnOrdersBulk" name="action" value="issue" data-confirm="Выдать {items}?" data-confirm-variant="primary" data-confirm-ok="Выдать"><i class="bi bi-bag-check" aria-hidden="true"></i><span>Выдать</span></button>
+    <button type="submit" class="btn btn-outline-danger btn-sm" form="cnOrdersBulk" name="action" value="cancel" data-confirm="Отменить {items}? Коины вернутся абитуриентам, товары — на склад." data-confirm-ok="Отменить заказы"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Отменить</span></button>
+{% endcall %}
+{% endif %}
 
 {# Модалка «Заметка к заказу» (видна только админам) #}
 <div class="modal fade" id="cnNoteModal" tabindex="-1" aria-labelledby="cnNoteTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <form class="modal-content" method="post" action="#" data-cn-note-form>
-            <input type="hidden" name="next" value="{{ here }}">
+            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
             <div class="modal-header">
                 <h2 class="modal-title" id="cnNoteTitle">Заметка к заказу</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
@@ -137,7 +141,7 @@
             <div class="modal-body">
                 <p class="cc-muted small" data-cn-note-name></p>
                 <label class="form-label" for="cnNoteText">Текст (видят только администраторы)</label>
-                <textarea class="form-control" id="cnNoteText" name="note" rows="4" maxlength="500" placeholder="Например: придёт за худи в пятницу; размер уточнить"></textarea>
+                <textarea class="form-control" id="cnNoteText" name="note" rows="4" maxlength="500" placeholder="Например: придёт за худи в пятницу; размер уточнить" data-cc-ctrl-enter></textarea>
                 <div class="form-text">До 500 символов. Пустая заметка — удалить.</div>
             </div>
             <div class="modal-footer">

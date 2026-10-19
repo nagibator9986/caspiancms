@@ -1,49 +1,60 @@
-{# Товары (магазин в тенге, коллекция products — экран «Магазин» студента) (CONTENT). #}
+{# Товары колледжа (магазин в тенге, коллекция products — экран «Магазин» студента) (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
-{% block title %}Товары{% endblock %}
+{% block title %}Товары колледжа{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-{{ ui.page_header('Товары', 'Каталог в тенге для студентов: заказ уходит продавцу по ссылке или в WhatsApp. Мерч за коины — в разделе Caspian Coin.', [
-    {'label': 'Магазин коинов', 'href': nav_url('coins_shop'), 'icon': 'coin', 'variant': 'light'},
-    {'label': 'Добавить товар', 'href': url_for('product_form'), 'icon': 'plus-lg'},
-], icon='cart') }}
+{{ ui.page_header('Товары колледжа', 'Каталог в тенге для студентов: заказ уходит продавцу по ссылке или в WhatsApp.', [
+    {'label': 'Добавить товар', 'href': url_for('product_form', next=here()), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Название товара') }}
-{% endcall %}
+{% if total %}{{ ui.summary_line([(total, plural(total, 'товар', 'товара', 'товаров') ~ ' в магазине приложения')]) }}{% endif %}
 
-{% if page.total %}
-{% call ui.data_table('productsTable', title=page.total ~ ' ' ~ page.total|plural('товар', 'товара', 'товаров')) %}
-<table class="cc-table" id="productsTable" data-sortable>
-    <thead><tr><th data-sort="text">Товар</th><th data-sort="num" class="text-end">Цена</th><th class="d-none d-lg-table-cell">Варианты</th><th class="d-none d-md-table-cell">Ссылка</th><th class="d-none d-md-table-cell" data-sort="text">Обновлён</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
-    <tbody>
-    {% for p in page.items %}
-    <tr data-href="{{ url_for('product_form', product_id=p.id) }}">
-        <td>
-            <div class="ct-item ct-main-col">
-                <span class="ct-cover ct-cover--sm">{% if p.imageUrl %}<img src="{{ p.imageUrl|safe_url }}" alt="" width="44" height="44" loading="lazy" decoding="async">{% else %}<i class="bi bi-box" aria-hidden="true"></i>{% endif %}</span>
-                <div class="cc-cell-main ct-clamp-2">{{ p.name or 'Без названия' }}</div>
-            </div>
-        </td>
-        <td class="text-end cc-num cc-nowrap" data-value="{{ p.price_num }}">{{ p.price_num|num }} ₸</td>
-        <td class="d-none d-lg-table-cell">{{ p.variant_summary or '—' }}</td>
-        <td class="d-none d-md-table-cell">{% if p.url %}<a href="{{ p.url|safe_url }}" target="_blank" rel="noopener noreferrer" class="ct-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Открыть</a>{% else %}<span class="cc-muted">—</span>{% endif %}</td>
-        <td class="d-none d-md-table-cell cc-nowrap" data-value="{{ (p.updatedAt or p.createdAt)|dt('%Y%m%d%H%M', '') }}">{{ (p.updatedAt or p.createdAt)|dateonly }}</td>
-        <td class="cc-actions">
-            {{ ui.button('Редактировать', href=url_for('product_form', product_id=p.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
-            {{ ui.confirm_button(url_for('product_delete', product_id=p.id), 'Удалить', 'Удалить товар «' ~ (p.name or '') ~ '»?', fields={'next': request.full_path}, icon_only=True) }}
-        </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-</table>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Название товара', 'label': 'Поиск по товарам'}, inline=True) %}{% endcall %}
+    {% if page.total %}
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--stack ct-table" id="productsTable" data-sortable>
+            <thead><tr>
+                <th data-sort="text">Товар</th>
+                <th data-sort="num" class="cc-num-col">Цена</th>
+                <th class="cc-col-lg">Варианты</th>
+                <th class="cc-col-md">Ссылка</th>
+                <th class="cc-col-md" data-sort="text">Обновлён</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for p in page.items %}
+            {%- set edit = url_for('product_form', product_id=p.id, next=here()) -%}
+            <tr data-href="{{ edit }}">
+                <td class="cc-cell-primary">
+                    <div class="ct-item">
+                        <span class="ct-cover ct-cover--sm">{% if p.imageUrl %}<img src="{{ p.imageUrl|safe_url }}" alt="" width="44" height="44" loading="lazy" decoding="async">{% else %}<i class="bi bi-box" aria-hidden="true"></i>{% endif %}</span>
+                        <a class="cc-row-link cc-cell-main ct-clamp-2" href="{{ edit }}">{{ p.name or 'Без названия' }}</a>
+                    </div>
+                </td>
+                <td class="cc-num-col cc-num cc-nowrap" data-label="Цена" data-value="{{ p.price_num }}">{{ p.price_num|num }} ₸</td>
+                <td class="cc-col-lg cc-col-optional">{{ p.variant_summary or '—' }}</td>
+                <td class="cc-col-md cc-col-optional">{% if p.url %}<a href="{{ p.url|safe_url }}" target="_blank" rel="noopener noreferrer" class="cc-link-quiet cc-nowrap"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Открыть</a>{% else %}<span class="cc-muted" title="Заказ уходит в WhatsApp">WhatsApp</span>{% endif %}</td>
+                <td class="cc-col-md cc-col-optional cc-nowrap" data-value="{{ (p.updatedAt or p.createdAt)|dt('%Y%m%d%H%M', '') }}">{{ (p.updatedAt or p.createdAt)|dateonly }}</td>
+                <td class="cc-actions">{{ ui.row_menu([
+                    {'label': 'Редактировать', 'href': edit, 'icon': 'pencil'},
+                    ({'label': 'Открыть ссылку', 'href': p.url|safe_url, 'icon': 'box-arrow-up-right', 'attrs': {'target': '_blank', 'rel': 'noopener noreferrer'}} if p.url else {'header': 'Заказ — через WhatsApp'}),
+                    {'divider': True},
+                    {'label': 'Удалить', 'action': url_for('product_delete', product_id=p.id), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                     'confirm': 'Удалить товар «' ~ (p.name or '') ~ '»? Из магазина приложения он тоже пропадёт.'},
+                ], quick={'label': 'Редактировать', 'href': edit, 'icon': 'pencil'}) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ ui.pagination(page) }}
+    {% elif total %}
+    {{ ui.empty_filtered(url_for('products')) }}
+    {% else %}
+    {{ ui.empty_state('cart', 'Товаров пока нет', 'Добавьте товар — он появится в магазине приложения.') }}
+    {% endif %}
 {% endcall %}
-{{ ui.pagination(page) }}
-{% elif total %}
-<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос.', {'label': 'Все товары', 'href': url_for('products'), 'variant': 'light'}) }}</section>
-{% else %}
-<section class="cc-card">{{ ui.empty_state('cart', 'Товаров пока нет', 'Добавьте товар — он появится в магазине приложения.', {'label': 'Добавить товар', 'href': url_for('product_form'), 'icon': 'plus-lg'}) }}</section>
-{% endif %}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

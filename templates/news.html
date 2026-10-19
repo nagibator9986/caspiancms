@@ -1,87 +1,88 @@
-{# Новости: список с фильтрами, поиском, пагинацией и массовым удалением (CONTENT). #}
+{# Новости: список с поиском, фильтрами-пилюлями, строками-ссылками, меню ⋯ и массовым удалением (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Новости{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-{{ ui.page_header('Новости', 'Лента в приложении студентов и преподавателей. При публикации приложение само рассылает уведомление.', [
-    {'label': 'Новости абитуриентов', 'href': nav_url('applicant_news'), 'icon': 'megaphone', 'variant': 'light'},
-    {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg'},
-], icon='newspaper') }}
+{{ ui.page_header('Новости', 'Лента в приложении студентов и преподавателей. При публикации приложение рассылает уведомление.', [
+    {'label': 'Добавить новость', 'href': url_for('news_form', next=here()), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Всего новостей', stats.total, 'newspaper', href=url_for('news')) }}
-    {{ ui.stat_card('За 30 дней', stats.month, 'calendar-week', tone='info') }}
-    {{ ui.stat_card('С фото', stats.with_photo, 'images', tone='success', meta=(pct(stats.with_photo, stats.total) ~ ' от всех') if stats.total else None) }}
-    {{ ui.stat_card('Только студентам', stats.students, 'backpack', tone='violet', href=url_for('news', audience='students')) }}
-</div>
+{% if stats.total %}
+{{ ui.summary_line([
+    (stats.total, plural(stats.total, 'новость', 'новости', 'новостей')),
+    (stats.month, 'за 30 дней'),
+    (stats.with_photo, 'с фото'),
+]) }}
+{% endif %}
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Заголовок или текст') }}
-    {{ ui.filter_select('category', 'Категория', categories, request.args.get('category')) }}
-    {{ ui.filter_select('audience', 'Аудитория', audiences, request.args.get('audience')) }}
-    {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], request.args.get('photo')) }}
-{% endcall %}
-
-{% if page.total %}
-<form id="newsBulk" method="post" action="{{ url_for('news_bulk') }}" class="d-none">
-    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+<form id="newsBulk" method="post" action="{{ url_for('news_bulk') }}" hidden>
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
 </form>
-<section class="cc-card">
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ filtered }} {{ filtered|plural('новость', 'новости', 'новостей') }}{% if filtered != stats.total %} <span class="cc-muted fw-normal">из {{ stats.total }}</span>{% endif %}</h2>
-        <div class="ct-bulk" data-ct-bulk="newsBulk" hidden>
-            <span class="cc-muted small">Выбрано: <b data-ct-bulk-count>0</b></span>
-            <button type="submit" form="newsBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger"
-                    data-confirm="Удалить выбранные новости вместе с фото? Действие нельзя отменить." data-confirm-ok="Удалить">
-                <i class="bi bi-trash" aria-hidden="true"></i><span>Удалить выбранные</span>
-            </button>
-        </div>
-    </div>
+
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Заголовок или текст', 'label': 'Поиск по новостям'}, inline=True) %}
+        {{ ui.filter_select('category', 'Категория', categories, category) }}
+        {{ ui.filter_select('audience', 'Аудитория', audiences, audience) }}
+        {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], photo) }}
+    {% endcall %}
+    {% if page.total %}
     <div class="cc-table-wrap">
-        <table class="cc-table" id="newsTable">
+        <table class="cc-table cc-table--stack ct-table" id="newsTable">
             <thead><tr>
-                <th class="ct-check"><input class="form-check-input" type="checkbox" data-ct-check-all="newsBulk" aria-label="Выбрать все новости на странице"></th>
-                <th>Новость</th><th class="d-none d-md-table-cell">Категория</th><th class="d-none d-lg-table-cell">Аудитория</th><th>Опубликована</th>
+                <th class="cc-select">{{ ui.select_all('newsBulk', 'Выбрать все новости на странице') }}</th>
+                <th>Новость</th>
+                <th>Категория</th>
+                <th class="cc-col-lg">Аудитория</th>
+                <th>Опубликована</th>
                 <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
             </tr></thead>
             <tbody>
             {% for n in page.items %}
-                <tr data-href="{{ url_for('news_form', news_id=n.id) }}">
-                    <td class="ct-check"><input class="form-check-input" type="checkbox" name="ids" value="{{ n.id }}" form="newsBulk" aria-label="Выбрать «{{ n.title }}»"></td>
-                    <td>
-                        <div class="ct-item ct-main-col">
+            {%- set edit = url_for('news_form', news_id=n.id, next=here()) -%}
+                <tr data-href="{{ edit }}">
+                    <td class="cc-select">{{ ui.select_row('newsBulk', n.id, n.title) }}</td>
+                    <td class="cc-cell-primary">
+                        <div class="ct-item">
                             <span class="ct-cover">
                                 {% if n.cover %}<img src="{{ n.cover|safe_url }}" alt="" width="72" height="54" loading="lazy" decoding="async">
                                 {% else %}<i class="bi bi-image" aria-hidden="true"></i>{% endif %}
-                                {% if n.photos > 1 %}<span class="ct-cover__count" title="Фото в карусели"><i class="bi bi-images" aria-hidden="true"></i>{{ n.photos }}</span>{% endif %}
+                                {% if n.photos > 1 %}<span class="ct-cover__count" title="Фото в карусели: {{ n.photos }}"><i class="bi bi-images" aria-hidden="true"></i>{{ n.photos }}</span>{% endif %}
                             </span>
                             <div class="min-w-0">
-                                <div class="cc-cell-main ct-clamp-1">{{ n.title }}</div>
-                                {% if n.summary %}<div class="cc-cell-sub ct-clamp-2">{{ n.summary[:220] }}</div>{% endif %}
-                                <div class="cc-cell-sub d-md-none">{{ n.category_label }}{% if n.audience != 'all' %} · {{ n.audience_label }}{% endif %}</div>
+                                <a class="cc-row-link cc-cell-main ct-clamp-2" href="{{ edit }}">{{ n.title }}</a>
+                                {% if n.summary %}<div class="cc-cell-sub ct-clamp-1 ct-hide-stack">{{ n.summary[:220] }}</div>{% endif %}
                             </div>
                         </div>
                     </td>
-                    <td class="d-none d-md-table-cell">{{ ui.badge(n.category, n.category_label, {'academic': 'info', 'sports': 'success', 'cultural': 'violet', 'curator': 'brand'}.get(n.category, 'neutral'), icon='') }}</td>
-                    <td class="d-none d-lg-table-cell">{{ ui.badge(n.audience, n.audience_label, 'neutral' if n.audience == 'all' else 'info', icon={'all': 'people', 'students': 'backpack', 'teachers': 'person-badge'}[n.audience]) }}</td>
-                    <td class="cc-nowrap"><div title="{{ n.createdAt|dt }}">{{ n.createdAt|dateonly }}</div><div class="cc-cell-sub">{{ n.createdAt|ago }}</div></td>
-                    <td class="cc-actions">
-                        {{ ui.button('Редактировать', href=url_for('news_form', news_id=n.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
-                        {{ ui.confirm_button(url_for('news_delete', news_id=n.id), 'Удалить', 'Удалить новость «' ~ n.title ~ '» вместе с фото?', fields={'next': request.full_path}, icon_only=True) }}
-                    </td>
+                    <td class="cc-cell-meta ct-plain-stack">{{ ui.badge('category', n.category_label, 'outline', icon='') }}</td>
+                    <td class="cc-cell-meta cc-col-lg">{{ n.audience_label }}</td>
+                    <td class="cc-cell-meta cc-nowrap"><span title="{{ n.createdAt|dt }}">{{ n.createdAt|dateonly }}</span><div class="cc-cell-sub ct-hide-stack">{{ n.createdAt|ago }}</div></td>
+                    <td class="cc-actions">{{ ui.row_menu([
+                        {'label': 'Редактировать', 'href': edit, 'icon': 'pencil'},
+                        {'divider': True},
+                        {'label': 'Удалить', 'action': url_for('news_delete', news_id=n.id), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                         'confirm': 'Удалить новость «' ~ n.title ~ '» вместе с фото? Из приложения она тоже пропадёт.'},
+                    ], quick={'label': 'Редактировать', 'href': edit, 'icon': 'pencil'}) }}</td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
     </div>
-</section>
-{{ ui.pagination(page) }}
-{% if truncated %}<p class="cc-subtle small mt-2">Поиск и фильтры работают по последним 1000 новостям.</p>{% endif %}
-{% elif stats.total %}
-<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('news'), 'variant': 'light', 'icon': 'x-lg'}) }}</section>
-{% else %}
-<section class="cc-card">{{ ui.empty_state('newspaper', 'Новостей пока нет', 'Опубликуйте первую новость — она появится в ленте приложения, а студенты получат уведомление.', {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg'}) }}</section>
-{% endif %}
+    {{ ui.pagination(page) }}
+    {% if truncated %}<div class="cc-list__foot cc-subtle small">Поиск и фильтры работают по последним 1000 новостям.</div>{% endif %}
+    {% elif stats.total %}
+    {{ ui.empty_filtered(url_for('news')) }}
+    {% else %}
+    {{ ui.empty_state('newspaper', 'Новостей пока нет', 'Опубликуйте первую новость — она появится в ленте приложения, а студенты получат уведомление.') }}
+    {% endif %}
+{% endcall %}
+
+{% call ui.bulkbar('newsBulk', noun=('новость', 'новости', 'новостей')) %}
+    <button type="submit" form="newsBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger"
+            data-confirm="Удалить {items} вместе с фото? Из приложения они тоже пропадут." data-confirm-ok="Удалить">
+        <i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span>
+    </button>
+{% endcall %}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

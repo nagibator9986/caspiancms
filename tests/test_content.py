@@ -499,6 +499,11 @@ class FeedbackTest(CmsTestCase):
     def test_list_filters(self):
         html = self.get_ok('/feedback')
         self.assertIn('Можно ли перенести пересдачу по математике?', html)
+        # входящие: без параметров — только «Новые» (в сиде их 3), отвеченное не показывается; «Все» — явный status=all
+        self.assertNotIn('Не работает Wi-Fi на 3 этаже.', html)
+        html = self.get_ok('/feedback?status=all')
+        self.assertIn('Не работает Wi-Fi на 3 этаже.', html)
+        self.assertIn('Можно ли перенести пересдачу по математике?', html)
         html = self.get_ok('/feedback?status=answered')
         self.assertIn('Не работает Wi-Fi на 3 этаже.', html)
         self.assertNotIn('Можно ли перенести пересдачу', html)
@@ -574,3 +579,268 @@ class XssTest(CmsTestCase):
             with self.subTest(url=url):
                 html = self.get_ok(url)
                 self.assertNotIn(payload, html)
+
+
+# ==================== UX v2 (UX_SPEC_v2 §5.3: CNT-1…CNT-9) ====================
+
+def _main(html):
+    """Только содержимое страницы (без сайдбара: в нём те же слова, что и в контенте)."""
+    start = html.find('<main id="cc-main"')
+    end = html.find('</main>', start)
+    return html[start:end] if start != -1 else html
+
+
+def _actions(flashes):
+    """Действия тостов flash_action(): [dict] из служебных ('cc-action', json)."""
+    return [json.loads(m) for c, m in flashes if c == 'cc-action']
+
+
+class NewsUxTest(CmsTestCase):
+    fresh_seed_each_test = True
+
+    def test_list_patterns_and_legacy_categories(self):
+        html = self.get_ok('/news')
+        main = _main(html)
+        # CNT-1: старые ключи категорий — по-русски и нейтрально (outline), без «сырых» events/achievements
+        self.assertIn('Достижения', main)
+        self.assertIn('Общее', main)
+        self.assertNotIn('cc-badge--outline">achievements', main)
+        self.assertNotIn('cc-badge--info', main)
+        # одна основная кнопка (n), сводка вместо KPI, массовые действия — общая панель, строка-ссылка с next
+        header = main[:main.find('cc-list')]   # шапка страницы (в шторке фильтров на телефоне — своя «Показать»)
+        self.assertEqual(header.count('btn-primary'), 1)
+        self.assertIn('data-cc-hotkey="n"', header)
+        self.assertIn('cc-summary', main)
+        self.assertNotIn('cc-stat__value', main)
+        self.assertIn('data-cc-bulkbar="newsBulk"', main)
+        self.assertNotIn('ct-bulk', main)
+        self.assertIn('/news/edit/news_open_day?next=', main)
+        self.assertNotIn('Новости абитуриентов', main)  # перекрёстная кнопка убрана (раздел второстепенный)
+        # фильтр по старой категории есть в списке вариантов и работает
+        self.assertIn('value="achievements"', main)
+        html = _main(self.get_ok('/news?category=achievements'))
+        self.assertIn('призёры хакатона', html)
+        self.assertNotIn('Методический совет', html)
+        # «не нашлось» отличается от «пусто»
+        self.assertIn('Ничего не найдено по фильтрам', _main(self.get_ok('/news?q=несуществующее-слово')))
+
+    def test_form_legacy_category_label_and_layout(self):
+        html = self.get_ok('/news/edit/news_open_day?next=/news%3Fcategory%3Devents')
+        self.assertIn('События (старая категория)', html)
+        self.assertNotIn('events (старая категория)', html)
+        self.assertIn('cc-form-layout', html)
+        self.assertIn('data-cc-savebar', html)
+        self.assertIn('name="next" value="/news?category=events"', html)
+        self.assertIn('data-cc-back', html)
+        # фото — сразу после текста, до категории
+        self.assertLess(html.find('name="content"'), html.find('data-cc-uploader'))
+        self.assertLess(html.find('data-cc-uploader'), html.find('name="category"'))
+        # новая новость: подтверждение публикации с аудиторией уведомления и черновик в браузере
+        html = self.get_ok('/news/add')
+        self.assertIn('data-ct-publish-confirm', html)
+        self.assertIn('data-cc-draft="news:new"', html)
+        self.assertIn('все пользователи приложения', html)
+
+    def test_create_returns_to_list_with_open_action(self):
+        r = self.post('/news/add', {'title': 'Тост с действием', 'content': 'Текст', 'category': 'academic',
+                                    'target_audience': 'students', 'next': '/news?audience=students'})
+        self.assertRedirectsTo(r, '/news?audience=students')
+        nid = self.docs('news', title='Тост с действием')[0]['id']
+        self.assertIn(('success', 'Новость опубликована — приложение пришлёт уведомление'), self.flashes())
+        self.assertEqual(_actions(self.flashes()), [{'label': 'Открыть', 'href': '/news/edit/%s' % nid}])
+
+    def test_edit_returns_to_filtered_list_and_rejects_foreign_next(self):
+        data = {'title': 'День открытых дверей 25 октября', 'content': 'x', 'category': 'academic', 'target_audience': 'all'}
+        r = self.post('/news/edit/news_open_day', dict(data, next='/news?category=events&page=1'))
+        self.assertRedirectsTo(r, '/news?category=events&page=1')
+        r = self.post('/news/edit/news_open_day', dict(data, next='https://evil.example/x'))
+        self.assertRedirectsTo(r, '/news')
+        self.assertNotIn('evil', r.headers['Location'])
+
+    def test_delete_from_menu_returns_to_list(self):
+        r = self.post('/news/delete/news_schedule', {'next': '/news?photo=without'})
+        self.assertRedirectsTo(r, '/news?photo=without')
+        self.assertIsNone(self.doc('news', 'news_schedule'))
+
+
+class PollsUxTest(CmsTestCase):
+    fresh_seed_each_test = True
+
+    def test_list_chips_and_menu(self):
+        main = _main(self.get_ok('/polls'))
+        self.assertIn('cc-chips', main)
+        self.assertEqual(main[:main.find('cc-list')].count('btn-primary'), 1)
+        self.assertIn('/poll/poll_canteen/close', main)      # «Завершить» — в меню ⋯ без модалки
+        self.assertIn('/poll/poll_club/extend', main)
+        self.assertIn('/polls/poll_canteen/edit?next=', main)
+        main = _main(self.get_ok('/polls?status=finished'))
+        self.assertIn('Какой клуб открыть?', main)
+        self.assertNotIn('Оцените работу столовой', main)
+
+    def test_close_has_undo_that_restores_end_time(self):
+        before = self.doc('polls', 'poll_canteen')['endTime']
+        r = self.post('/poll/poll_canteen/close', {'next': '/polls?status=active'})
+        self.assertRedirectsTo(r, '/polls?status=active')
+        self.assertLess(self.doc('polls', 'poll_canteen')['endTime'], before)
+        action = _actions(self.flashes())[-1]
+        self.assertEqual(action['label'], 'Отменить')
+        self.assertEqual(action['post'], '/poll/poll_canteen/end')
+        self.assertEqual(action['fields']['next'], '/polls?status=active')
+        r = self.post(action['post'], action['fields'])
+        self.assertRedirectsTo(r, '/polls?status=active')
+        restored = self.doc('polls', 'poll_canteen')['endTime']
+        self.assertLess(abs((restored - before).total_seconds()), 1)
+
+    def test_extend_undo_and_set_end_validation(self):
+        self.post('/poll/poll_club/extend', {'days': '3'})
+        action = _actions(self.flashes())[-1]
+        self.post(action['post'], action['fields'])
+        self.assertLess(self.doc('polls', 'poll_club')['endTime'], datetime.now(timezone.utc))
+        # без срока → 'none'; мусор не меняет срок
+        self.post('/poll/poll_club/end', {'end': 'none'})
+        self.assertIsNone(self.doc('polls', 'poll_club')['endTime'])
+        self.post('/poll/poll_club/end', {'end': 'вчера'})
+        self.assertIsNone(self.doc('polls', 'poll_club')['endTime'])
+        self.assertEqual(self.client.get('/poll/poll_club/end').status_code, 405)
+
+    def test_results_voters_known_or_unknown(self):
+        # CNT-7: голоса есть, списка голосовавших нет → «неизвестно», а не «0»; KPI «Вариантов» убран
+        main = _main(self.get_ok('/poll/poll_canteen/results'))
+        self.assertIn('Проголосовали: неизвестно (анонимный опрос)', main)
+        self.assertNotIn('Вариантов', main)
+        self.assertIn('41', main)
+        # неанонимный: «N из M (X%)», M — пользователи аудитории (студенты + преподаватели)
+        from cms.core import cache
+        cache.invalidate('content:audience')
+        users = self.docs('users')
+        eligible = sum(1 for u in users if u.get('role') in ('student', 'teacher'))
+        from cms.core import fmt_num, fmt_pct
+        main = _main(self.get_ok('/poll/poll_club/results'))
+        self.assertGreater(eligible, 0)
+        self.assertIn('из %s проголосовали (%s)' % (fmt_num(eligible), fmt_pct(1, eligible)), main)
+
+    def test_create_toast_links_results(self):
+        r = self.post('/polls/new', {'title': 'Опрос с тостом', 'target_audience': 'all', 'poll_type': 'single',
+                                     'options': ['Да', 'Нет'], 'next': '/polls?status=active'})
+        self.assertRedirectsTo(r, '/polls?status=active')
+        pid = self.docs('polls', title='Опрос с тостом')[0]['id']
+        actions = _actions(self.flashes())
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]['label'], 'Результаты')
+        self.assertTrue(actions[0]['href'].endswith('/%s/results' % pid), actions[0])
+
+
+class EventsClubsProductsUxTest(CmsTestCase):
+    fresh_seed_each_test = True
+
+    def test_events_list_without_kpi_and_with_menu(self):
+        main = _main(self.get_ok('/events'))
+        self.assertNotIn('cc-stat__value', main)
+        self.assertIn('cc-chips', main)
+        self.assertIn('/events/remind/ev_openday', main)     # «Напомнить» в меню ⋯ (с подтверждением и аудиторией)
+        self.assertIn('Уведомление получат участники: 2', main)
+        self.assertIn('/events/recount/ev_openday', main)
+
+    def test_event_create_toast_and_remind_back_to_list(self):
+        r = self.post('/events/add', {'title': 'Субботник', 'date': '2026-11-07', 'time': '10:00', 'location': 'Двор',
+                                      'organizer': '', 'description': ''})
+        self.assertRedirectsTo(r, '/events')
+        eid = self.docs('events', title='Субботник')[0]['id']
+        self.assertEqual(_actions(self.flashes()), [{'label': 'Участники', 'href': '/events/registrations/%s' % eid}])
+        r = self.post('/events/remind/ev_openday', {'next': '/events?when=upcoming'})
+        self.assertRedirectsTo(r, '/events?when=upcoming')
+        r = self.post('/events/recount/ev_openday', {'next': '/events'})
+        self.assertRedirectsTo(r, '/events')
+
+    def test_registrations_page_patterns(self):
+        main = _main(self.get_ok('/events/registrations/ev_openday'))
+        self.assertIn('data-cc-filter="#regsTable"', main)
+        self.assertIn('ctRemind', main)
+        self.assertNotIn('cc-stat__value', main)
+        # без участников некого уведомлять — кнопки «Написать участникам» нет
+        self.assertNotIn('ctRemind', _main(self.get_ok('/events/registrations/ev_sport')))
+
+    def test_clubs_without_contradicting_kpi(self):
+        main = _main(self.get_ok('/clubs'))
+        self.assertNotIn('Творчество и IT', main)
+        self.assertNotIn('cc-stat__value', main)
+        self.assertIn('data-cc-filter="#clubGrid"', main)
+        main = _main(self.get_ok('/clubs?category=tech'))
+        self.assertIn('Робототехника', main)
+        self.assertNotIn('Дебатный клуб', main)
+        r = self.post('/clubs/add', {'title': 'Хор', 'category': 'creative', 'description': '', 'meetingTime': '',
+                                     'location': '', 'curator': '', 'next': '/clubs?category=creative'})
+        self.assertRedirectsTo(r, '/clubs?category=creative')
+        cid = self.docs('clubs', title='Хор')[0]['id']
+        self.assertEqual(_actions(self.flashes()), [{'label': 'Участники', 'href': '/clubs/registrations/%s' % cid}])
+
+    def test_products_title_and_no_coins_link(self):
+        main = _main(self.get_ok('/products'))
+        self.assertIn('<h1>Товары колледжа</h1>', main)
+        self.assertNotIn('Магазин коинов', main)
+        self.assertNotIn('/coins/', main)
+        self.assertIn('/products/edit/p_badge?next=', main)
+
+
+class FeedbackInboxTest(CmsTestCase):
+    fresh_seed_each_test = True
+
+    def test_urgent_pinned_and_waiting_order(self):
+        main = _main(self.get_ok('/feedback'))
+        # «Линия доверия» / анонимное / тревожные слова — «Срочно» и наверху; дальше — кто дольше ждёт
+        self.assertIn('Срочно', main)
+        bullying = main.find('Хочу сообщить о буллинге')
+        canteen = main.find('мало вегетарианских')
+        retake = main.find('Можно ли перенести пересдачу')
+        self.assertTrue(0 < bullying < canteen < retake, (bullying, canteen, retake))
+        self.assertIn('ждёт 2 дн.', main)
+        self.assertIn('data-cc-ctrl-enter', main)
+        self.assertIn('data-ct-template=', main)                     # шаблоны ответа
+        self.assertNotIn('ct-fb--new', main)                         # без цветных рамок — статус только бейджем
+        self.assertEqual(main[:main.find('cc-list')].count('btn-primary'), 0)   # основная — только «Отправить» в ответе
+
+    def test_urgent_keywords_normalized(self):
+        from cms import routes_content as rc
+        self.assertTrue(rc._feedback_urgency({'topic': 'Учёба', 'message': 'Меня ТРАВЯТ… это травля'}))
+        self.assertTrue(rc._feedback_urgency({'topic': 'Другое', 'message': 'Угрозы в чате'}))
+        self.assertTrue(rc._feedback_urgency({'topic': 'Другое', 'message': 'x', 'anonymousVisual': True}))
+        self.assertIsNone(rc._feedback_urgency({'topic': 'Столовая', 'message': 'Мало блюд'}))
+
+    def test_default_is_all_when_no_new_or_when_searching(self):
+        main = _main(self.get_ok('/feedback?q=Wi-Fi'))      # поиск идёт по всем статусам
+        self.assertIn('Не работает Wi-Fi', main)
+        from cms.core import cache, db
+        for k in range(3):
+            db.collection('feedback').document('fb_%d' % k).update({'status': 'closed'})
+        cache.invalidate('content:feedback')
+        main = _main(self.get_ok('/feedback'))
+        self.assertIn('Не работает Wi-Fi', main)            # новых нет — открываются все
+        self.assertIn('Все обращения разобраны', main)
+
+    def test_close_without_confirm_and_undo(self):
+        main = _main(self.get_ok('/feedback'))
+        form_start = main.find('action="/feedback/status/fb_0"')
+        self.assertNotIn('data-confirm', main[main.rfind('<form', 0, form_start):form_start + 200])
+        r = self.post('/feedback/status/fb_0', {'status': 'closed', 'next': '/feedback?topic=%D0%A3%D1%87%D1%91%D0%B1%D0%B0'})
+        self.assertRedirectsTo(r, '/feedback?topic=')
+        self.assertEqual(self.doc('feedback', 'fb_0')['status'], 'closed')
+        action = _actions(self.flashes())[-1]
+        self.assertEqual((action['label'], action['post'], action['fields']['status']), ('Отменить', '/feedback/status/fb_0', 'new'))
+        self.post(action['post'], action['fields'])
+        self.assertEqual(self.doc('feedback', 'fb_0')['status'], 'new')
+        self.assertTrue(self.audit_entries('status'))
+
+    def test_bulk_close_undo_restores_each_status(self):
+        r = self.post('/feedback/bulk', {'action': 'close', 'ids': ['fb_1', 'fb_3', 'nope']})
+        self.assertRedirectsTo(r, '/feedback')
+        self.assertEqual(self.doc('feedback', 'fb_1')['status'], 'closed')
+        self.assertEqual(self.doc('feedback', 'fb_3')['status'], 'closed')
+        self.assertIsNone(self.doc('feedback', 'nope'))
+        action = _actions(self.flashes())[-1]
+        self.assertEqual(json.loads(action['fields']['restore']), {'fb_1': 'new', 'fb_3': 'answered'})
+        self.post(action['post'], action['fields'])
+        self.assertEqual(self.doc('feedback', 'fb_1')['status'], 'new')
+        self.assertEqual(self.doc('feedback', 'fb_3')['status'], 'answered')
+        # подделанный restore со статусом вне справочника ничего не меняет
+        self.post('/feedback/bulk', {'action': 'restore', 'restore': json.dumps({'fb_1': 'hacked'})})
+        self.assertEqual(self.doc('feedback', 'fb_1')['status'], 'new')

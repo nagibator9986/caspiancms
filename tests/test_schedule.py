@@ -547,3 +547,157 @@ class MassActionsTest(_ScheduleCase):
         self.assertEqual(sorted(l['new_data']['day_index'] for l in created), [0, 4, 4])
         self.assertTrue(self.audit_entries('schedule_create'))
         self.assertEqual(len([p for p in _sent_pushes() if p['topic'] == 'schedule_group_men_25-1']), 1)
+
+
+# ==================== UX v2: ПРЕДЗАПОЛНЕНИЕ, ЗАМЕНА ПРЕПОДАВАТЕЛЯ, НАКЛАДКИ НА МЕСТЕ ПРАВКИ ====================
+
+class BuilderPrefillTest(CmsTestCase):
+    """SCH-10: «+» в колонке дня, «Добавить занятие здесь» (шахматка) и главная открывают конструктор
+    с заполненной первой строкой: ?groupId=&day=&time=HH:MM-HH:MM&room=."""
+
+    def assertSelected(self, html, value):
+        self.assertRegex(html, r'<option[^>]*value="%s"[^>]*\bselected' % re.escape(value))
+
+    def test_prefill_first_row(self):
+        html = self.get_ok('/schedule/builder?groupId=%s&day=2&time=13:00-13:50&room=204' % GROUP)
+        self.assertSelected(html, GROUP)                      # группа
+        self.assertSelected(html, '13.00-13.50')              # время → метка слота сетки звонков
+        self.assertIn('value="204"', html)                    # аудитория
+        wed = html[html.index('data-day-section="2"'):html.index('data-day-section="3"')]
+        self.assertIn('data-key="n0"', wed)                   # строка — в секции среды
+
+    def test_prefill_offgrid_time_and_garbage(self):
+        html = self.get_ok('/schedule/builder?day=1&time=09:05-09:55')
+        self.assertSelected(html, '09.05-09.55')              # не из сетки — показано как есть
+        self.get_ok('/schedule/builder?day=99&time=zzz&room=' + 'x' * 200)   # мусор не ломает страницу
+
+
+class BulkTeacherTest(_ScheduleCase):
+    """SCH-11 (контракт для PEOPLE): POST /schedule/bulk action=teacher — замена преподавателя у выбранных занятий."""
+
+    def test_replace_teacher_in_two_lessons(self):
+        ids = sorted(i for i, d in self.group_docs().items() if d.get('teacher') != 't_li')[:2]
+        r = self.post('/schedule/bulk', {'action': 'teacher', 'teacher': 't_li', 'ids': ids,
+                                         'next': '/schedule?group=' + GROUP})
+        self.assertRedirectsTo(r, '/schedule')
+        for i in ids:
+            doc = self.doc('schedules', i)
+            self.assertEqual(doc['teacher'], 't_li')
+            self.assertNotIn('teacherId', doc)
+            self.assertNotIn('notify', doc)                    # notify:false снят после записи (D15)
+            self.assertEqual(_weekday_of(doc), doc['day_index'])
+        self.assertIn('Преподаватель заменён в 2 занятиях', ' '.join(t for _c, t in self.flashes()))
+        audit = [a for a in self.audit_entries('schedule_bulk') if (a.get('details') or {}).get('action') == 'teacher']
+        self.assertTrue(audit)
+        self.assertEqual(audit[-1]['details']['value'], 't_li')
+        self.assertEqual(len([p for p in _sent_pushes() if p['topic'] == GROUP_TOPIC]), 1)
+        self.assertEqual(len([l for l in self.new_logs() if l['action'] == 'update']), 2)
+
+    def test_unknown_teacher_is_rejected(self):
+        ids = sorted(self.group_docs())[:1]
+        before = self.doc('schedules', ids[0])['teacher']
+        r = self.post('/schedule/bulk', {'action': 'teacher', 'teacher': 'uid_nobody', 'ids': ids})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(self.doc('schedules', ids[0])['teacher'], before)
+        self.assertIn('из справочника', ' '.join(t for _c, t in self.flashes()))
+        self.assertEqual(self.new_logs(), [])
+
+    def test_teacher_from_limits_to_his_lessons(self):
+        mine = sorted(i for i, d in self.group_docs().items() if d.get('teacher') == 't_akhmetova')
+        other = sorted(i for i, d in self.group_docs().items() if d.get('teacher') not in ('t_akhmetova', 't_li'))[:1]
+        self.assertTrue(mine and other)
+        r = self.post('/schedule/bulk', {'action': 'teacher', 'teacher': 't_li', 'teacher_from': 't_akhmetova',
+                                         'ids': mine + other + ['cf_petrov_a']})
+        self.assertEqual(r.status_code, 302)
+        for i in mine:
+            self.assertEqual(self.doc('schedules', i)['teacher'], 't_li')
+        self.assertNotEqual(self.doc('schedules', other[0])['teacher'], 't_li')   # чужое занятие не тронуто
+        self.assertEqual(self.doc('schedules', 'cf_petrov_a')['teacher'], 't_petrov')
+
+    def test_week_short_form_from_bulkbar(self):
+        ids = sorted(self.group_docs())[:2]
+        r = self.post('/schedule/bulk', {'action': 'week:numerator', 'ids': ids, 'group': GROUP})
+        self.assertEqual(r.status_code, 302)
+        for i in ids:
+            self.assertEqual(self.doc('schedules', i)['week_type'], 'numerator')
+
+
+class EditUxTest(_ScheduleCase):
+    """SCH-4: возврат в список с фильтрами, тост «Открыть группу», быстрый просмотр формы."""
+
+    def test_save_returns_to_next_and_offers_group(self):
+        src = self.doc('schedules', 'base_01_1_1')
+        nxt = '/schedule/conflicts?dim=teacher'
+        r = self.post('/schedule/edit/base_01_1_1', {
+            'groupId': GROUP, 'day': '1', 'time': src['time'], 'subject': src['subject'],
+            'teacher': src['teacher'], 'room': '777', 'week_type': 'always', 'next': nxt})
+        self.assertRedirectsTo(r, nxt)
+        flashes = self.flashes()
+        self.assertIn(('success', 'Занятие сохранено'), flashes)
+        actions = [t for c, t in flashes if c == 'cc-action']
+        self.assertTrue(actions and 'Открыть группу' in actions[0])
+
+    def test_save_from_group_week_without_extra_action(self):
+        src = self.doc('schedules', 'base_01_1_1')
+        r = self.post('/schedule/edit/base_01_1_1', {
+            'groupId': GROUP, 'day': '1', 'time': src['time'], 'subject': src['subject'],
+            'teacher': src['teacher'], 'room': '778', 'week_type': 'always', 'next': '/schedule?group=' + GROUP})
+        self.assertRedirectsTo(r, '/schedule')
+        self.assertFalse([t for c, t in self.flashes() if c == 'cc-action'])
+
+    def test_partial_render_for_quick_view(self):
+        r = self.client.get('/schedule/edit/base_01_1_1?next=/schedule', headers={'X-CC-Partial': '1'})
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self.assertNotIn('cc-sidebar', html)
+        self.assertIn('data-lesson-form', html)
+        self.assertIn('data-live-conflicts', html)
+        self.assertNotIn('История занятия', html)            # в панели — без истории
+
+    def test_edit_page_layout(self):
+        html = self.get_ok('/schedule/edit/cf_petrov_a')
+        self.assertIn('data-free-rooms', html)               # подсказка свободных аудиторий
+        self.assertIn('data-cc-savebar', html)               # панель сохранения + Ctrl+S
+        self.assertRegex(html, r'data-critical="[1-9]')       # критичная накладка → подтверждение при сохранении
+        self.assertIn('/schedule/teachers?teacher=uid', html)  # переход к неделе преподавателя
+
+
+class ConflictsInPlaceTest(CmsTestCase):
+    """Накладки видны там, где правят расписание: неделя группы, карточки групп, преподаватели."""
+
+    def test_group_week_marks_engine_conflicts(self):
+        html = self.get_ok('/schedule?group=ВТ 24-1')
+        self.assertIn('data-overlap', html)                  # cf_petrov_a: Петров занят у МЕН 25-1
+        self.assertIn('накладк', html)
+        self.assertIn('/schedule/conflicts?', html)
+
+    def test_group_cards_show_conflict_badge_and_instant_search(self):
+        html = self.get_ok('/schedule')
+        self.assertRegex(html, r'data-group-card="ВТ 24-1"[\s\S]{0,600}sch-group-card__conf')
+        self.assertIn('data-cc-filter="#schGroups"', html)
+
+    def test_teachers_table_is_default_and_week_view(self):
+        html = self.get_ok('/schedule/teachers')
+        self.assertIn('id="schTeachers"', html)
+        self.assertIn('<table', html)
+        self.assertIn('title="Числитель:', html)              # одно число, Ч/З — в подсказке
+        week = self.get_ok('/schedule/teachers?teacher=uid:t_petrov')
+        self.assertIn('id="schWeek"', week)
+        self.assertIn('schHandover', week)                    # «Передать занятия другому…» (SCH-11)
+        cards = self.get_ok('/schedule/teachers?view=cards')
+        self.assertIn('sch-teacher-card', cards)
+
+    def test_day_switch_marks_days_with_conflicts(self):
+        # на телефоне видна одна колонка — день с накладкой отмечен точкой в переключателе
+        html = self.get_ok('/schedule?group=ВТ 24-1')
+        self.assertRegex(html, r'class="[^"]*has-alert" data-day="2"')        # ср, 13:00 — Петров
+        self.assertNotRegex(html, r'class="[^"]*has-alert" data-day="0"')     # в пн накладок нет
+        self.assertIn('есть накладки', html)
+        teacher = self.get_ok('/schedule/teachers?teacher=uid:t_petrov')
+        self.assertRegex(teacher, r'class="[^"]*has-alert" data-day="2"')
+
+    def test_mobile_day_switch_and_hotkeys_markup(self):
+        html = self.get_ok('/schedule?group=' + GROUP)
+        self.assertIn('data-sch-dayswitch', html)
+        self.assertIn('is-active-day', html)
+        self.assertIn('data-sch-next', html)

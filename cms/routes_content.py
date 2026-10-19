@@ -32,10 +32,11 @@ from firebase_admin import firestore
 from flask import flash, redirect, render_template, request, url_for
 
 from .core import (ALMATY, SERVER_TIMESTAMP, Routes, UploadError, admin_required, aggregate_sum,
-                   audit, cache, chunked, count, csv_response, current_admin, db, delete_storage_paths, doc_dict,
-                   flash_error, get_docs, image_fields, images_from_uploader, images_of, local_input_value, log,
-                   now_utc, paginate_list, parse_local_datetime, plural, safe_next_url, send_push,
-                   storage_path_from_url, to_almaty, to_datetime, today_almaty, upload_image, where)
+                   audit, back_url, cache, chunked, count, csv_response, current_admin, db, delete_storage_paths,
+                   doc_dict, flash_action, flash_error, get_docs, image_fields, images_from_uploader, images_of,
+                   local_input_value, log, next_target, now_utc, paginate_list, parse_local_datetime, plural,
+                   send_push, storage_path_from_url, to_almaty, to_datetime, today_almaty,
+                   upload_image, where)
 
 routes = Routes()
 
@@ -48,11 +49,27 @@ SNAPSHOT_TTL = 120       # с
 
 NEWS_CATEGORIES = [('academic', 'Учёба'), ('sports', 'Спорт'), ('cultural', 'Культура'),
                    ('curator', 'Кураторский час')]
+# Старые категории (прежний веб и ранние версии приложения): показываем по-русски, а не сырым ключом.
+NEWS_LEGACY_CATEGORIES = {'events': 'События', 'achievements': 'Достижения', 'general': 'Общее'}
 AUDIENCES = [('all', 'Все'), ('students', 'Студенты'), ('teachers', 'Преподаватели')]
 POLL_TYPES = [('single', 'Один вариант'), ('multiple', 'Несколько вариантов')]
 CLUB_CATEGORIES = [('physical', 'Физкультура'), ('creative', 'Творчество'), ('tech', 'Технологии'),
                    ('community', 'Сообщество')]
 FEEDBACK_STATUSES = [('new', 'Новые'), ('answered', 'Отвечено'), ('closed', 'Закрыто')]
+# «Срочно» (закрепляется наверху новых): тема «Линия доверия», анонимные и тревожные слова (основы, без регистра, ё=е).
+FEEDBACK_URGENT_TOPICS = ('линия доверия',)
+FEEDBACK_URGENT_WORDS = ('буллинг', 'булинг', 'травл', 'насили', 'угроз', 'суицид', 'самоубий', 'домогат')
+# Шаблоны быстрого ответа (вставляются в поле ответа, текст можно поправить).
+FEEDBACK_REPLY_TEMPLATES = [
+    ('Передали ответственным', 'Спасибо за обращение! Мы передали вопрос ответственным и сообщим, когда будет решение.'),
+    ('Вопрос решён', 'Спасибо, что сообщили. Вопрос решён — если проблема повторится, напишите нам снова.'),
+    ('Нужны подробности', 'Спасибо за обращение. Уточните, пожалуйста, подробности: группу, дату и что именно произошло — '
+                          'так мы быстрее поможем.'),
+    ('Обратитесь к куратору', 'Спасибо за вопрос. По этой теме лучше всего поможет куратор группы или учебная часть — '
+                              'подойдите к ним, они в курсе.'),
+    ('Линия доверия', 'Спасибо за доверие. Мы отнесёмся к обращению серьёзно и примем меры. Если нужна поддержка прямо '
+                      'сейчас — обратитесь к куратору или в администрацию колледжа.'),
+]
 
 NEWS_MAX_IMAGES = 10
 POLL_MAX_OPTIONS = 20
@@ -61,6 +78,13 @@ TIME_RE = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 
 def _label(options, value, default='—'):
     return dict(options).get(value, value or default)
+
+
+def _news_category_label(key, default='Без категории'):
+    """Подпись категории новости: категории приложения, затем старые ключи, иначе сам ключ."""
+    if not key:
+        return default
+    return dict(NEWS_CATEGORIES).get(key) or NEWS_LEGACY_CATEGORIES.get(key) or key
 
 
 # ==================== ОБЩИЕ ПОМОЩНИКИ ====================
@@ -115,9 +139,13 @@ def parse_number(raw):
 
 
 def _back(endpoint, **values):
-    """Редирект на безопасный next из формы, иначе на url_for(endpoint)."""
-    nxt = safe_next_url(request.form.get('next') or request.args.get('next'))
-    return redirect(nxt or url_for(endpoint, **values))
+    """Редирект на безопасный next из формы/query, иначе на url_for(endpoint) (core.back_url)."""
+    return redirect(back_url(endpoint, **values))
+
+
+def _undo_fields(endpoint, fields, **values):
+    """Поля для POST «Отменить» в тосте: + next, чтобы отмена вернула в тот же отфильтрованный список."""
+    return dict(fields, next=next_target() or url_for(endpoint, **values))
 
 
 def _admin_uid():
@@ -243,11 +271,19 @@ def _news_row(n):
     return {
         'id': n['id'], 'title': n.get('title') or 'Без заголовка',
         'summary': (n.get('description') or n.get('content') or '').strip(),
-        'category': n.get('category') or '', 'category_label': _label(NEWS_CATEGORIES, n.get('category'), 'Без категории'),
+        'category': n.get('category') or '', 'category_label': _news_category_label(n.get('category')),
         'audience': _news_audience(n), 'audience_label': _label(AUDIENCES, _news_audience(n)),
         'cover': imgs[0]['url'] if imgs else None, 'photos': len(imgs), 'createdAt': n.get('createdAt'),
         'created_date': created.date() if created else None,
     }
+
+
+def _news_category_filter(items):
+    """Варианты фильтра «Категория»: категории приложения + старые ключи, которые реально есть в данных."""
+    known = dict(NEWS_CATEGORIES)
+    extra = sorted({n.get('category') for n in items if n.get('category') and n.get('category') not in known},
+                   key=lambda k: _norm(_news_category_label(k)))
+    return list(NEWS_CATEGORIES) + [(k, _news_category_label(k)) for k in extra]
 
 
 @routes.route('/news')
@@ -275,12 +311,24 @@ def news():
         'total': len(items),
         'month': sum(1 for n in items if (to_datetime(n.get('createdAt')) or month_ago) > month_ago),
         'with_photo': sum(1 for n in items if images_of(n)),
-        'students': sum(1 for n in items if _news_audience(n) == 'students'),
     }
     page = paginate_list(rows, request.args.get('page'), PER_PAGE)
     page.items = [_news_row(n) for n in page.items]
     return render_template('news.html', page=page, stats=stats, filtered=len(rows), truncated=len(items) >= LIST_LIMIT,
-                           categories=NEWS_CATEGORIES, audiences=AUDIENCES, q=q)
+                           categories=_news_category_filter(items), audiences=AUDIENCES, q=q, category=category,
+                           audience=audience, photo=photo)
+
+
+def _news_category_options(current=None):
+    """Варианты категории в форме: категории приложения; у старой новости — её категория с пометкой."""
+    opts = list(NEWS_CATEGORIES)
+    if current and current not in dict(NEWS_CATEGORIES):
+        opts.append((current, '%s (старая категория)' % _news_category_label(current)))
+    return opts
+
+
+# Кому уйдёт пуш onNewsCreate/onPollCreate (топики news_all|news_student|news_teacher) — текст подтверждения.
+PUSH_AUDIENCE = {'all': 'все пользователи приложения', 'students': 'студенты', 'teachers': 'преподаватели'}
 
 
 def _news_form_values(news_doc=None):
@@ -352,14 +400,16 @@ def news_form(news_id=None):
                     _invalidate('news')
                     audit('update' if news_id else 'create', 'news', ref.id,
                           {'title': values['title'], 'photos': len(res.images)})
-                    flash('Новость обновлена' if news_id else 'Новость опубликована — приложение пришлёт уведомление',
-                          'success')
-                    return redirect(url_for('news'))
-        if errors:
-            flash('Проверьте поля формы', 'error')
+                    if news_id:
+                        flash('Новость обновлена', 'success')
+                    else:
+                        flash_action('Новость опубликована — приложение пришлёт уведомление', 'Открыть',
+                                     href=url_for('news_form', news_id=ref.id))
+                    return redirect(back_url('news'))
     preview_images = images_of(doc) if doc else []
-    return render_template('news_form.html', news=doc, values=values, errors=errors, categories=NEWS_CATEGORIES,
-                           audiences=AUDIENCES, max_images=NEWS_MAX_IMAGES, preview_images=preview_images)
+    return render_template('news_form.html', news=doc, values=values, errors=errors,
+                           categories=_news_category_options((doc or {}).get('category')), audiences=AUDIENCES,
+                           max_images=NEWS_MAX_IMAGES, preview_images=preview_images, push_audience=PUSH_AUDIENCE)
 
 
 def _delete_news_doc(news_id):
@@ -491,7 +541,7 @@ def polls():
     for p in page.items:
         p['votes'] = totals.get(p['id'], 0)
     return render_template('polls.html', page=page, counts=counts, status=status, audiences=AUDIENCES, q=q,
-                           truncated=len(items) >= LIST_LIMIT)
+                           audience=audience, truncated=len(items) >= LIST_LIMIT)
 
 
 def _load_answers(poll_id):
@@ -623,10 +673,10 @@ def poll_form(poll_id=None):
                     _invalidate('polls')
                     audit('update' if poll_id else 'create', 'poll', ref.id,
                           {'title': values['title'], 'options': total, 'deleted_options': len(delete_ids)})
-                    flash('Опрос сохранён' if poll_id else 'Опрос создан — приложение пришлёт уведомление', 'success')
-                    return redirect(url_for('polls'))
+                    flash_action('Опрос сохранён' if poll_id else 'Опрос создан — приложение пришлёт уведомление',
+                                 'Результаты', href=url_for('poll_results', poll_id=ref.id))
+                    return redirect(back_url('polls'))
         if errors:
-            flash('Проверьте поля формы', 'error')
             # показать форму так, как её заполнили: тексты, порядок и отмеченные на удаление варианты
             order = {aid: i for i, aid in enumerate(kept_ids)}
             answers = [dict(a, text=texts.get(a['id'], a.get('text', '')), deleted=a['id'] in delete_ids)
@@ -634,7 +684,7 @@ def poll_form(poll_id=None):
             answers.sort(key=lambda a: order.get(a['id'], len(order)))
     return render_template('poll_form.html', poll=poll, answers=answers, values=values, errors=errors,
                            new_options=new_options, audiences=AUDIENCES, poll_types=POLL_TYPES,
-                           max_options=POLL_MAX_OPTIONS)
+                           max_options=POLL_MAX_OPTIONS, push_audience=PUSH_AUDIENCE)
 
 
 @routes.route('/poll/<poll_id>/add-answer', methods=['POST'])
@@ -673,21 +723,60 @@ def poll_delete_answer(poll_id, answer_id):
     return redirect(url_for('poll_form', poll_id=poll_id))
 
 
+def _end_value(end):
+    """endTime → значение поля end для отмены (ISO UTC или 'none' — без срока)."""
+    return end.astimezone(timezone.utc).isoformat() if end else 'none'
+
+
 @routes.route('/poll/<poll_id>/close', methods=['POST'])
 @admin_required
 def poll_close(poll_id):
+    """Завершить сейчас. Без подтверждения: тост «Отменить» возвращает прежний срок (poll_set_end)."""
     ref = db.collection('polls').document(poll_id)
     try:
-        if not ref.get().exists:
+        snap = ref.get()
+        if not snap.exists:
             flash('Опрос не найден', 'warning')
             return _back('polls')
+        prev = to_datetime((snap.to_dict() or {}).get('endTime'))
         ref.update({'endTime': now_utc(), 'updatedAt': SERVER_TIMESTAMP})
     except Exception as e:
         flash_error('Не удалось завершить опрос', e)
         return _back('polls')
     _invalidate('polls')
     audit('close', 'poll', poll_id)
-    flash('Опрос завершён — голосование закрыто', 'success')
+    flash_action('Опрос завершён — голосование закрыто', 'Отменить', post=url_for('poll_set_end', poll_id=poll_id),
+                 fields=_undo_fields('polls', {'end': _end_value(prev)}))
+    return _back('polls')
+
+
+@routes.route('/poll/<poll_id>/end', methods=['POST'])
+@admin_required
+def poll_set_end(poll_id):
+    """Вернуть срок опроса (кнопка «Отменить» после «Завершить»/«Продлить»): end = ISO-время или 'none'."""
+    raw = (request.form.get('end') or '').strip()
+    end = None
+    if raw != 'none':
+        try:
+            end = datetime.fromisoformat(raw)
+        except ValueError:
+            flash('Не удалось вернуть срок опроса', 'error')
+            return _back('polls')
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+    ref = db.collection('polls').document(poll_id)
+    try:
+        if not ref.get().exists:
+            flash('Опрос не найден', 'warning')
+            return _back('polls')
+        ref.update({'endTime': end, 'updatedAt': SERVER_TIMESTAMP})
+    except Exception as e:
+        flash_error('Не удалось изменить срок опроса', e)
+        return _back('polls')
+    _invalidate('polls')
+    audit('set_end', 'poll', poll_id, {'end': raw})
+    flash('Срок опроса возвращён' + ((' — до ' + to_almaty(end).strftime('%d.%m.%Y %H:%M')) if end else ' — без срока'),
+          'success')
     return _back('polls')
 
 
@@ -710,7 +799,10 @@ def poll_extend(poll_id):
         return _back('polls')
     _invalidate('polls')
     audit('extend', 'poll', poll_id, {'days': days})
-    flash('Опрос продлён на %d %s' % (days, plural(days, 'день', 'дня', 'дней')), 'success')
+    flash_action('Опрос продлён на %d %s — до %s' % (days, plural(days, 'день', 'дня', 'дней'),
+                                                   to_almaty(new_end).strftime('%d.%m %H:%M')),
+                 'Отменить', post=url_for('poll_set_end', poll_id=poll_id),
+                 fields=_undo_fields('polls', {'end': _end_value(end)}))
     return _back('polls')
 
 
@@ -809,6 +901,8 @@ def poll_results(poll_id):
                     by_id[a]['voters'].append(person)
         people.sort(key=lambda p: _norm(p['name']))
     voters_count = len(voters) + len(anon_legacy)
+    # голоса есть, а списка голосовавших нет (старые опросы, данные до poll_responses) — число людей неизвестно
+    voters_known = voters_count > 0 or total_votes == 0
     if request.args.get('format') == 'csv':
         audit('export', 'poll', poll_id, {'format': 'csv'})
         name = 'опрос_%s.csv' % re.sub(r'[^\w-]+', '_', (poll.get('title') or poll_id))[:40]
@@ -817,8 +911,25 @@ def poll_results(poll_id):
             return csv_response(name, ['Вариант', 'Голосов', 'Доля'], rows)
         rows = [[p['name'], p['group'], p['role'], '; '.join(p['answers']), p['at']] for p in people]
         return csv_response(name, ['Участник', 'Группа', 'Роль', 'Ответы', 'Время голоса'], rows)
+    eligible = _audience_size(meta['audience']) if voters_known else None
     return render_template('poll_results.html', poll=poll, meta=meta, answers=answers, total_votes=total_votes,
-                           voters_count=voters_count, people=people)
+                           voters_count=voters_count, voters_known=voters_known, eligible=eligible, people=people)
+
+
+AUDIENCE_ROLES = {'all': ('student', 'teacher'), 'students': ('student',), 'teachers': ('teacher',)}
+
+
+def _audience_size(audience):
+    """Сколько аккаунтов в аудитории опроса (count() по ролям, кэш 10 мин). None — посчитать не удалось."""
+    def load():
+        total = 0
+        for role in AUDIENCE_ROLES.get(audience, AUDIENCE_ROLES['all']):
+            n = count(where(db.collection('users'), 'role', '==', role), default=None)
+            if n is None:
+                return None
+            total += n
+        return total
+    return cache.get_or_set('content:audience:%s' % audience, load, ttl=600)
 
 
 # ==================== СОБЫТИЯ И КЛУБЫ: ОБЩЕЕ ====================
@@ -956,13 +1067,12 @@ def events():
     today = today_almaty()
     q = request.args.get('q', '').strip()
     when = request.args.get('when', '')
-    rows, counts, regs_total = [], {'all': 0, 'upcoming': 0, 'past': 0}, 0
+    rows, counts = [], {'all': 0, 'upcoming': 0, 'past': 0}
     for e in _events_snapshot():
         d = _event_date(e.get('date'))
         upcoming = d is None or d >= today
         counts['all'] += 1
         counts['upcoming' if upcoming else 'past'] += 1
-        regs_total += max(0, _as_int(e.get('registrationsCount')))
         if when == 'upcoming' and not upcoming or when == 'past' and upcoming:
             continue
         if q and not _matches(q, e.get('title'), e.get('description'), e.get('location'), e.get('organizer')):
@@ -973,8 +1083,7 @@ def events():
     future = sorted([r for r in rows if r['upcoming']], key=lambda r: (r['day'] is None, r['day'] or today))
     past = sorted([r for r in rows if not r['upcoming']], key=lambda r: r['day'], reverse=True)
     page = paginate_list(future + past, request.args.get('page'), PER_PAGE)
-    return render_template('events.html', page=page, counts=counts, when=when, q=q, regs_total=regs_total,
-                           today=today)
+    return render_template('events.html', page=page, counts=counts, when=when, q=q, today=today)
 
 
 def _event_form_values(ev=None):
@@ -1049,10 +1158,9 @@ def event_form(event_id=None):
                         delete_storage_paths(_own_paths([removed], 'events/'))
                     _invalidate('events')
                     audit('update' if event_id else 'create', 'event', ref.id, {'title': values['title']})
-                    flash('Событие сохранено' if event_id else 'Событие создано', 'success')
-                    return redirect(url_for('events'))
-        if errors:
-            flash('Проверьте поля формы', 'error')
+                    flash_action('Событие сохранено' if event_id else 'Событие создано — студенты увидят его в приложении',
+                                 'Участники', href=url_for('event_registrations', event_id=ref.id))
+                    return redirect(back_url('events'))
     return render_template('event_form.html', event=ev, values=values, errors=errors)
 
 
@@ -1107,7 +1215,7 @@ def event_recount(event_id):
         _invalidate('events')
         audit('recount', 'event', event_id, {'count': n})
         flash('Счётчик участников обновлён: %d' % n, 'success')
-    return redirect(url_for('event_registrations', event_id=event_id))
+    return _back('event_registrations', event_id=event_id)
 
 
 @routes.route('/events/remind/<event_id>', methods=['POST'])
@@ -1128,9 +1236,13 @@ def event_remind(event_id):
         flash_error('Не удалось отправить напоминание', e)
     else:
         audit('remind', 'event', event_id, {'sent': sent, 'participants': total})
-        flash('Напоминание отправлено: %d из %d (у остальных нет приложения с уведомлениями)' % (sent, total)
-              if sent < total else 'Напоминание отправлено всем участникам (%d)' % sent, 'success' if sent else 'warning')
-    return redirect(url_for('event_registrations', event_id=event_id))
+        if not total:
+            flash('На событие пока никто не записался — напоминать некому', 'info')
+        else:
+            flash('Напоминание отправлено: %d из %d (у остальных нет приложения с уведомлениями)' % (sent, total)
+                  if sent < total else 'Напоминание отправлено всем участникам (%d)' % sent,
+                  'success' if sent else 'warning')
+    return _back('event_registrations', event_id=event_id)
 
 
 # ==================== КЛУБЫ ====================
@@ -1160,7 +1272,8 @@ def clubs():
                          regs=max(0, _as_int(c.get('registrationsCount')))))
     rows.sort(key=lambda c: (-c['regs'], _norm(c['display_title'])))
     page = paginate_list(rows, request.args.get('page'), PER_PAGE)
-    stats = {'total': len(items), 'members': sum(max(0, _as_int(c.get('registrationsCount'))) for c in items)}
+    stats = {'total': len(items), 'members': sum(max(0, _as_int(c.get('registrationsCount'))) for c in items),
+             'no_cover': sum(1 for c in items if not c.get('imageUrl'))}
     return render_template('clubs.html', page=page, stats=stats, by_cat=by_cat, categories=CLUB_CATEGORIES,
                            category=category, q=q)
 
@@ -1223,10 +1336,9 @@ def club_form(club_id=None):
                         delete_storage_paths(_own_paths([removed], 'clubs/'))
                     _invalidate('clubs')
                     audit('update' if club_id else 'create', 'club', ref.id, {'title': values['title']})
-                    flash('Клуб сохранён' if club_id else 'Клуб создан', 'success')
-                    return redirect(url_for('clubs'))
-        if errors:
-            flash('Проверьте поля формы', 'error')
+                    flash_action('Клуб сохранён' if club_id else 'Клуб создан — студенты смогут вступить в приложении',
+                                 'Участники', href=url_for('club_registrations', club_id=ref.id))
+                    return redirect(back_url('clubs'))
     return render_template('club_form.html', club=club, values=values, errors=errors, categories=CLUB_CATEGORIES)
 
 
@@ -1281,7 +1393,7 @@ def club_recount(club_id):
         _invalidate('clubs')
         audit('recount', 'club', club_id, {'count': n})
         flash('Счётчик участников обновлён: %d' % n, 'success')
-    return redirect(url_for('club_registrations', club_id=club_id))
+    return _back('club_registrations', club_id=club_id)
 
 
 @routes.route('/clubs/remind/<club_id>', methods=['POST'])
@@ -1301,8 +1413,11 @@ def club_remind(club_id):
         flash_error('Не удалось отправить сообщение', e)
     else:
         audit('remind', 'club', club_id, {'sent': sent, 'participants': total})
-        flash('Сообщение отправлено: %d из %d участников' % (sent, total), 'success' if sent else 'warning')
-    return redirect(url_for('club_registrations', club_id=club_id))
+        if not total:
+            flash('В клубе пока нет участников — писать некому', 'info')
+        else:
+            flash('Сообщение отправлено: %d из %d участников' % (sent, total), 'success' if sent else 'warning')
+    return _back('club_registrations', club_id=club_id)
 
 
 # ==================== ТОВАРЫ (магазин в тенге, коллекция products) ====================
@@ -1426,10 +1541,8 @@ def product_form(product_id=None):
                     _invalidate('products')
                     audit('update' if product_id else 'create', 'product', ref.id,
                           {'name': values['name'], 'price': price, 'variants': len(variants)})
-                    flash('Товар сохранён' if product_id else 'Товар добавлен', 'success')
-                    return redirect(url_for('products'))
-        if errors:
-            flash('Проверьте поля формы', 'error')
+                    flash('Товар сохранён' if product_id else 'Товар добавлен — он уже в магазине приложения', 'success')
+                    return redirect(back_url('products'))
     return render_template('product_form.html', product=product, values=values, errors=errors)
 
 
@@ -1482,8 +1595,45 @@ def _feedback_items():
             d['_group'] = '' if d['_anon'] else (u.get('group') or '')
             d['_role'] = '' if d['_anon'] else (u.get('role') or '')
             d['_topic'] = (d.get('topic') or d.get('subject') or 'Без темы').strip()
+            d['_urgent'] = _feedback_urgency(d)
         return docs
     return cache.get_or_set('content:feedback', load, ttl=60)
+
+
+def _feedback_urgency(f):
+    """Почему обращение срочное (строка для подсказки) или None: «Линия доверия», анонимное, тревожные слова."""
+    topic = _norm(f.get('topic') or f.get('subject'))
+    if any(t in topic for t in FEEDBACK_URGENT_TOPICS):
+        return 'тема «Линия доверия»'
+    text = _norm(' '.join(str(f.get(k) or '') for k in ('topic', 'subject', 'message')))
+    for w in FEEDBACK_URGENT_WORDS:
+        if w in text:
+            return 'в тексте: «%s…»' % w
+    if f.get('anonymousVisual'):
+        return 'анонимное обращение'
+    return None
+
+
+def _wait_label(created, now):
+    """«ждёт 3 дн.» / «ждёт 5 ч» / «ждёт меньше часа» и число дней ожидания."""
+    dt = to_datetime(created)
+    if not dt:
+        return '', 0
+    sec = max(0, (now - dt).total_seconds())
+    days, hours = int(sec // 86400), int(sec // 3600)
+    if days >= 1:
+        return 'ждёт %d дн.' % days, days
+    return ('ждёт %d ч' % hours if hours >= 1 else 'ждёт меньше часа'), 0
+
+
+def _feedback_sort(rows):
+    """Новые — сверху: сначала срочные, внутри — кто дольше ждёт; остальные — свежие сверху."""
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    new = [f for f in rows if f['_status'] == 'new']
+    rest = [f for f in rows if f['_status'] != 'new']
+    new.sort(key=lambda f: (not f['_urgent'], to_datetime(f.get('createdAt')) or epoch))
+    rest.sort(key=lambda f: to_datetime(f.get('createdAt')) or epoch, reverse=True)
+    return new + rest
 
 
 @routes.route('/feedback')
@@ -1491,11 +1641,21 @@ def _feedback_items():
 def feedback_list():
     items = _feedback_items()
     q = request.args.get('q', '').strip()
-    status = request.args.get('status', '')
+    raw_status = request.args.get('status', '')
     topic = request.args.get('topic', '')
     anon = request.args.get('anon') == '1'
+    stats = {k: sum(1 for f in items if f['_status'] == k) for k, _ in FEEDBACK_STATUSES}
+    stats.update(total=len(items), anon=sum(1 for f in items if f['_anon']),
+                 urgent=sum(1 for f in items if f['_status'] == 'new' and f['_urgent']))
+    # Входящие: без статуса в URL и без других фильтров открываются «Новые» (если есть); «Все» — явный status=all.
+    if raw_status in dict(FEEDBACK_STATUSES) or raw_status == 'all':
+        status = raw_status
+    elif not (q or topic or anon) and stats['new']:
+        status = 'new'
+    else:
+        status = 'all'
     rows = [f for f in items
-            if (not status or f['_status'] == status) and (not topic or f['_topic'] == topic)
+            if (status == 'all' or f['_status'] == status) and (not topic or f['_topic'] == topic)
             and (not anon or f['_anon'])
             and (not q or _matches(q, f.get('message'), f['_topic'], f.get('subject'), f['_author'], f['_group'],
                                    f.get('reply')))]
@@ -1506,12 +1666,18 @@ def feedback_list():
                             [[f.get('createdAt'), f['_topic'], f.get('message') or '', f['_author'], f['_group'],
                               _label(FEEDBACK_STATUSES, f['_status']), f.get('reply') or '', f.get('repliedAt')]
                              for f in rows])
-    stats = {k: sum(1 for f in items if f['_status'] == k) for k, _ in FEEDBACK_STATUSES}
-    stats.update(total=len(items), anon=sum(1 for f in items if f['_anon']))
     topics = sorted({f['_topic'] for f in items}, key=_norm)
-    page = paginate_list(rows, request.args.get('page'), PER_PAGE)
+    page = paginate_list(_feedback_sort(rows), request.args.get('page'), PER_PAGE)
+    now = now_utc()
+    page.items = [dict(f) for f in page.items]  # элементы общего кэша не меняем
+    for f in page.items:
+        f['_wait'], f['_wait_days'] = _wait_label(f.get('createdAt'), now) if f['_status'] == 'new' else ('', 0)
+    oldest = min((to_datetime(f.get('createdAt')) for f in items if f['_status'] == 'new' and to_datetime(f.get('createdAt'))),
+                 default=None)
     return render_template('feedback.html', page=page, stats=stats, topics=topics, statuses=FEEDBACK_STATUSES,
-                           status=status, topic=topic, anon=anon, q=q, filtered=len(rows))
+                           status=status, explicit_status=bool(raw_status), topic=topic, anon=anon, q=q,
+                           filtered=len(rows), oldest_wait=_wait_label(oldest, now)[0] if oldest else '',
+                           reply_templates=FEEDBACK_REPLY_TEMPLATES)
 
 
 @routes.route('/feedback/reply/<feedback_id>', methods=['POST'])
@@ -1574,16 +1740,22 @@ def feedback_status(feedback_id):
         return _back('feedback_list')
     ref = db.collection('feedback').document(feedback_id)
     try:
-        if not ref.get().exists:
+        snap = ref.get()
+        if not snap.exists:
             flash('Обращение не найдено', 'warning')
             return _back('feedback_list')
+        prev = _feedback_status(snap.to_dict() or {})
         ref.update({'status': status, 'updatedAt': SERVER_TIMESTAMP})
     except Exception as e:
         flash_error('Не удалось изменить статус', e)
         return _back('feedback_list')
     _invalidate('feedback')
-    audit('status', 'feedback', feedback_id, {'status': status})
-    flash('Статус: %s' % _label(FEEDBACK_STATUSES, status).lower(), 'success')
+    audit('status', 'feedback', feedback_id, {'status': status, 'prev': prev})
+    # обратимо — без подтверждения, с «Отменить» в тосте (UX_SPEC_v2 §4.11)
+    message = {'closed': 'Обращение закрыто', 'new': 'Обращение снова в работе',
+               'answered': 'Обращение снова в работе'}[status]
+    flash_action(message, 'Отменить', post=url_for('feedback_status', feedback_id=feedback_id),
+                 fields=_undo_fields('feedback_list', {'status': prev}))
     return _back('feedback_list')
 
 
@@ -1604,21 +1776,36 @@ def delete_feedback(feedback_id):
 @routes.route('/feedback/bulk', methods=['POST'])
 @admin_required
 def feedback_bulk():
-    ids = [i for i in request.form.getlist('ids') if i][:200]
+    """Массово: close (с «Отменить»), delete (с подтверждением в интерфейсе), restore — отмена закрытия:
+    поле restore = JSON {id: прежний статус}."""
     action = request.form.get('action')
-    if action not in ('close', 'delete') or not ids:
+    restore = {}
+    if action == 'restore':
+        try:
+            raw = json.loads(request.form.get('restore') or '{}')
+        except (TypeError, ValueError):
+            raw = {}
+        if isinstance(raw, dict):
+            restore = {str(k): v for k, v in list(raw.items())[:200] if v in dict(FEEDBACK_STATUSES)}
+        ids = list(restore)
+    else:
+        ids = [i for i in request.form.getlist('ids') if i][:200]
+    if action not in ('close', 'delete', 'restore') or not ids:
         flash('Отметьте обращения и выберите действие', 'warning')
         return _back('feedback_list')
     coll = db.collection('feedback')
     try:
-        ids = [i for i in ids if i in get_docs('feedback', ids, ['status'])]  # несуществующие id не создаём
+        found = get_docs('feedback', ids, ['status', 'reply'])
+        ids = [i for i in ids if i in found]  # несуществующие id не создаём
+        prev = {i: _feedback_status(found[i]) for i in ids}
         for part in chunked(ids, 400):
             batch = db.batch()
             for fid in part:
                 if action == 'delete':
                     batch.delete(coll.document(fid))
                 else:
-                    batch.update(coll.document(fid), {'status': 'closed', 'updatedAt': SERVER_TIMESTAMP})
+                    batch.update(coll.document(fid), {'status': restore[fid] if action == 'restore' else 'closed',
+                                                      'updatedAt': SERVER_TIMESTAMP})
             batch.commit()
     except Exception as e:
         flash_error('Не удалось выполнить действие', e)
@@ -1626,8 +1813,17 @@ def feedback_bulk():
     _invalidate('feedback')
     audit('bulk_' + action, 'feedback', None, {'ids': ids})
     n = len(ids)
-    flash('%s %d %s' % ('Удалено' if action == 'delete' else 'Закрыто', n,
-                        plural(n, 'обращение', 'обращения', 'обращений')), 'success')
+    noun = plural(n, 'обращение', 'обращения', 'обращений')
+    restore_json = json.dumps(prev, separators=(',', ':'))
+    if action == 'close' and len(restore_json) <= 1500:  # flash живёт в cookie сессии (~4 КБ) — большой отмены не будет
+        flash_action('Закрыто %d %s' % (n, noun), 'Отменить', post=url_for('feedback_bulk'),
+                     fields=_undo_fields('feedback_list', {'action': 'restore', 'restore': restore_json}))
+    elif action == 'close':
+        flash('Закрыто %d %s' % (n, noun), 'success')
+    elif action == 'restore':
+        flash('Вернули в работу %d %s' % (n, noun), 'success')
+    else:
+        flash('Удалено %d %s' % (n, noun), 'success')
     return _back('feedback_list')
 
 

@@ -1,73 +1,82 @@
-{# Новость: создание/правка, до 10 фото (images[] + imageUrl), живое превью «как в приложении» (CONTENT). #}
+{# Новость: создание/правка за минимум шагов — заголовок, текст, фото (до 10: images[] + imageUrl), категория и
+   аудитория уже выбраны. Справа — превью «как в приложении» и уведомление. Ctrl+S, черновик в браузере,
+   подтверждение публикации с аудиторией пуша (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_edit = news is not none %}
 {% block title %}{{ 'Редактирование новости' if is_edit else 'Новая новость' }}{% endblock %}
-{% block page_title %}{{ 'Редактирование новости' if is_edit else 'Новая новость' }}{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
 {% call ui.page_header('Редактирование новости' if is_edit else 'Новая новость',
-                       ('Опубликована ' ~ (news.createdAt|dt)) if is_edit else 'После публикации студенты получат уведомление в приложении',
-                       icon='newspaper') %}
-    {{ ui.button('К списку', href=url_for('news'), icon='arrow-left', variant='light') }}
+                       ('Опубликована ' ~ (news.createdAt|dt)) if is_edit else 'Заголовок, текст и фото — категория и аудитория уже выбраны',
+                       back={'href': back_url('news'), 'label': 'Новости'}) %}
+    {% if is_edit %}{{ ui.header_menu([
+        {'label': 'Удалить новость', 'action': url_for('news_delete', news_id=news.id), 'fields': {'next': back_url('news')}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': 'Удалить новость «' ~ (news.title or '') ~ '» вместе со всеми фото? Из приложения она тоже пропадёт.'},
+    ]) }}{% endif %}
 {% endcall %}
 
-{% set cat_options = categories if (not values.category or values.category in categories|map('first')|list) else categories + [(values.category, values.category ~ ' (старая категория)')] %}
-
-<div class="ct-editor">
-    <form method="post" enctype="multipart/form-data" class="ct-editor__main" id="newsForm" data-dirty-guard data-ct-preview-form novalidate>
-        {{ ui.csrf_field() }}
-        {% call ui.card('Текст', icon='card-text') %}
-            {{ ui.field('title', 'Заголовок', value=values.title, required=True, error=errors.title, attrs={'maxlength': 200, 'autocomplete': 'off', 'data-ct-preview': 'title'}) }}
-            {{ ui.field('description', 'Краткое описание', 'textarea', value=values.description, rows=2, error=errors.description,
-                        help='Показывается в карточке ленты. Если пусто — берётся начало текста.', attrs={'maxlength': 300, 'data-ct-preview': 'description'}) }}
-            {{ ui.field('content', 'Текст новости', 'textarea', value=values.content, rows=10, error=errors.content, attrs={'maxlength': 20000, 'data-ct-preview': 'content'}) }}
-        {% endcall %}
-        {% call ui.card('Публикация', icon='send') %}
-            <div class="row g-3">
-                <div class="col-md-6">{{ ui.field('category', 'Категория', 'select', value=values.category, options=cat_options, required=True, error=errors.category, attrs={'data-ct-preview': 'category'}, classes='') }}</div>
-                <div class="col-md-6">{{ ui.field('target_audience', 'Кому показывать', 'select', value=values.target_audience, options=audiences, required=True, error=errors.target_audience,
-                                                  help='Фильтр ленты и уведомления в приложении', attrs={'data-ct-preview': 'audience'}, classes='') }}</div>
-            </div>
-        {% endcall %}
-        {% call ui.card('Фото', icon='images', subtitle='Карусель как в Instagram: первое фото — обложка и картинка в уведомлении') %}
-            {{ ui.image_uploader('images', preview_images, max=max_images, label='Фото новости') }}
-            {% if errors.images %}<div class="invalid-feedback d-block mb-2">{{ errors.images }}</div>{% endif %}
-        {% endcall %}
-        <div class="ct-editor__actions">
-            {{ ui.button('Отмена', href=url_for('news'), variant='light') }}
-            {{ ui.button('Сохранить' if is_edit else 'Опубликовать', type='submit', icon='check2', attrs={'data-loading': 'Загружаем фото…'}) }}
+<form method="post" enctype="multipart/form-data" id="newsForm" data-dirty-guard data-ct-preview-form
+      data-cc-draft="news:{{ news.id if is_edit else 'new' }}"{% if not is_edit %} data-ct-publish-confirm="Опубликовать новость?"{% endif %} novalidate>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors(errors) }}
+            {% call ui.card() %}
+                {{ ui.field('title', 'Заголовок', value=values.title, required=True, error=errors.title,
+                            placeholder='Например: День открытых дверей 25 октября', attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
+                {{ ui.field('content', 'Текст', 'textarea', value=values.content, rows=8, error=errors.content, attrs={'maxlength': 20000}) }}
+                {{ ui.image_uploader('images', preview_images, max=max_images, label='Фото', id='f-images',
+                                     help='До %d фото, JPG, PNG, WEBP или GIF до 10 МБ. Первое — обложка и картинка уведомления. Можно перетащить или вставить (Ctrl+V).'|format(max_images)) }}
+                {% if errors.images %}<div class="invalid-feedback d-block mb-3">{{ errors.images }}</div>{% endif %}
+                <div class="row g-3">
+                    <div class="col-sm-6">{{ ui.field('category', 'Категория', 'select', value=values.category, options=categories, required=True, error=errors.category, classes='') }}</div>
+                    <div class="col-sm-6">{{ ui.field('target_audience', 'Аудитория', 'select', value=values.target_audience, options=audiences, required=True, error=errors.target_audience,
+                                                      help='Кто увидит в ленте и получит уведомление', classes='') }}</div>
+                </div>
+                {% call ui.details('Краткое описание для карточки ленты', open=values.description or errors.description, classes='ct-details mt-3') %}
+                    {{ ui.field('description', 'Описание до 300 символов', 'textarea', value=values.description, rows=2, error=errors.description,
+                                help='Необязательно: если пусто, в карточке будет начало текста.', attrs={'maxlength': 300}, classes='mb-0') }}
+                {% endcall %}
+            {% endcall %}
         </div>
-    </form>
 
-    <aside class="ct-editor__side" aria-label="Превью">
-        <div class="ct-sticky">
-            <p class="cc-section-title mb-2">Превью в приложении</p>
-            <article class="ct-phone" data-ct-preview-card>
-                <div class="ct-phone__media" data-ct-preview-media>
-                    <img alt="" data-ct-preview-img hidden>
-                    <div class="ct-phone__placeholder" data-ct-preview-empty><i class="bi bi-image" aria-hidden="true"></i><span>Без фото</span></div>
-                    <div class="ct-phone__dots" data-ct-preview-dots></div>
+        <aside class="cc-form-aside" aria-label="Превью">
+            {% call ui.card('Как увидят в приложении', classes='ct-preview-card') %}
+                <article class="ct-phone" data-ct-preview-card>
+                    <div class="ct-phone__media" data-ct-preview-media>
+                        <img alt="" data-ct-preview-img hidden>
+                        <div class="ct-phone__placeholder" data-ct-preview-empty><i class="bi bi-image" aria-hidden="true"></i><span>Без фото</span></div>
+                        <div class="ct-phone__dots" data-ct-preview-dots></div>
+                    </div>
+                    <div class="ct-phone__body">
+                        <span class="ct-phone__chip" data-ct-out="category" data-ct-map="category" data-ct-empty="Без категории">Категория</span>
+                        <h3 class="ct-phone__title" data-ct-out="title" data-ct-empty="Заголовок новости">Заголовок новости</h3>
+                        <p class="ct-phone__text" data-ct-out="description|content" data-ct-clip="220" data-ct-empty="Начало текста появится здесь.">Начало текста появится здесь.</p>
+                        <div class="ct-phone__meta"><i class="bi bi-clock" aria-hidden="true"></i><span>{{ (news.createdAt|dt('%d.%m.%Y')) if is_edit else 'сегодня' }}</span>
+                            <span class="ms-auto" data-ct-out="target_audience" data-ct-map="audience" data-ct-skip="all" data-ct-tpl="Только: {}" data-ct-lower></span></div>
+                    </div>
+                </article>
+            {% endcall %}
+            {% if not is_edit %}
+            {% call ui.card('Уведомление') %}
+                <div class="ct-push" aria-hidden="true">
+                    <span class="ct-push__icon"><i class="bi bi-bell" aria-hidden="true"></i></span>
+                    <div class="min-w-0"><b>📰 Новая новость!</b><span class="ct-clamp-2" data-ct-out="title" data-ct-empty="Посмотрите обновления">Посмотрите обновления</span></div>
                 </div>
-                <div class="ct-phone__body">
-                    <span class="ct-phone__chip" data-ct-preview-chip>Категория</span>
-                    <h3 class="ct-phone__title" data-ct-preview-title>Заголовок новости</h3>
-                    <p class="ct-phone__text" data-ct-preview-text>Краткое описание появится здесь.</p>
-                    <div class="ct-phone__meta"><i class="bi bi-clock" aria-hidden="true"></i><span>{{ (news.createdAt|dt('%d.%m.%Y')) if is_edit else 'сегодня' }}</span><span class="ms-auto" data-ct-preview-aud></span></div>
-                </div>
-            </article>
-            <ul class="ct-hints">
-                <li><i class="bi bi-info-circle" aria-hidden="true"></i>Лучшая обложка — горизонтальная (16:9) или квадрат.</li>
-                <li><i class="bi bi-bell" aria-hidden="true"></i>Уведомление уходит один раз — при первой публикации.</li>
-            </ul>
-            {% if is_edit %}
-            <div class="ct-danger">
-                {{ ui.confirm_button(url_for('news_delete', news_id=news.id), 'Удалить новость', 'Удалить новость «' ~ (news.title or '') ~ '» вместе со всеми фото?', size=None) }}
-            </div>
+                <p class="ct-aside-note">Получат: <b data-ct-out="target_audience" data-ct-map="push">{{ push_audience.get(values.target_audience, push_audience['all']) }}</b>. Уведомление уходит один раз — при публикации.</p>
+            {% endcall %}
+            {% else %}
+            {% call ui.card('Сведения') %}
+                {{ ui.kv([('Опубликована', news.createdAt|dt), ('Изменена', (news.updatedAt|dt) if news.updatedAt else '—'), ('Фото', preview_images|length)]) }}
+                <p class="ct-aside-note">Правка не рассылает уведомление повторно — его отправили при публикации.</p>
+            {% endcall %}
             {% endif %}
-        </div>
-    </aside>
-</div>
-{{ ui.json_data('ctPreviewLabels', {'category': dict(cat_options), 'audience': dict(audiences)}) }}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить' if is_edit else 'Опубликовать', cancel_href=back_url('news'),
+                  submit_attrs={'data-loading': 'Сохраняем…' if is_edit else 'Публикуем…'}) }}
+</form>
+{{ ui.json_data('ctPreviewLabels', {'category': dict(categories), 'audience': dict(audiences), 'push': push_audience}) }}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

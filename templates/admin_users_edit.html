@@ -1,110 +1,138 @@
 {# Карточка и правка пользователя (PEOPLE). Данные: routes_people.admin_edit_user.
-   Роль «Абитуриент» не меняется: у абитуриента правятся только имя и телефон. #}
+   Роль «Абитуриент» не меняется: у абитуриента правятся только имя и телефон.
+   {% block peek %} — компактная карточка для быстрого просмотра из списка (формы шлют next = URL списка). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_applicant = user.role == 'applicant' %}
-{% set back_url = next_url or url_for('admin_users', role=user.role if user.role in role_labels else None) %}
+{% set list_url = back_url('admin_users', role=user.role if user.role in role_labels else None) %}
+{% set lead_url = nav_url('applicant_detail', uid=user.id) if is_applicant else '#' %}
+{# после действий из панели быстрого просмотра — обратно в список, со страницы — на эту же карточку #}
+{% set act_next = list_url if is_partial else here() %}
+{% set has_login = account and not account.error %}
+{% set can_reset = has_login and default_password and not is_self and user.role != 'admin' %}
+{% set reset_text = 'Пароль «' ~ user.title ~ '» станет ' ~ (default_password or '') ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if is_applicant else ' Сообщите его пользователю лично.') %}
+{% set delete_text = 'Удалить «' ~ user.title ~ '» вместе с аккаунтом входа?' ~ (' CRM, кошелёк и заказы абитуриента подчистит сервер.' if is_applicant else ((' В расписании останется ' ~ lessons_count ~ ' ' ~ plural(lessons_count, 'занятие', 'занятия', 'занятий') ~ ' без преподавателя.') if lessons_count else '')) ~ ' Действие необратимо.' %}
 {% block title %}{{ user.title }}{% endblock %}
-{% block page_title %}{{ user.title }}{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
-{% block content %}
-<div class="cc-page-header pp-profile-head">
-    <div class="pp-person pp-person--lg min-w-0">
-        {{ ui.avatar(user.name or user.title, size='lg') }}
-        <div class="min-w-0 cc-page-header__text">
-            <h1 class="cc-truncate">{{ user.title }}</h1>
-            <p class="d-flex flex-wrap align-items-center gap-2">
-                {{ ui.badge(user.role or 'none', role_labels.get(user.role) or 'Без роли', None if user.role in role_labels else 'neutral') }}
-                {% if user.role == 'student' and user.group %}<span class="cc-badge cc-badge--outline">{{ user.group }}{% if user.course %} · {{ user.course }} курс{% endif %}</span>{% endif %}
-                {% if user.must_change %}<span class="cc-badge cc-badge--warning"><i class="bi bi-key" aria-hidden="true"></i>ждёт смены пароля</span>{% endif %}
-                {% if account and account.disabled %}<span class="cc-badge cc-badge--danger"><i class="bi bi-lock" aria-hidden="true"></i>вход заблокирован</span>{% endif %}
-                <span class="cc-subtle small">uid: <code data-copy="{{ user.id }}" title="Скопировать" class="pp-copy">{{ user.id }}</code></span>
-            </p>
+
+{% macro status_badges() -%}
+<span class="pp-badges">
+    {{ ui.role_badge(user.role) }}
+    {% if user.role == 'student' %}<span class="cc-badge cc-badge--outline">{{ user.group or 'без группы' }}{% if user.course %} · {{ user.course }} курс{% endif %}</span>{% endif %}
+    {% if user.must_change %}{{ ui.badge('must_change', 'ждёт смены пароля', 'warning', 'key') }}{% endif %}
+    {% if has_login and account.disabled %}{{ ui.badge('blocked', 'вход заблокирован', 'danger', 'lock') }}{% endif %}
+</span>
+{%- endmacro %}
+
+{# Поля профиля — общие для страницы и панели быстрого просмотра #}
+{% macro profile_fields() -%}
+{% if is_applicant %}
+    <div class="row g-3">
+        <div class="col-sm-6">{{ ui.field('name', 'Имя', value=values.name, error=errors.get('name'), attrs={'maxlength': 120}, help='Можно оставить пустым — абитуриент заполнит профиль сам', classes='') }}</div>
+        <div class="col-sm-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone|phone if values.phone and not errors.get('phone') else values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+    </div>
+{% else %}
+    <div class="row g-3">
+        <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120}, classes='') }}</div>
+        <div class="col-sm-6">{{ ui.field('email', 'Email', 'email', value=values.email, error=errors.get('email'), attrs={'maxlength': 120},
+                                           help='Меняется и в аккаунте входа' if has_login else None, classes='') }}</div>
+        <div class="col-sm-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+        <div class="col-sm-6">
+            {{ ui.field('role', 'Роль', 'select', value=values.role, error=errors.get('role'), options=role_options,
+                        attrs={'data-pp-role-select': ''} if not is_self else {'data-pp-role-select': '', 'disabled': true},
+                        help='Свою роль администратора снять нельзя' if is_self else None, classes='') }}
+            {% if is_self %}<input type="hidden" name="role" value="admin">{% endif %}
+        </div>
+        <div class="col-sm-6" data-pp-role-only="teacher,admin,club"><p class="form-text pp-role-note">Группа и курс у не-студентов удаляются — иначе приложение подпишет их на уведомления группы.</p></div>
+        <div class="col-7 col-sm-3" data-pp-role-only="student">
+            {{ ui.field('group', 'Группа', 'select', value=values.group, error=errors.get('group'),
+                        options=(groups if (not values.group or values.group in groups) else [values.group] + groups),
+                        placeholder='— без группы —', classes='') }}
+        </div>
+        <div class="col-5 col-sm-3" data-pp-role-only="student">
+            {{ ui.field('course', 'Курс', 'select', value=values.course, error=errors.get('course'),
+                        options=(courses if (not values.course or values.course in courses) else [values.course] + courses|list),
+                        placeholder='—', classes='') }}
         </div>
     </div>
-    <div class="cc-page-header__actions">
-        {{ ui.button('Назад', href=back_url, icon='arrow-left', variant='light') }}
-        {% if is_applicant and nav_url('applicant_detail', uid=user.id) != '#' %}
-        {{ ui.button('Карточка лида', href=nav_url('applicant_detail', uid=user.id), icon='person-lines-fill') }}
-        {% elif user.role == 'teacher' %}
-        {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id), icon='person-workspace') }}
-        {% endif %}
-    </div>
-</div>
+{% endif %}
+{%- endmacro %}
 
-<div class="pp-form-layout">
-    <div class="pp-form-main">
-        <form method="post" action="{{ url_for('admin_edit_user', user_id=user.id) }}" novalidate data-dirty-guard>
-            {{ ui.csrf_field() }}
-            {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
-            {% call ui.card('Профиль', icon='person-vcard', subtitle='данные, которые видит приложение') %}
-                {% if errors.get('_form') %}<div class="alert alert-danger">{{ errors._form }}</div>{% endif %}
-                {% if is_applicant %}
-                    <div class="pp-hint mb-3">
-                        <i class="bi bi-info-circle" aria-hidden="true"></i>
-                        <div>Это абитуриент: роль, группа и курс здесь не меняются. Перевод в студенты, статус CRM и коины — в карточке лида.</div>
-                    </div>
-                    <div class="row g-3">
-                        <div class="col-md-6">{{ ui.field('name', 'Имя', value=values.name, error=errors.get('name'), attrs={'maxlength': 120}, help='Можно оставить пустым — абитуриент заполнит профиль сам', classes='') }}</div>
-                        <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone|phone if values.phone and not errors.get('phone') else values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
-                    </div>
-                    <div class="pp-kv-block">
-                    {{ ui.kv([
-                        ('Логин', user.login or '—'),
-                        ('Email в Firebase', user.email or '—'),
-                        ('Источник', user.source or '—'),
-                        ('Город', data.get('city') or '—'),
-                        ('Школа / класс', ((data.get('school') or '—') ~ (' · ' ~ data.get('grade') if data.get('grade') else ''))),
-                        ('Специальности', (data.get('specialties') or [])|join(', ') or '—'),
-                        ('Зарегистрирован', user.created|dt),
-                    ]) }}
-                    </div>
-                {% else %}
-                    <div class="row g-3">
-                        <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120}, classes='') }}</div>
-                        <div class="col-md-6">{{ ui.field('email', 'Email', 'email', value=values.email, error=errors.get('email'), attrs={'maxlength': 120},
-                                                           help='Меняется и в аккаунте входа' if account and not account.error else None, classes='') }}</div>
-                        <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
-                        <div class="col-md-6">
-                            {{ ui.field('role', 'Роль', 'select', value=values.role, error=errors.get('role'), options=role_options,
-                                        attrs={'data-pp-role-select': ''} if not is_self else {'data-pp-role-select': '', 'disabled': true},
-                                        help='Свою роль администратора снять нельзя' if is_self else None, classes='') }}
-                            {% if is_self %}<input type="hidden" name="role" value="admin">{% endif %}
-                        </div>
-                        <div class="col-md-3" data-pp-role-only="student">
-                            {{ ui.field('group', 'Группа', 'select', value=values.group, error=errors.get('group'),
-                                        options=(groups if (not values.group or values.group in groups) else [values.group] + groups),
-                                        placeholder='— без группы —', classes='') }}
-                        </div>
-                        <div class="col-md-3" data-pp-role-only="student">
-                            {{ ui.field('course', 'Курс', 'select', value=values.course, error=errors.get('course'),
-                                        options=(courses if (not values.course or values.course in courses) else [values.course] + courses|list),
-                                        placeholder='—', classes='') }}
-                        </div>
-                    </div>
-                    <p class="cc-muted small mt-3 mb-0" data-pp-role-only="teacher,admin,club"><i class="bi bi-info-circle" aria-hidden="true"></i> Группа и курс у не-студентов удаляются — иначе приложение подпишет их на уведомления группы.</p>
-                {% endif %}
-                <div class="pp-form-actions">
-                    {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-                    {{ ui.button('Отмена', href=back_url, variant='light') }}
-                </div>
-            {% endcall %}
-        </form>
+{# Действия с входом: сброс пароля (новый пароль — в подтверждении), блокировка, завершение сеансов #}
+{% macro account_actions(compact=False) -%}
+{% set size = 'sm' if compact else None %}
+{% set cls = '' if compact else 'w-100' %}
+{% if can_reset %}
+{{ ui.confirm_button(url_for('admin_reset_password', user_id=user.id), 'Сбросить пароль', reset_text, variant='light', icon='key', size=size,
+                     fields={'next': act_next}, ok='Сбросить', title='Сброс пароля', classes=cls) }}
+{% endif %}
+{% if has_login and not is_self %}
+    {% if account.disabled %}
+    {# разблокировка обратима — без подтверждения, в тосте «Отменить» #}
+    <form method="post" action="{{ url_for('admin_user_set_disabled', user_id=user.id) }}" class="d-inline-block m-0">
+        {{ ui.csrf_field() }}<input type="hidden" name="disabled" value="0"><input type="hidden" name="next" value="{{ act_next }}">
+        {{ ui.button('Разблокировать вход', type='submit', icon='unlock', variant='light', size=size, classes=cls) }}
+    </form>
+    {% else %}
+    {{ ui.confirm_button(url_for('admin_user_set_disabled', user_id=user.id), 'Заблокировать вход',
+                         '«' ~ user.title ~ '» не сможет войти, пока вы не разблокируете вход. Все сеансы завершатся, данные сохранятся.',
+                         variant='light', icon='lock', size=size, fields={'disabled': '1', 'next': act_next}, ok='Заблокировать', classes=cls) }}
+    {% endif %}
+    {{ ui.confirm_button(url_for('admin_user_revoke', user_id=user.id), 'Завершить все сеансы', 'Выйти из аккаунта «' ~ user.title ~ '» на всех устройствах? Пароль не изменится.',
+                         variant='light', icon='box-arrow-right', size=size, fields={'next': act_next}, ok='Завершить', classes=cls) }}
+{% endif %}
+{%- endmacro %}
+
+{% block content %}
+{% call ui.page_header(user.title, ('Логин: ' ~ user.login) if is_applicant and user.login else (None if is_applicant else (user.email or 'без email')),
+                       back={'href': list_url, 'label': 'Пользователи'}, meta=status_badges()) %}
+    {% if is_applicant and lead_url != '#' %}
+    {{ ui.button('Карточка лида', href=lead_url, icon='person-lines-fill', variant='light') }}
+    {% elif user.role == 'teacher' %}
+    {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id, next=list_url), icon='person-workspace', variant='light') }}
+    {% endif %}
+{% endcall %}
+
+<div class="cc-form-layout">
+    <form id="userForm" method="post" action="{{ url_for('admin_edit_user', user_id=user.id) }}" class="min-w-0" novalidate data-dirty-guard>
+        {{ ui.csrf_field() }}{{ ui.next_field() }}
+        <div class="cc-stack">
+        {% if errors.get('_form') %}{{ ui.form_errors([errors._form]) }}{% endif %}
+        {% call ui.card('Профиль', subtitle='данные, которые видит приложение') %}
+            {% if is_applicant %}
+                {{ ui.hint('Это абитуриент: роль, группа и курс здесь не меняются. Перевод в студенты, статус и коины — в карточке лида.', icon='mortarboard') }}
+            {% endif %}
+            {{ profile_fields() }}
+            {% if is_applicant %}
+            <div class="pp-kv-block">
+            {{ ui.kv([
+                ('Логин', user.login or '—'),
+                ('Email в Firebase', user.email or '—'),
+                ('Источник', user.source or '—'),
+                ('Город', data.get('city') or '—'),
+                ('Школа / класс', ((data.get('school') or '—') ~ (' · ' ~ data.get('grade') if data.get('grade') else ''))),
+                ('Специальности', (data.get('specialties') or [])|join(', ') or '—'),
+                ('Зарегистрирован', user.created|dt),
+            ]) }}
+            </div>
+            {% endif %}
+        {% endcall %}
 
         {% if user.role == 'teacher' %}
-        {% call ui.card('Расписание', icon='calendar-week') %}
+        {% call ui.card('Расписание') %}
             <p class="mb-2">{% if lessons_count %}Ведёт <b>{{ lessons_count }}</b> {{ plural(lessons_count, 'занятие', 'занятия', 'занятий') }} в неделю.{% else %}В расписании занятий нет.{% endif %}</p>
             <div class="d-flex flex-wrap gap-2">
-                {{ ui.button('Расписание преподавателя', href=nav_url('schedule_teachers', teacher=user.id), icon='person-workspace', variant='light', size='sm') }}
-                {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id), icon='speedometer', variant='light', size='sm') }}
+                {{ ui.button('Расписание преподавателя', href=nav_url('schedule_teachers', teacher=user.id), icon='calendar-week', variant='light', size='sm') }}
+                {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id, next=list_url), icon='speedometer', variant='light', size='sm') }}
             </div>
         {% endcall %}
         {% endif %}
-    </div>
+        </div>
+    </form>
 
-    <aside class="pp-form-aside">
-        {% call ui.card('Вход в приложение', icon='key') %}
+    <aside class="cc-form-aside">
+        {% call ui.card('Вход в приложение') %}
             {% if account is none %}
                 <p class="mb-2"><span class="cc-badge cc-badge--neutral"><i class="bi bi-person-slash" aria-hidden="true"></i>Нет аккаунта</span></p>
                 <p class="cc-muted small mb-0">
@@ -115,42 +143,56 @@
                 <p class="cc-muted mb-0">Сервис входа сейчас недоступен — данные аккаунта не загрузились.</p>
             {% else %}
                 {{ ui.kv([
-                    ('Статус', ui.badge('inactive', 'Заблокирован', 'danger') if account.disabled else ui.badge('active', 'Активен')),
+                    ('Статус', ui.badge('blocked', 'Заблокирован', 'danger', 'lock') if account.disabled else ui.badge('active')),
                     ('Вход по', user.login if is_applicant else (account.email or '—')),
                     ('Последний вход', (account.last_sign_in|ago) if account.last_sign_in else 'ещё не входил'),
                     ('Аккаунт создан', account.created|dt),
                 ]) }}
                 {% if is_applicant and data.get('passwordResetAt') %}<p class="cc-muted small mt-2 mb-0">Пароль сброшен {{ data.get('passwordResetAt')|dt }}{% if user.must_change %} — абитуриент ещё не сменил его{% endif %}.</p>{% endif %}
-                <div class="pp-account-actions">
-                    {% if default_password and not is_self and user.role != 'admin' %}
-                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=user.id), 'Сбросить пароль на ' ~ default_password,
-                                         'Пароль станет ' ~ default_password ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if is_applicant else ' Сообщите его пользователю лично.'),
-                                         variant='outline-primary', icon='key', size=None, ok='Сбросить', title='Сброс пароля', classes='w-100') }}
-                    {% endif %}
-                    {% if not is_self %}
-                    {% if account.disabled %}
-                    {{ ui.confirm_button(url_for('admin_user_set_disabled', user_id=user.id), 'Разблокировать вход', 'Разрешить пользователю снова входить в приложение?',
-                                         variant='light', icon='unlock', size=None, fields={'disabled': '0'}, ok='Разблокировать', classes='w-100') }}
-                    {% else %}
-                    {{ ui.confirm_button(url_for('admin_user_set_disabled', user_id=user.id), 'Заблокировать вход', 'Пользователь не сможет войти, пока вы не разблокируете аккаунт. Все сеансы завершатся. Данные сохранятся.',
-                                         variant='light', icon='lock', size=None, fields={'disabled': '1'}, ok='Заблокировать', classes='w-100') }}
-                    {% endif %}
-                    {{ ui.confirm_button(url_for('admin_user_revoke', user_id=user.id), 'Завершить все сеансы', 'Выйти из аккаунта на всех устройствах? Пароль не изменится.',
-                                         variant='light', icon='box-arrow-right', size=None, ok='Завершить', classes='w-100') }}
-                    {% endif %}
-                </div>
+                <div class="pp-account-actions">{{ account_actions() }}</div>
                 {% if user.role == 'admin' and not is_self %}<p class="cc-muted small mt-2 mb-0">Пароль администратора стандартным не сбрасывается — он меняет его сам.</p>{% endif %}
             {% endif %}
+            <p class="pp-uid">uid: <code data-copy="{{ user.id }}" title="Скопировать uid" class="pp-copy">{{ user.id }}</code></p>
         {% endcall %}
-
-        {% if not is_self %}
-        {% call ui.card('Удаление', icon='trash', classes='pp-danger-card') %}
-            <p class="cc-muted small">Удалится аккаунт входа и профиль.{% if is_applicant %} CRM, кошелёк и заказы абитуриента подчистит сервер.{% elif lessons_count %} В расписании останется {{ lessons_count }} {{ plural(lessons_count, 'занятие', 'занятия', 'занятий') }} без преподавателя.{% endif %} Действие необратимо.</p>
-            {{ ui.confirm_button(url_for('admin_delete_user', user_id=user.id, next=back_url), 'Удалить пользователя',
-                                 'Удалить «' ~ user.title ~ '» вместе с аккаунтом входа? Действие необратимо.',
-                                 variant='outline-danger', icon='trash', size=None, ok='Удалить', classes='w-100') }}
-        {% endcall %}
-        {% endif %}
     </aside>
+</div>
+{{ ui.savebar('Сохранить', cancel_href=list_url, form='userForm', submit_attrs={'data-loading': 'Сохраняем…'},
+              danger={'label': 'Удалить', 'action': url_for('admin_delete_user', user_id=user.id), 'confirm': delete_text, 'ok': 'Удалить'} if not is_self else None) }}
+{% endblock %}
+
+{% block peek %}
+<div class="pp-peek">
+    <h1 class="visually-hidden">{{ user.title }}</h1>
+    <div class="pp-peek__head">
+        {{ ui.avatar(user.name or user.title, size='lg') }}
+        <div class="min-w-0">
+            <div class="pp-peek__sub cc-truncate">{{ ('Логин: ' ~ user.login) if is_applicant and user.login else (user.email or 'без email') }}</div>
+            <div class="mt-2">{{ status_badges() }}</div>
+        </div>
+    </div>
+    <dl class="cc-kv pp-peek__kv">
+        <dt>Телефон</dt><dd>{% if user.phone %}<a href="tel:{{ user.phone }}">{{ user.phone|phone }}</a>{% else %}—{% endif %}</dd>
+        {% if is_applicant %}<dt>Источник</dt><dd>{{ user.source or '—' }}</dd>{% endif %}
+        {% if user.role == 'teacher' %}<dt>Занятий</dt><dd>{{ lessons_count }} в неделю</dd>{% endif %}
+        <dt>Вход</dt><dd>{% if account is none %}нет аккаунта{% elif account.error %}сервис недоступен{% elif account.disabled %}заблокирован{% else %}{{ ('был ' ~ (account.last_sign_in|ago)) if account.last_sign_in else 'ещё не входил' }}{% endif %}</dd>
+        <dt>Создан</dt><dd>{{ user.created|dt }}</dd>
+    </dl>
+    <div class="pp-peek__actions">
+        {% if is_applicant and lead_url != '#' %}{{ ui.button('Карточка лида', href=lead_url, icon='person-lines-fill', variant='light', size='sm') }}{% endif %}
+        {% if user.role == 'teacher' %}{{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=user.id), icon='calendar-week', variant='light', size='sm') }}{% endif %}
+        {{ account_actions(compact=True) }}
+    </div>
+    <form method="post" action="{{ url_for('admin_edit_user', user_id=user.id) }}" class="pp-peek__form" novalidate>
+        {{ ui.csrf_field() }}{{ ui.next_field() }}
+        <h2 class="pp-peek__title">Профиль</h2>
+        {{ profile_fields() }}
+        <div class="pp-peek__save">
+            {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+            {% if not is_self %}
+            <button type="submit" class="btn btn-ghost pp-danger-ghost ms-auto" formaction="{{ url_for('admin_delete_user', user_id=user.id) }}" formnovalidate
+                    data-confirm="{{ delete_text }}" data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+            {% endif %}
+        </div>
+    </form>
 </div>
 {% endblock %}

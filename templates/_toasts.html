@@ -1,0 +1,22 @@
+{# Тосты из flash-сообщений (FOUNDATION): base.html и public/base_public.html.
+   pop_toasts() склеивает flash_action(): действие — ссылка или маленькая POST-форма с CSRF. #}
+<div class="cc-toasts" id="ccToasts" aria-live="polite">
+    {% for t in pop_toasts() %}
+    <div class="cc-toast cc-toast--{{ t.category }}{{ ' cc-toast--action' if t.action }}" role="{{ 'alert' if t.category == 'danger' else 'status' }}" data-category="{{ t.category }}"{% if t.action %} data-has-action{% endif %}>
+        <i class="cc-toast__icon bi bi-{{ {'success': 'check-circle-fill', 'danger': 'exclamation-octagon-fill', 'warning': 'exclamation-triangle-fill'}.get(t.category, 'info-circle-fill') }}" aria-hidden="true"></i>
+        <div class="cc-toast__text">{{ t.message }}</div>
+        {% if t.action %}
+            {% if t.action.post %}
+            <form method="post" action="{{ t.action.post }}" class="cc-toast__form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% for k, v in (t.action.fields or {}).items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+                <button type="submit" class="cc-toast__action">{{ t.action.label }}</button>
+            </form>
+            {% else %}
+            <a class="cc-toast__action" href="{{ t.action.href }}">{{ t.action.label }}</a>
+            {% endif %}
+        {% endif %}
+        <button type="button" class="cc-toast__close" aria-label="Закрыть"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+    {% endfor %}
+</div>

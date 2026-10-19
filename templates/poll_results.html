@@ -1,72 +1,68 @@
-{# Результаты опроса: голоса по вариантам, участники (только у неанонимных), экспорт CSV (CONTENT). #}
+{# Результаты опроса: сводка, голоса по вариантам (лидер — бренд), участники (только у неанонимных), CSV (CONTENT).
+   «Проголосовали»: N из M (аудитория — count() по ролям); без списка голосовавших — «неизвестно». #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
-{% block title %}Результаты опроса{% endblock %}
-{% block page_title %}Результаты опроса{% endblock %}
+{% block title %}{{ poll.title or 'Результаты опроса' }}{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-{% call ui.page_header(poll.title or 'Опрос без названия', poll.description or None, icon='bar-chart') %}
-    {{ ui.button('CSV', href=url_with(format='csv'), icon='download', variant='light') }}
-    {{ ui.button('Редактировать', href=url_for('poll_form', poll_id=poll.id), icon='pencil', variant='light') }}
-    {% if meta.active %}
-    {{ ui.confirm_button(url_for('poll_close', poll_id=poll.id), 'Завершить сейчас', 'Завершить опрос сейчас? Голосование в приложении закроется.', variant='outline-primary', icon='stop-circle', size=None, ok='Завершить', fields={'next': url_for('poll_results', poll_id=poll.id)}) }}
-    {% else %}
-    {{ ui.confirm_button(url_for('poll_extend', poll_id=poll.id), 'Продлить на 7 дней', 'Открыть голосование ещё на 7 дней?', variant='outline-primary', icon='arrow-clockwise', size=None, ok='Продлить', fields={'days': 7, 'next': url_for('poll_results', poll_id=poll.id)}) }}
-    {% endif %}
+{% call ui.page_header(poll.title or 'Опрос без названия', poll.description or None, back={'href': back_url('polls'), 'label': 'Опросы'},
+                       meta=ui.badge('active', 'Идёт', 'success', 'broadcast') if meta.active else ui.badge('closed', 'Завершён', 'neutral', 'flag')) %}
+    {{ ui.header_menu([
+        {'label': 'Скачать CSV', 'href': url_with(format='csv'), 'icon': 'download'},
+        ({'label': 'Завершить сейчас', 'action': url_for('poll_close', poll_id=poll.id), 'fields': {'next': here()}, 'icon': 'stop-circle'} if meta.active
+         else {'label': 'Продлить на 7 дней', 'action': url_for('poll_extend', poll_id=poll.id), 'fields': {'days': 7, 'next': here()}, 'icon': 'arrow-clockwise'}),
+        {'divider': True},
+        {'label': 'Удалить опрос', 'action': url_for('poll_delete', poll_id=poll.id), 'fields': {'next': back_url('polls')}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': 'Удалить опрос «' ~ (poll.title or '') ~ '» вместе со всеми голосами? Из приложения он тоже пропадёт.'},
+    ]) }}
+    {{ ui.button('Редактировать', href=url_for('poll_form', poll_id=poll.id, next=here()), icon='pencil', variant='light') }}
 {% endcall %}
 
-<div class="d-flex flex-wrap gap-2 mb-3">
-    {{ ui.badge('active', 'Идёт', 'success', 'broadcast') if meta.active else ui.badge('closed', 'Завершён', 'neutral', 'flag') }}
-    {{ ui.badge('aud', meta.audience_label, 'info', 'people') }}
-    {{ ui.badge('type', meta.type_label, 'neutral', 'ui-checks') }}
-    {% if meta.anonymous %}{{ ui.badge('anon', 'Анонимный', 'violet', 'incognito') }}{% endif %}
-</div>
+{%- set voters_item = ({'value': voters_count, 'label': ('из ' ~ (eligible|num) ~ ' проголосовали (' ~ pct(voters_count, eligible) ~ ')') if eligible else plural(voters_count, 'человек проголосовал', 'человека проголосовали', 'человек проголосовали')} if voters_known
+                       else {'value': None, 'label': 'Проголосовали: неизвестно (' ~ ('анонимный опрос' if meta.anonymous else 'старый опрос без списка голосовавших') ~ ')',
+                             'title': 'Голоса есть, но список голосовавших не сохранился — число людей посчитать нельзя'}) -%}
+{{ ui.summary_line([
+    (total_votes, plural(total_votes, 'голос', 'голоса', 'голосов')),
+    voters_item,
+    {'value': None, 'label': ((('до ' ~ (meta.end|dt)) ~ (' · ' ~ meta.left_label if meta.left_label else '')) if meta.active else ('завершён ' ~ (meta.end|dt))) if meta.end else 'без срока'},
+    {'value': None, 'label': ('для всех' if meta.audience == 'all' else meta.audience_label|lower) ~ ' · ' ~ meta.type_label|lower ~ (' · анонимный' if meta.anonymous else '')},
+]) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Голосов', total_votes, 'check2-square') }}
-    {{ ui.stat_card('Проголосовали', voters_count, 'people', tone='info', meta='аккаунтов' if voters_count else None) }}
-    {{ ui.stat_card('Вариантов', answers|length, 'list-ol', tone='violet') }}
-    {{ ui.stat_card('Окончание', (meta.end|dt('%d.%m.%Y')) if meta.end else 'Без срока', 'hourglass-split', tone='warning' if meta.active else None, meta=((meta.end|timeonly) ~ ' · ' ~ (meta.left_label if meta.active else (meta.end|ago))) if meta.end else None) }}
-</div>
-
-<div class="cc-grid cc-grid-2 ct-results-grid">
-    {% call ui.card('Результаты', icon='bar-chart-line', subtitle=total_votes ~ ' ' ~ total_votes|plural('голос', 'голоса', 'голосов')) %}
+<div class="{{ 'ct-results-solo' if meta.anonymous else 'cc-grid cc-grid-2 ct-results-grid' }}">
+    {% call ui.card('Результаты') %}
         {% if answers %}
         <ol class="ct-results">
             {% for a in answers|sort(attribute='votes', reverse=True) %}
             <li class="ct-results__row{{ ' is-leader' if a.leader }}">
                 <div class="ct-results__top">
-                    <span class="ct-results__text">{% if a.leader %}<i class="bi bi-trophy" aria-hidden="true"></i>{% endif %}{{ a.text or '—' }}</span>
+                    <span class="ct-results__text">{% if a.leader %}<i class="bi bi-trophy" aria-hidden="true"></i><span class="visually-hidden">Лидер: </span>{% endif %}{{ a.text or '—' }}</span>
                     <span class="ct-results__num cc-num"><b>{{ a.pct }}%</b> · {{ a.votes }}</span>
                 </div>
-                {{ ui.progress_bar(a.votes, total_votes or 1, 'success' if a.leader else None, a.text) }}
+                {{ ui.progress_bar(a.votes, total_votes or 1, 'brand' if a.leader else None, a.text) }}
             </li>
             {% endfor %}
         </ol>
         {% else %}
-        {{ ui.empty_state('list-ol', 'Вариантов нет', 'Добавьте варианты ответа в форме опроса.', {'label': 'Редактировать', 'href': url_for('poll_form', poll_id=poll.id), 'icon': 'pencil', 'variant': 'light'}) }}
+        {{ ui.empty_state('list-ol', 'Вариантов нет', 'Добавьте варианты ответа в форме опроса.', {'label': 'Редактировать', 'href': url_for('poll_form', poll_id=poll.id), 'icon': 'pencil'}) }}
         {% endif %}
+        {% if meta.anonymous %}<div class="mt-3">{{ ui.hint('Анонимный опрос: имена голосовавших не показываются и не попадают в CSV — видно только количество голосов.', icon='incognito') }}</div>{% endif %}
     {% endcall %}
 
-    {% if meta.anonymous %}
-    {% call ui.card('Участники', icon='incognito') %}
-        {{ ui.empty_state('incognito', 'Анонимный опрос', 'Имена голосовавших не показываются — видно только количество голосов.') }}
-    {% endcall %}
-    {% else %}
-    {% call ui.card('Участники', icon='people', subtitle=people|length ~ ' ' ~ (people|length)|plural('человек', 'человека', 'человек')) %}
+    {% if not meta.anonymous %}
+    {% call ui.card('Участники', subtitle=people|length ~ ' ' ~ (people|length)|plural('человек', 'человека', 'человек')) %}
         {% if people %}
         <div class="cc-search mb-2"><i class="bi bi-search" aria-hidden="true"></i>
-            <input class="form-control form-control-sm" type="search" placeholder="Имя или группа" aria-label="Поиск участника" data-table-search="#votersTable">
+            <input class="form-control form-control-sm" type="search" placeholder="Имя или группа" aria-label="Поиск участника" data-table-search="#votersTable" data-cc-search>
         </div>
         <div class="cc-table-wrap ct-scroll">
-            <table class="cc-table cc-table--compact" id="votersTable" data-sortable>
+            <table class="cc-table cc-table--compact cc-table--stack" id="votersTable" data-sortable>
                 <thead><tr><th data-sort="text">Участник</th><th data-sort="text">Ответ</th><th data-sort="text">Когда</th></tr></thead>
                 <tbody>
                 {% for p in people %}
                 <tr>
-                    <td><div class="d-flex align-items-center gap-2">{{ ui.avatar(p.name, size='sm') }}<div class="min-w-0"><div class="cc-cell-main">{{ p.name }}</div><div class="cc-cell-sub">{{ p.group or (ui.badge(p.role) if p.role else '') }}</div></div></div></td>
-                    <td>{{ p.answers|join(', ') or '—' }}</td>
-                    <td class="cc-nowrap" data-value="{{ (p.at|dt('%Y%m%d%H%M', '')) }}">{{ p.at|dt }}</td>
+                    <td class="cc-cell-primary"><div class="d-flex align-items-center gap-2">{{ ui.avatar(p.name, size='sm') }}<div class="min-w-0"><div class="cc-cell-main">{{ p.name }}</div><div class="cc-cell-sub">{{ p.group or (ui.role_badge(p.role) if p.role else '') }}</div></div></div></td>
+                    <td data-label="Ответ">{{ p.answers|join(', ') or '—' }}</td>
+                    <td class="cc-nowrap cc-cell-meta" data-value="{{ (p.at|dt('%Y%m%d%H%M', '')) }}">{{ p.at|dt }}</td>
                 </tr>
                 {% endfor %}
                 <tr data-table-empty class="is-hidden"><td colspan="3" class="cc-table-empty">Никого не нашли</td></tr>

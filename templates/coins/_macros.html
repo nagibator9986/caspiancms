@@ -1,5 +1,5 @@
 {#
-  Общие макросы раздела «Caspian Coin» и приёмной (COINS).
+  Общие макросы раздела «Caspian Coin» и приёмной (CRM). Ошибки форм — ui.form_errors (своего макроса нет).
       {% import 'coins/_macros.html' as cn with context %}
 #}
 {% import '_ui.html' as ui with context %}
@@ -43,14 +43,4 @@
 {# Миниатюра товара/заказа (или заглушка) #}
 {% macro thumb(url, size=44) -%}
 {% if url %}<img class="cc-thumb cn-thumb" src="{{ url|safe_url }}" alt="" width="{{ size }}" height="{{ size }}" loading="lazy" decoding="async">{% else %}<span class="cn-thumb cn-thumb--empty" aria-hidden="true"><i class="bi bi-bag"></i></span>{% endif %}
-{%- endmacro %}
-
-{# Сообщения об ошибках списка (повторяемые строки форм) #}
-{% macro error_list(errors) -%}
-{% if errors %}
-<div class="cn-errors" role="alert">
-    <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
-    <ul>{% for e in (errors if errors is not string else [errors]) %}<li>{{ e }}</li>{% endfor %}</ul>
-</div>
-{% endif %}
 {%- endmacro %}

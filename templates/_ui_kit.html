@@ -1,116 +1,265 @@
-{# /ui-kit — живой справочник дизайн-системы (FOUNDATION). Копируйте разметку отсюда. #}
+{# /ui-kit — живой справочник дизайн-системы (FOUNDATION). Копируйте разметку отсюда; описание — tests/README.md §4–5. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}UI Kit{% endblock %}
 {% block page_title %}UI Kit{% endblock %}
+{% block styles %}<style>
+  /* только для витрины */
+  .kit-sec { margin: 32px 0 12px; display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; }
+  .kit-sec h2 { font-size: 16px; margin: 0; }
+  .kit-sec code { font-size: 12px; color: var(--cc-text-muted); white-space: normal; }
+  .kit-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .kit-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .kit-swatch { border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); overflow: hidden; font-size: 12px; background: var(--cc-surface); }
+  .kit-swatch span { display: block; height: 32px; border-bottom: 1px solid var(--cc-border); }
+  .kit-swatch div { padding: 6px 8px; overflow-wrap: anywhere; }
+</style>{% endblock %}
 {% block content %}
-{% call ui.page_header('UI Kit', 'Компоненты дизайн-системы: макросы _ui.html и классы app.css', icon='palette') %}
-    {{ ui.button('Тост', icon='bell', variant='light', attrs={'onclick': "CC.toast('Сохранено', 'success')"}) }}
-    {{ ui.button('Ошибка', icon='exclamation-octagon', variant='light', attrs={'onclick': "CC.toast('Не удалось сохранить: проверьте поля', 'error')"}) }}
-    {{ ui.button('Основное действие', icon='plus-lg') }}
+{% call ui.page_header('UI Kit', 'Компоненты дизайн-системы v2: макросы _ui.html, классы app.css, JS API app.js',
+                       back={'href': nav_url('dashboard'), 'label': 'Обзор'}, meta=ui.badge('active', 'Контракт v2')) %}
+    {{ ui.header_menu([
+        {'label': 'Тост «Сохранено»', 'href': '#', 'icon': 'bell', 'attrs': {'onclick': "CC.toast('Сохранено', 'success'); return false;"}},
+        {'label': 'Тост с ошибкой', 'href': '#', 'icon': 'exclamation-octagon', 'attrs': {'onclick': "CC.toast('Не удалось сохранить: проверьте поля', 'error'); return false;"}},
+        {'label': 'Горячие клавиши', 'href': '#', 'icon': 'keyboard', 'attrs': {'onclick': 'CC.showHotkeys(); return false;'}},
+        {'divider': True},
+        {'label': 'Удалить демо-запись', 'action': url_for('ui_kit'), 'fields': {'demo': 'delete'}, 'icon': 'trash', 'danger': True, 'confirm': 'Удалить демо-запись? Действие нельзя отменить.'},
+    ]) }}
+    {{ ui.button('Тост с «Отменить»', variant='light', icon='arrow-counterclockwise', attrs={'onclick': "CC.toast('Обращение закрыто', 'success', {action: {label: 'Отменить', onClick: function () { CC.toast('Отменено', 'info'); }}})"}) }}
+    {{ ui.button('Основное действие', icon='plus-lg', attrs={'data-cc-hotkey': 'n', 'onclick': "CC.toast('Нажата основная кнопка (n)', 'info')"}) }}
 {% endcall %}
+{{ ui.summary_line([{'value': 5, 'label': 'новостей'}, {'value': 4, 'label': 'за 30 дней', 'href': url_with(period='30')},
+                    {'value': 2, 'label': 'накладки', 'tone': 'danger', 'title': 'Числитель: 1 · Знаменатель: 1'}, (4, 'с фото')]) }}
 
-{{ ui.section_title('KPI — stat_card') }}
-<div class="cc-stats">
-    {{ ui.stat_card('Абитуриенты за 7 дней', 42, 'person-plus', trend=12.5, meta='к прошлой неделе', href=nav_url('applicants_leads')) }}
-    {{ ui.stat_card('Заполнили профиль', '57%', 'person-check', tone='success', meta='24 из 42') }}
-    {{ ui.stat_card('Заказы ждут выдачи', 3, 'box-seam', tone='warning', trend=-20) }}
-    {{ ui.stat_card('Накладки', 5, 'exclamation-diamond', tone='danger', trend=0, meta='критичных') }}
+{{ ui.hint('Эта страница — живой справочник. Клавиши: «?» — список сочетаний, Ctrl+K — поиск, «n» — основная кнопка, «/» — поиск на странице.', icon='lightbulb', dismiss='ui-kit-intro') }}
+
+{# ============================== Токены ============================== #}
+<div class="kit-sec"><h2>Токены</h2><code>--cc-* в static/css/app.css (светлая и тёмная тема)</code></div>
+<div class="kit-swatches">
+    {% for t in ['--cc-brand', '--cc-brand-strong', '--cc-brand-ink', '--cc-brand-tint', '--cc-text', '--cc-text-muted', '--cc-text-subtle', '--cc-icon-subtle', '--cc-border', '--cc-border-strong', '--cc-surface-2', '--cc-row-hover', '--cc-row-selected', '--cc-avatar-bg', '--cc-chart-neutral', '--cc-chart-highlight', '--cc-success', '--cc-warning', '--cc-danger', '--cc-info', '--cc-week-num', '--cc-week-den', '--cc-nav-badge-bg'] %}
+    <div class="kit-swatch"><span style="background: var({{ t }})"></span><div><code>{{ t }}</code></div></div>
+    {% endfor %}
 </div>
 
+{# ============================== KPI ============================== #}
+<div class="kit-sec"><h2>KPI</h2><code>ui.stat_strip(items) · ui.stat_card(label, value, icon, trend, href, meta, tone) — только Обзор, Аналитика приёма, Накладки</code></div>
+{{ ui.stat_strip([
+    {'label': 'Пары сегодня', 'value': 48, 'icon': 'calendar-day', 'href': nav_url('schedule_all'), 'meta': 'идёт 2-я пара'},
+    {'label': 'Накладки', 'value': 8, 'icon': 'exclamation-diamond', 'tone': 'danger', 'href': nav_url('schedule_conflicts'), 'meta': '3 предупреждения'},
+    {'label': 'Обращения без ответа', 'value': 3, 'icon': 'chat-dots', 'tone': 'warning', 'href': nav_url('feedback_list'), 'meta': 'самое старое — 2 дня'},
+    {'label': 'Опросы идут', 'value': 2, 'icon': 'ui-checks', 'meta': 'до 25.10'},
+    {'label': 'Студенты', 'value': 1240, 'icon': 'backpack', 'meta': '12 преподавателей'},
+]) }}
+<div class="cc-stats mt-3">
+    {{ ui.stat_card('Абитуриенты за 7 дней', 42, 'person-plus', trend=12.5, meta='к прошлой неделе', href=nav_url('applicants_leads')) }}
+    {{ ui.stat_card('Заполнили профиль', '57%', 'person-check', meta='24 из 42') }}
+    {{ ui.stat_card('Заказы ждут выдачи', 3, 'box-seam', tone='warning', trend=-20) }}
+</div>
+
+{# ============================== Вкладки, сегменты, чипы ============================== #}
+<div class="kit-sec"><h2>Вкладки · сегменты · чипы</h2><code>ui.tabs — подстраницы; ui.segmented(remember=…) — вид/период; ui.filter_chips — статус внутри списка</code></div>
 {{ ui.tabs([
     {'key': 'rooms', 'label': 'Аудиторный фонд', 'href': nav_url('schedule_rooms'), 'icon': 'door-open'},
+    {'key': 'free', 'label': 'Свободные аудитории', 'href': nav_url('schedule_free_rooms'), 'icon': 'door-closed', 'count': 12},
     {'key': 'conflicts', 'label': 'Накладки', 'href': nav_url('schedule_conflicts'), 'icon': 'exclamation-diamond', 'count': 5},
-    {'key': 'free', 'label': 'Свободные аудитории', 'href': nav_url('schedule_free_rooms'), 'icon': 'door-closed'},
-], 'conflicts') }}
+], 'free') }}
+<div class="kit-row mb-3">
+    {{ ui.segmented([('week', 'Неделя', url_with(view='week'), 'calendar-week'), ('list', 'Список', url_with(view='list'), 'list-ul')], kit_view, remember='ui_kit') }}
+    {{ ui.segmented([{'key': '7', 'label': '7 дней', 'href': url_with(days=7)}, {'key': '30', 'label': '30 дней', 'href': url_with(days=30)}, {'key': '90', 'label': '90 дней', 'href': url_with(days=90)}], request.args.get('days', '30'), label='Период') }}
+    <span class="cc-muted small">Вид: <b>{{ kit_view }}</b> (запоминается в cookie cc_view_ui_kit)</span>
+</div>
+{{ ui.filter_chips('status', [('new', 'Новые', 3), ('answered', 'Отвечены', 12), ('closed', 'Закрыты', 40)], request.args.get('status'), all_count=55) }}
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', request.args.get('q'), 'Имя, логин, телефон') }}
-    {{ ui.filter_select('status', 'Статус', [('new', 'Новый'), ('contacted', 'Связались'), ('enrolled', 'Поступил')], request.args.get('status')) }}
-    {{ ui.filter_input('from', 'С даты', request.args.get('from'), 'date') }}
+{# ============================== Список ============================== #}
+<div class="kit-sec"><h2>Страница-список</h2><code>ui.list_card · ui.filters_bar(search=…, inline=True) · .cc-table--stack · ui.row_menu · ui.select_* · ui.bulkbar</code></div>
+<form id="kitBulk" method="post" action="{{ url_for('ui_kit') }}"><input type="hidden" name="demo" value="bulk">{{ ui.next_field() }}</form>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': request.args.get('q'), 'placeholder': 'Имя или логин', 'filter': '#kitRows'}, inline=True, ignore=('status', 'days')) %}
+        {{ ui.filter_select('source', 'Источник', [('STAND1', 'Стенд в ТРЦ'), ('INSTA', 'Instagram'), ('APP', 'Приложение')], request.args.get('source')) }}
+        {{ ui.filter_select('course', 'Курс', [('1', '1 курс'), ('2', '2 курс'), ('3', '3 курс')], request.args.get('course')) }}
+        {{ ui.filter_input('from', 'С даты', request.args.get('from'), 'date') }}
+        {{ ui.filter_switch('anon', 'Без профиля', request.args.get('anon')) }}
+    {% endcall %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+        <table class="cc-table cc-table--stack" id="kitRows" data-sortable>
+            <thead><tr>
+                <th class="cc-select">{{ ui.select_all('kitBulk') }}</th>
+                <th data-sort="text">Абитуриент</th>
+                <th data-sort="text" class="cc-col-md">Статус</th>
+                <th data-sort="text" class="cc-col-lg">Источник</th>
+                <th data-sort="num" class="cc-num-col cc-col-xl">Коины</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+                {% for r in rows %}
+                <tr data-href="{{ url_for('ui_kit', row=loop.index) }}" data-search="{{ r.name }} {{ r.login }}">
+                    <td class="cc-select">{{ ui.select_row('kitBulk', r.login, r.name) }}</td>
+                    <td class="cc-cell-primary"><div class="d-flex align-items-center gap-2">{{ ui.avatar(r.name, size='sm') }}<div class="min-w-0"><a class="cc-row-link cc-cell-main" href="{{ url_for('ui_kit', row=loop.index) }}">{{ r.name }}</a><div class="cc-cell-sub">{{ r.login }}</div></div></div></td>
+                    <td class="cc-cell-meta cc-col-md">{{ ui.badge(r.status) }}</td>
+                    <td class="cc-cell-meta cc-col-lg"><span class="cc-truncate d-inline-block align-middle" style="max-width: 220px" title="{{ r.source }}">{{ r.source }}</span></td>
+                    <td class="cc-num-col cc-num cc-col-xl" data-label="Коины" data-value="{{ r.coins }}">{{ r.coins|num }}</td>
+                    <td class="cc-actions">{{ ui.row_menu([
+                        {'label': 'Быстрый просмотр', 'href': url_for('ui_kit', peek_demo=1), 'icon': 'layout-sidebar-reverse', 'attrs': {'data-cc-peek': ''}},
+                        {'label': 'Сменить статус', 'action': url_for('ui_kit'), 'fields': {'demo': 'toast'}, 'icon': 'arrow-repeat'},
+                        {'divider': True},
+                        {'label': 'Удалить', 'action': url_for('ui_kit'), 'fields': {'demo': 'delete'}, 'icon': 'trash', 'danger': True, 'confirm': 'Удалить «' ~ r.name ~ '»?'},
+                    ], quick={'label': 'Открыть', 'href': url_for('ui_kit', row=loop.index), 'icon': 'pencil'}) }}</td>
+                </tr>
+                {% endfor %}
+                <tr data-table-empty class="is-hidden"><td colspan="6" class="cc-table-empty">Ничего не найдено — измените запрос</td></tr>
+            </tbody>
+        </table>
+    </div>
+    {{ ui.pagination(kit_page) }}
 {% endcall %}
+{% call ui.bulkbar('kitBulk', noun=('абитуриент', 'абитуриента', 'абитуриентов')) %}
+    <button type="submit" class="btn btn-sm btn-light" name="action" value="status" form="kitBulk"><i class="bi bi-arrow-repeat" aria-hidden="true"></i><span>Статус…</span></button>
+    <button type="submit" class="btn btn-sm btn-outline-danger" name="action" value="delete" form="kitBulk" data-confirm="Удалить выбранных: {items}?"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+{% endcall %}
+<p class="cc-muted small mt-2 mb-0">Строка — ссылка (Ctrl/⌘/средняя кнопка — новая вкладка); «⋯» не обрезается прокруткой; Shift+клик по чекбоксам — диапазон, Esc — снять выделение. На телефоне строки — карточки.</p>
 
-<div class="cc-grid cc-grid-3 mb-4">
-    {% call ui.card('Бейджи — badge()', icon='tags') %}
-        <div class="d-flex flex-wrap gap-2">
-            {% for s in ['new', 'contacted', 'applied', 'enrolled', 'declined', 'reserved', 'issued', 'cancelled', 'rejected', 'active', 'inactive', 'critical', 'warning', 'info', 'applicant', 'teacher', 'admin', 'welcome', 'purchase', true, false, 'custom'] %}{{ ui.badge(s) }}{% endfor %}
-        </div>
-        <div class="d-flex flex-wrap gap-2 mt-3">{{ ui.week_badge('always') }}{{ ui.week_badge('numerator') }}{{ ui.week_badge('denominator') }}{{ ui.week_badge('numerator', short=True) }}</div>
+<div class="cc-grid cc-grid-2 mt-3">
+    {% call ui.card('Пусто и «не найдено»', icon='inbox') %}
+        {{ ui.empty_state('box-seam', 'Заказов пока нет', 'Когда абитуриент обменяет коины на мерч, заказ появится здесь.', {'label': 'Добавить товар', 'href': '#', 'icon': 'plus-lg'}) }}
+        <hr class="my-2">
+        {{ ui.empty_filtered(url_for('ui_kit')) }}
     {% endcall %}
-    {% call ui.card('Кнопки', icon='hand-index') %}
-        <div class="d-flex flex-wrap gap-2">
-            {{ ui.button('Primary', icon='check2') }}
-            {{ ui.button('Light', variant='light') }}
-            {{ ui.button('Outline', variant='outline-primary') }}
-            {{ ui.button('Ghost', variant='ghost', icon='three-dots') }}
-            {{ ui.button('Danger', variant='danger', icon='trash') }}
-            {{ ui.button('Иконка', icon='pencil', variant='light', icon_only=True) }}
-            {{ ui.confirm_button(url_for('ui_kit'), 'Удалить', 'Удалить запись «Демо»? Действие нельзя отменить.') }}
-            {{ ui.confirm_button(url_for('ui_kit'), 'Сбросить пароль', 'Пароль станет abiturient123', variant='outline-primary', icon='key', ok='Сбросить') }}
-        </div>
-        <div class="d-flex flex-wrap gap-2 mt-3">
-            <span class="cc-chip active">Все <span class="cc-chip__count">42</span></span>
-            <span class="cc-chip">Новые <span class="cc-chip__count">8</span></span>
-            <a class="cc-chip" href="#" data-copy="https://caspian.test/join/STAND1"><i class="bi bi-copy" aria-hidden="true"></i>Копировать ссылку</a>
-        </div>
-    {% endcall %}
-    {% call ui.card('Описание — kv(), avatar(), progress_bar()', icon='card-text') %}
-        <div class="d-flex align-items-center gap-3 mb-3">{{ ui.avatar('Айгерим Сапарова', size='lg') }}<div><b>Айгерим Сапарова</b><div class="cc-muted small">+7 701 123 45 67</div></div></div>
-        {{ ui.kv([('Логин', '+7 701 123 45 67'), ('Источник', 'Стенд в ТРЦ'), ('Город', None)]) }}
-        <div class="mt-3">{{ ui.progress_bar(37, 100, label='Профиль заполнен на 37%') }}</div>
-        <div class="mt-2">{{ ui.progress_bar(80, 100, 'success') }}</div>
+    {% call ui.card('Старая панель фильтров (совместимость)', icon='funnel') %}
+        <p class="cc-muted small">Вызов без search/inline — поля с подписями; «Применить» видна только без JS.</p>
+        {% call ui.filters_bar() %}
+            {{ ui.filter_search('q2', 'Поиск', request.args.get('q2'), 'Имя, логин, телефон') }}
+            {{ ui.filter_select('status2', 'Статус', [('new', 'Новый'), ('contacted', 'Связались'), ('enrolled', 'Поступил')], request.args.get('status2')) }}
+        {% endcall %}
     {% endcall %}
 </div>
 
-<div class="cc-section">
-{% call ui.data_table('kitTable', search=True, placeholder='Поиск по имени или логину', title='Таблица — data_table()', actions=[{'label': 'CSV', 'icon': 'download', 'href': '#'}]) %}
-<table class="cc-table" id="kitTable" data-sortable>
-    <thead><tr><th data-sort="text">Абитуриент</th><th data-sort="text">Статус</th><th data-sort="text">Источник</th><th data-sort="num" class="text-end">Коины</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
+{# ============================== Бейджи ============================== #}
+<div class="kit-sec"><h2>Бейджи и статусы</h2><code>ui.badge(status) · ui.role_badge(role) · ui.week_badge(week, short) · ui.week_now(week, n) · ui.legend(items)</code></div>
+<div class="cc-card"><div class="cc-card__body">
+    <div class="kit-row">
+        {% for s in ['new', 'contacted', 'applied', 'enrolled', 'declined', 'reserved', 'issued', 'cancelled', 'rejected', 'answered', 'closed', 'active', 'inactive', 'critical', 'warning', 'info', 'welcome', 'campaign', 'purchase', true, false, 'custom'] %}{{ ui.badge(s) }}{% endfor %}
+    </div>
+    <div class="kit-row mt-3">
+        {% for r in ['admin', 'teacher', 'student', 'club', 'applicant'] %}{{ ui.role_badge(r) }}{% endfor %}
+        {{ ui.badge('numerator') }}{{ ui.badge('denominator') }}{{ ui.week_badge('always') }}{{ ui.week_badge('numerator', short=True) }}{{ ui.week_badge('denominator', short=True) }}
+        {{ ui.week_now('denominator', 8) }}{{ ui.week_now('numerator') }}
+    </div>
+    <div class="mt-3">{{ ui.legend([('always', 'Каждую неделю'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель'), ('conflict', 'Накладка'), ('now', 'Сейчас')]) }}</div>
+</div></div>
+
+{# ============================== Кнопки ============================== #}
+<div class="kit-sec"><h2>Кнопки и меню</h2><code>одна btn-primary на экран; остальное — light / ghost / ⋯ (ui.header_menu, ui.row_menu)</code></div>
+<div class="cc-card"><div class="cc-card__body">
+    <div class="kit-row">
+        {{ ui.button('Primary', icon='check2', classes='cc-kit-demo') }}
+        {{ ui.button('Light', variant='light') }}
+        {{ ui.button('Outline', variant='outline-primary') }}
+        {{ ui.button('Ghost', variant='ghost', icon='three-dots') }}
+        {{ ui.button('Danger', variant='danger', icon='trash') }}
+        {{ ui.button('Иконка', icon='pencil', variant='light', icon_only=True) }}
+        {{ ui.button('Отключена', variant='primary', attrs={'disabled': True}) }}
+        {{ ui.confirm_button(url_for('ui_kit'), 'Удалить', 'Удалить запись «Демо»? Действие нельзя отменить.', fields={'demo': 'delete'}) }}
+        {{ ui.confirm_button(url_for('ui_kit'), 'Сбросить пароль', 'Новый пароль: abiturient123', variant='outline-primary', icon='key', ok='Сбросить', fields={'demo': 'toast'}) }}
+    </div>
+    <div class="kit-row mt-3">
+        <form method="post" action="{{ url_for('ui_kit') }}" class="m-0">{{ ui.csrf_field() }}<input type="hidden" name="demo" value="toast">{{ ui.button('Тост «Готово · Отменить» с сервера', type='submit', variant='light', icon='send') }}</form>
+        <span class="cc-chip active">Активный чип <span class="cc-chip__count">42</span></span>
+        <a class="cc-chip" href="#" data-copy="https://caspian.test/join/STAND1"><i class="bi bi-copy" aria-hidden="true"></i>Копировать ссылку</a>
+        {{ ui.peek_link(url_for('ui_kit', peek_demo=1), 'Быстрый просмотр', classes='btn btn-light') }}
+        <span class="small">Сохранить — {{ ui.kbd('Ctrl', 'S') }}, поиск — {{ ui.kbd('Ctrl', 'K') }}, справка — {{ ui.kbd('?') }}</span>
+    </div>
+</div></div>
+
+{# ============================== Подсказки и блоки ============================== #}
+<div class="kit-sec"><h2>Подсказки, детали, скелетон</h2><code>ui.hint(text, icon, tone, dismiss) · ui.details(title, key) · ui.skeleton(lines)</code></div>
+<div class="cc-grid cc-grid-2">
+    <div class="cc-stack">
+        {{ ui.hint('Абитуриенты — во вкладке «Абитуриенты» и в разделе «Абитуриенты → Лиды».', dismiss='kit-hint-demo') }}
+        {% call ui.hint(icon='exclamation-triangle', tone='warning') %}<b>3 товара</b> без порядка — приложение их не покажет.{% endcall %}
+        {{ ui.hint('Расписание сохранено, пуш отправлен группе ПО 24-1.', icon='check2-circle', tone='success') }}
+    </div>
+    <div class="cc-stack">
+        {% call ui.details('Когда случаются накладки', key='kit-details') %}
+            <p class="mb-0 cc-muted">Открытость запоминается в браузере (data-cc-collapse-key).</p>
+        {% endcall %}
+        {% call ui.card('Скелетон и таймлайн', icon='clock-history') %}
+            {{ ui.skeleton(3) }}
+            <ul class="cc-timeline mt-3 mb-0">
+                <li><b>Статус: Новый → Связались</b><div class="cc-timeline__meta">admin@caspian.test · 2 ч назад</div></li>
+                <li><b>Регистрация по QR «STAND1»</b><div class="cc-timeline__meta">система · 12.10.2026 14:05</div></li>
+            </ul>
+        {% endcall %}
+    </div>
+</div>
+
+{# ============================== Форма ============================== #}
+<div class="kit-sec"><h2>Форма</h2><code>.cc-form-layout · ui.form_errors · ui.field · ui.image_uploader · ui.savebar (Ctrl+S) · клиентская проверка · data-cc-draft · ui.modal_form</code></div>
+<form method="post" action="{{ url_for('ui_kit') }}" enctype="multipart/form-data" data-dirty-guard data-cc-draft="ui-kit" novalidate id="kitForm">
+    {{ ui.csrf_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors({'price': 'Цена должна быть от 1 до 100 000'}) }}
+            {% call ui.card('Основное') %}
+                {{ ui.field('title', 'Название', value='Худи Caspian College', required=True, attrs={'maxlength': 120}) }}
+                <div class="row g-3">
+                    <div class="col-sm-6">{{ ui.field('status', 'Статус', 'select', value='contacted', options=[('new', 'Новый'), ('contacted', 'Связались'), ('enrolled', 'Поступил')]) }}</div>
+                    <div class="col-sm-6">{{ ui.field('price', 'Цена, коины', 'number', value=800, error='Цена должна быть от 1 до 100 000', attrs={'min': 1, 'max': 100000}) }}</div>
+                </div>
+                {{ ui.field('email', 'Email для связи', 'email', placeholder='name@example.com') }}
+                {{ ui.field('note', 'Заметка', 'textarea', rows=2, help='Ctrl+Enter отправляет форму', placeholder='Например: перезвонить после 18:00', attrs={'data-cc-ctrl-enter': ''}) }}
+                {{ ui.image_uploader('images', demo_images, max=10, label='Фото товара') }}
+                {{ ui.field('active', 'Показывать в приложении', 'switch', value=True) }}
+            {% endcall %}
+        </div>
+        <aside class="cc-form-aside">
+            {% call ui.card('Сведения') %}
+                {{ ui.kv([('Создано', '18.10.2026 12:40'), ('Автор', 'admin@caspian.test'), ('Город', None)]) }}
+                <div class="mt-3">{{ ui.progress_bar(37, 100, label='Профиль заполнен на 37%') }}</div>
+                <div class="mt-2">{{ ui.progress_bar(80, 100, 'brand') }}</div>
+            {% endcall %}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить', cancel_href=url_for('ui_kit'), danger={'label': 'Удалить', 'action': url_for('ui_kit', demo='delete'), 'confirm': 'Удалить демо-товар?'}, note='Очистите «Название» и нажмите «Сохранить» — форма не уйдёт, фото останутся') }}
+</form>
+
+<div class="kit-row mt-3">
+    {{ ui.button('Модальная форма', variant='light', icon='window', attrs={'data-bs-toggle': 'modal', 'data-bs-target': '#kitModal'}) }}
+</div>
+{% call ui.modal_form('kitModal', 'Новый QR-источник', url_for('ui_kit'), submit='Создать') %}
+    <input type="hidden" name="demo" value="toast">
+    {{ ui.field('src_title', 'Название', required=True, placeholder='Стенд в ТРЦ «Мега»') }}
+    {{ ui.field('src_code', 'Код', required=True, attrs={'pattern': '[A-Z0-9_\\-]{2,20}', 'title': 'Латиница, цифры, «-» и «_», от 2 до 20 символов'}, help='Например STAND1') }}
+{% endcall %}
+
+{# ============================== Таблица (data_table) ============================== #}
+<div class="kit-sec"><h2>Таблица в карточке</h2><code>ui.data_table(id, search=True) — поиск по строкам на клиенте (data-table-search)</code></div>
+{% call ui.data_table('kitTable', search=True, placeholder='Поиск по имени или логину', title='Лиды', actions=[{'label': 'CSV', 'icon': 'download', 'href': '#'}]) %}
+<table class="cc-table cc-table--compact cc-table--stack" id="kitTable" data-sortable>
+    <thead><tr><th data-sort="text">Абитуриент</th><th data-sort="text">Статус</th><th data-sort="text" class="cc-col-md">Источник</th><th data-sort="num" class="cc-num-col">Коины</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
     <tbody>
         {% for r in rows %}
-        <tr data-href="#">
-            <td><div class="d-flex align-items-center gap-2">{{ ui.avatar(r.name, size='sm') }}<div><div class="cc-cell-main">{{ r.name }}</div><div class="cc-cell-sub">{{ r.login }}</div></div></div></td>
-            <td>{{ ui.badge(r.status) }}</td>
-            <td>{{ r.source }}</td>
-            <td class="text-end cc-num" data-value="{{ r.coins }}">{{ r.coins|num }}</td>
-            <td class="cc-actions">{{ ui.button('Открыть', href='#', icon='arrow-right', variant='light', size='sm', icon_only=True) }}{{ ui.confirm_button(url_for('ui_kit'), 'Удалить', 'Удалить «' ~ r.name ~ '»?', icon_only=True) }}</td>
+        <tr>
+            <td class="cc-cell-primary"><div class="cc-cell-main">{{ r.name }}</div><div class="cc-cell-sub">{{ r.login }}</div></td>
+            <td class="cc-cell-meta">{{ ui.badge(r.status) }}</td>
+            <td class="cc-cell-meta cc-col-md">{{ r.source }}</td>
+            <td class="cc-num-col cc-num" data-label="Коины" data-value="{{ r.coins }}">{{ r.coins|num }}</td>
+            <td class="cc-actions">{{ ui.row_menu([{'label': 'Открыть', 'href': '#', 'icon': 'box-arrow-up-right'}, {'divider': True}, {'label': 'Удалить', 'action': url_for('ui_kit'), 'fields': {'demo': 'delete'}, 'icon': 'trash', 'danger': True, 'confirm': 'Удалить «' ~ r.name ~ '»?'}]) }}</td>
         </tr>
         {% endfor %}
         <tr data-table-empty class="is-hidden"><td colspan="5" class="cc-table-empty">Ничего не найдено</td></tr>
     </tbody>
 </table>
 {% endcall %}
-{{ ui.pagination(kit_page) }}
-</div>
+{% endblock %}
 
-<div class="cc-grid cc-grid-2">
-    {% call ui.card('Форма — field() и image_uploader()', icon='input-cursor-text') %}
-        <form method="post" action="{{ url_for('ui_kit') }}" enctype="multipart/form-data" data-dirty-guard>
-            {{ ui.csrf_field() }}
-            <div class="row g-3">
-                <div class="col-md-6">{{ ui.field('title', 'Название', value='Худи Caspian College', required=True, attrs={'maxlength': 120}) }}</div>
-                <div class="col-md-6">{{ ui.field('status', 'Статус', 'select', value='contacted', options=[('new', 'Новый'), ('contacted', 'Связались'), ('enrolled', 'Поступил')]) }}</div>
-            </div>
-            {{ ui.field('note', 'Заметка', 'textarea', rows=2, help='Видно только админам', placeholder='Например: перезвонить после 18:00') }}
-            {{ ui.field('price', 'Цена, коины', 'number', value=800, error='Цена должна быть от 1 до 100 000', attrs={'min': 1, 'max': 100000}) }}
-            {{ ui.field('active', 'Показывать в приложении', 'switch', value=True) }}
-            {{ ui.image_uploader('images', demo_images, max=10, label='Фото товара') }}
-            {{ ui.button('Проверить разбор формы', type='submit', icon='check2', attrs={'data-loading': ''}) }}
-        </form>
-    {% endcall %}
-    <div class="cc-stack">
-        {% call ui.card('Пустое состояние — empty_state()', icon='inbox') %}
-            {{ ui.empty_state('box-seam', 'Заказов пока нет', 'Когда абитуриент обменяет коины на мерч, заказ появится здесь.', {'label': 'Добавить товар', 'href': '#', 'icon': 'plus-lg'}) }}
-        {% endcall %}
-        {% call ui.card('Таймлайн и скелетон', icon='clock-history') %}
-            <ul class="cc-timeline">
-                <li><b>Статус: new → contacted</b><div class="cc-timeline__meta">admin@caspian.test · 2 ч назад</div></li>
-                <li><b>Сброс пароля до abiturient123</b><div class="cc-timeline__meta">admin@caspian.test · вчера</div></li>
-                <li><b>Регистрация по QR «STAND1»</b><div class="cc-timeline__meta">система · 12.10.2026 14:05</div></li>
-            </ul>
-            <div class="cc-skeleton mb-2" style="height: 14px; width: 70%"></div>
-            <div class="cc-skeleton" style="height: 14px; width: 45%"></div>
-        {% endcall %}
-    </div>
-</div>
+{% block peek %}
+{# Компактная версия для быстрого просмотра (X-CC-Partial: 1) #}
+<h1 class="visually-hidden">Сапарова Айгерим</h1>
+<div class="d-flex align-items-center gap-2 mb-3">{{ ui.avatar('Сапарова Айгерим') }}<div class="min-w-0"><b class="d-block">Сапарова Айгерим</b><span class="cc-muted small">Лид · STAND1</span></div>{{ ui.badge('new') }}</div>
+{{ ui.kv([('Телефон', '+7 701 123 45 67'), ('Источник', 'Стенд в ТРЦ'), ('Город', 'Актау')]) }}
+<form method="post" action="{{ url_for('ui_kit') }}" class="mt-3" novalidate>
+    {{ ui.csrf_field() }}<input type="hidden" name="demo" value="toast">
+    {{ ui.field('peek_status', 'Статус', 'select', value='new', options=[('new', 'Новый'), ('contacted', 'Связались')]) }}
+    {{ ui.field('peek_note', 'Заметка', 'textarea', rows=2, required=True, attrs={'data-cc-ctrl-enter': ''}) }}
+    {{ ui.button('Сохранить', type='submit', icon='check2') }}
+</form>
 {% endblock %}

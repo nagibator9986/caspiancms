@@ -1,0 +1,99 @@
+/* ==========================================================================
+   Главная «/» (FOUNDATION, UX_SPEC_v2 §3) — префикс hm-, только токены --cc-*.
+   Порядок блоков: ≥ 992 px — сетка 2/3 + 1/3; < 992 px — внимание → сегодня → действия → ближайшее → журнал → приём.
+   ========================================================================== */
+.hm-grid {
+  display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "attention" "today" "quick" "upcoming" "recent" "admissions";
+}
+.hm-grid > .cc-card { margin: 0; min-width: 0; }
+.hm-today { grid-area: today; }
+.hm-attention { grid-area: attention; }
+.hm-upcoming { grid-area: upcoming; }
+.hm-quick { grid-area: quick; }
+.hm-recent { grid-area: recent; }
+.hm-admissions { grid-area: admissions; }
+@media (min-width: 992px) {
+  .hm-grid {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-areas: "today attention" "upcoming quick" "recent recent" "admissions admissions";
+    align-items: start;
+  }
+}
+@media (max-width: 575.98px) { .hm-hide-xs { display: none !important; } }
+
+/* Сегодня в колледже */
+.hm-today__sum { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 0 0 8px; font-size: 13.5px; color: var(--cc-text-muted); }
+.hm-today__sum span:not(:last-child)::after { content: '·'; margin: 0 8px; color: var(--cc-icon-subtle); }
+.hm-today__sum b { color: var(--cc-text); font-size: 16px; font-weight: 700; }
+.hm-today__now { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 13.5px; font-weight: 500; }
+.hm-today__now .bi { color: var(--cc-icon-subtle); }
+.hm-today__now b { font-weight: 700; }
+.hm-live { width: 8px; height: 8px; border-radius: 50%; background: var(--cc-brand); box-shadow: 0 0 0 4px var(--cc-brand-tint); flex: 0 0 auto; }
+.hm-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.hm-timeline__row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 28px; gap: 10px; align-items: center; font-size: 12.5px; }
+.hm-timeline__time { color: var(--cc-text-muted); font-weight: 600; }
+.hm-timeline__bar { height: 6px; border-radius: var(--cc-radius-pill); background: var(--cc-surface-2); overflow: hidden; }
+.hm-timeline__bar > span { display: block; height: 100%; border-radius: inherit; background: var(--cc-chart-neutral); }
+.hm-timeline__n { text-align: right; font-weight: 700; color: var(--cc-text-muted); }
+.hm-timeline__row.is-past .hm-timeline__time, .hm-timeline__row.is-past .hm-timeline__n { color: var(--cc-text-subtle); }
+.hm-timeline__row.is-past .hm-timeline__bar > span { background: var(--cc-surface-3); }
+.hm-timeline__row.is-current .hm-timeline__time, .hm-timeline__row.is-current .hm-timeline__n { color: var(--cc-text); }
+.hm-timeline__row.is-current .hm-timeline__bar > span { background: var(--cc-chart-highlight); }
+.hm-subhead { margin: 16px 0 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--cc-text-muted); }
+.hm-now { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.hm-now li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--cc-border); }
+.hm-now li:first-child { border-top: 0; }
+.hm-now__group { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: var(--cc-radius-pill); background: var(--cc-surface-2); color: var(--cc-text); white-space: nowrap; text-decoration: none; }
+.hm-now__group:hover { background: var(--cc-surface-3); color: var(--cc-text); }
+.hm-now__subject { font-weight: 600; font-size: 13.5px; }
+.hm-now__time { font-size: 12.5px; color: var(--cc-text-muted); white-space: nowrap; }
+.hm-rooms { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 9px 12px; border-radius: var(--cc-radius-sm); background: var(--cc-surface-2); color: var(--cc-text); text-decoration: none; font-size: 13.5px; font-weight: 500; }
+.hm-rooms:hover { background: var(--cc-surface-3); color: var(--cc-text); }
+.hm-rooms > .bi:first-child { color: var(--cc-text-muted); }
+.hm-rooms > span { flex: 1 1 auto; min-width: 0; }
+.hm-rooms > .bi-chevron-right { color: var(--cc-icon-subtle); font-size: 12px; }
+
+/* Списки «Требует внимания» и «Ближайшее» — строки 40+ px */
+.hm-list { list-style: none; margin: 0; padding: 4px 0; }
+.hm-list__item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 16px; color: var(--cc-text); text-decoration: none; transition: background-color var(--cc-dur-fast) var(--cc-ease); }
+.hm-list__item:hover { background: var(--cc-row-hover); color: var(--cc-text); }
+.hm-list__icon { font-size: 16px; color: var(--cc-icon-subtle); flex: 0 0 auto; width: 18px; text-align: center; }
+.hm-list__text { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 500; display: flex; flex-direction: column; }
+.hm-list__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-list__sub { font-size: 12.5px; color: var(--cc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-list__count { flex: 0 0 auto; min-width: 24px; padding: 1px 8px; border-radius: var(--cc-radius-pill); background: var(--cc-surface-2); color: var(--cc-text); font-size: 12.5px; font-weight: 700; text-align: center; }
+.hm-list__chev { color: var(--cc-icon-subtle); font-size: 12px; flex: 0 0 auto; }
+.hm-tone--danger .hm-list__icon { color: var(--cc-danger); }
+.hm-tone--danger .hm-list__count { background: var(--cc-danger-soft); color: var(--cc-danger-fg); }
+.hm-tone--warning .hm-list__icon { color: var(--cc-warning-fg); }
+.hm-tone--warning .hm-list__count { background: var(--cc-warning-soft); color: var(--cc-warning-fg); }
+.hm-tone--muted .hm-list__text, .hm-tone--muted .hm-list__count { color: var(--cc-text-muted); }
+
+/* Быстрые действия */
+.hm-quick__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.hm-quick__item { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); color: var(--cc-text); text-decoration: none; font-weight: 600; font-size: 13.5px; min-width: 0; transition: border-color var(--cc-dur-fast) var(--cc-ease), background-color var(--cc-dur-fast) var(--cc-ease); }
+.hm-quick__item:hover { border-color: var(--cc-border-strong); background: var(--cc-row-hover); color: var(--cc-text); }
+.hm-quick__item .bi { color: var(--cc-text-muted); font-size: 16px; flex: 0 0 auto; }
+/* длинная подпись («Свободная аудитория») переносится на вторую строку, а не обрезается многоточием */
+.hm-quick__label { min-width: 0; line-height: 1.25; overflow-wrap: anywhere; }
+
+/* Последние действия */
+.hm-feed { list-style: none; margin: 0; padding: 4px 0; }
+.hm-feed li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 9px 16px; border-top: 1px solid var(--cc-border); }
+.hm-feed li:first-child { border-top: 0; }
+.hm-feed__what { font-weight: 600; font-size: 13.5px; min-width: 0; overflow-wrap: anywhere; flex: 1 1 200px; }
+.hm-feed__what a { color: var(--cc-text); }
+.hm-feed__meta { font-size: 12.5px; color: var(--cc-text-muted); white-space: nowrap; margin-left: auto; }
+@media (max-width: 575.98px) { .hm-feed__meta { margin-left: 0; flex-basis: 100%; } }
+
+/* Приём и Caspian Coin — приглушённая строка */
+.hm-admissions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 16px; border: 1px dashed var(--cc-border-strong); border-radius: var(--cc-radius-md); color: var(--cc-text-muted); font-size: 13px; }
+.hm-admissions__title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--cc-text-muted); }
+.hm-admissions__title .bi { color: var(--cc-icon-subtle); }
+.hm-admissions__items { display: flex; flex-wrap: wrap; gap: 4px 0; flex: 1 1 auto; min-width: 0; }
+.hm-admissions__items > span:not(:last-child)::after { content: '·'; margin: 0 8px; color: var(--cc-icon-subtle); }
+.hm-admissions b { color: var(--cc-text); font-weight: 600; }
+.hm-admissions__links { display: flex; gap: 14px; }
+.hm-admissions__links a { color: var(--cc-text-muted); font-weight: 600; text-decoration: none; }
+.hm-admissions__links a:hover { color: var(--cc-text); text-decoration: underline; }

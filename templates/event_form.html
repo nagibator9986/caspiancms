@@ -1,43 +1,62 @@
-{# Событие: создание/правка (date — Timestamp, time, location, organizer, imageUrl — как в приложении) (CONTENT). #}
+{# Событие: создание/правка (date — Timestamp, time, location, organizer, imageUrl — как в приложении).
+   Слева — поля, справа — превью карточки «как в приложении»; Ctrl+S, клиентская проверка (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_edit = event is not none %}
 {% block title %}{{ 'Редактирование события' if is_edit else 'Новое событие' }}{% endblock %}
-{% block page_title %}{{ 'Редактирование события' if is_edit else 'Новое событие' }}{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
 {% call ui.page_header('Редактирование события' if is_edit else 'Новое событие',
                        ('Записалось: ' ~ (event.registrationsCount or 0)) if is_edit else 'Студенты увидят событие в приложении и смогут записаться',
-                       icon='calendar-event') %}
-    {% if is_edit %}{{ ui.button('Участники', href=url_for('event_registrations', event_id=event.id), icon='people', variant='light') }}{% endif %}
-    {{ ui.button('К списку', href=url_for('events'), icon='arrow-left', variant='light') }}
+                       back={'href': back_url('events'), 'label': 'События'}) %}
+    {% if is_edit %}
+    {{ ui.button('Участники', href=url_for('event_registrations', event_id=event.id), icon='people', variant='light') }}
+    {{ ui.header_menu([
+        {'label': 'Удалить событие', 'action': url_for('event_delete', event_id=event.id), 'fields': {'next': back_url('events')}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': 'Удалить событие «' ~ (event.title or '') ~ '» вместе со списком участников? Из приложения оно тоже пропадёт.'},
+    ]) }}
+    {% endif %}
 {% endcall %}
 
-<form method="post" enctype="multipart/form-data" class="ct-editor ct-editor--single" data-dirty-guard novalidate>
-    {{ ui.csrf_field() }}
-    <div class="ct-editor__main">
-        {% call ui.card('О событии', icon='card-text') %}
-            {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
-            {{ ui.field('description', 'Описание', 'textarea', value=values.description, rows=6, error=errors.description, attrs={'maxlength': 5000}) }}
-            {{ ui.image_uploader('image', [{'url': event.imageUrl}] if (is_edit and event.imageUrl) else [], max=1, label='Обложка',
-                                 help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ. Лучше горизонтальная.') }}
-            {% if errors.image %}<div class="invalid-feedback d-block mb-2">{{ errors.image }}</div>{% endif %}
-        {% endcall %}
-    </div>
-    <aside class="ct-editor__side">
-        {% call ui.card('Когда и где', icon='geo-alt') %}
-            <div class="row g-2">
-                <div class="col-7">{{ ui.field('date', 'Дата', 'date', value=values.date, required=True, error=errors.date, classes='mb-3') }}</div>
-                <div class="col-5">{{ ui.field('time', 'Время', 'time', value=values.time, error=errors.time, classes='mb-3') }}</div>
-            </div>
-            {{ ui.field('location', 'Место', value=values.location, error=errors.location, placeholder='Актовый зал', attrs={'maxlength': 200}) }}
-            {{ ui.field('organizer', 'Организатор', value=values.organizer, error=errors.organizer, placeholder='Студсовет', attrs={'maxlength': 200}) }}
-        {% endcall %}
-        <div class="ct-editor__actions">
-            {{ ui.button('Отмена', href=url_for('events'), variant='light') }}
-            {{ ui.button('Сохранить' if is_edit else 'Создать событие', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+<form method="post" enctype="multipart/form-data" id="eventForm" data-dirty-guard data-ct-preview-form novalidate>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors(errors) }}
+            {% call ui.card() %}
+                {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, placeholder='Например: Ярмарка вакансий', attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
+                <div class="row g-3">
+                    <div class="col-7 col-sm-4">{{ ui.field('date', 'Дата', 'date', value=values.date, required=True, error=errors.date, classes='') }}</div>
+                    <div class="col-5 col-sm-3">{{ ui.field('time', 'Время', 'time', value=values.time, error=errors.time, classes='') }}</div>
+                    <div class="col-sm-5">{{ ui.field('location', 'Место', value=values.location, error=errors.location, placeholder='Актовый зал', attrs={'maxlength': 200}, classes='') }}</div>
+                </div>
+                {{ ui.field('description', 'Описание', 'textarea', value=values.description, rows=5, error=errors.description, attrs={'maxlength': 5000}, classes='mb-3 mt-3') }}
+                {{ ui.image_uploader('image', [{'url': event.imageUrl}] if (is_edit and event.imageUrl) else [], max=1, label='Обложка', id='f-image',
+                                     help='Необязательно. Одна картинка JPG, PNG, WEBP или GIF до 10 МБ, лучше горизонтальная. Можно перетащить или вставить (Ctrl+V).') }}
+                {% if errors.image %}<div class="invalid-feedback d-block mb-3">{{ errors.image }}</div>{% endif %}
+                {{ ui.field('organizer', 'Организатор', value=values.organizer, error=errors.organizer, placeholder='Студсовет', attrs={'maxlength': 200}, classes='mb-0') }}
+            {% endcall %}
         </div>
-    </aside>
+        <aside class="cc-form-aside" aria-label="Превью">
+            {% call ui.card('Как увидят в приложении', classes='ct-preview-card') %}
+                <article class="ct-phone" data-ct-preview-card>
+                    <div class="ct-phone__media" data-ct-preview-media>
+                        <img alt="" data-ct-preview-img hidden>
+                        <div class="ct-phone__placeholder" data-ct-preview-empty><i class="bi bi-calendar-event" aria-hidden="true"></i><span>Без обложки</span></div>
+                    </div>
+                    <div class="ct-phone__body">
+                        <span class="ct-phone__chip" data-ct-out="date" data-ct-format="date" data-ct-empty="Дата не выбрана">Дата не выбрана</span>
+                        <h3 class="ct-phone__title" data-ct-out="title" data-ct-empty="Название события">Название события</h3>
+                        <p class="ct-phone__text" data-ct-out="description" data-ct-clip="180"></p>
+                        <div class="ct-phone__meta"><i class="bi bi-clock" aria-hidden="true"></i><span data-ct-out="time" data-ct-empty="время не указано">время не указано</span></div>
+                        <div class="ct-phone__meta mt-1"><i class="bi bi-geo-alt" aria-hidden="true"></i><span class="ct-clamp-1" data-ct-out="location" data-ct-empty="место не указано">место не указано</span></div>
+                    </div>
+                </article>
+                {% if is_edit %}<p class="ct-aside-note">Участники и напоминания — на странице <a href="{{ url_for('event_registrations', event_id=event.id) }}">«Участники»</a>.</p>{% endif %}
+            {% endcall %}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить' if is_edit else 'Создать событие', cancel_href=back_url('events'), submit_attrs={'data-loading': 'Сохраняем…'}) }}
 </form>
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

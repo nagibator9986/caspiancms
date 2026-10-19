@@ -1,144 +1,226 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'rooms/_ui.html' as rm with context %}
-{# Аудиторный фонд (владелец — CONFLICTS). Вкладки: Аудиторный фонд | Накладки | Свободные аудитории. #}
-{% block title %}Аудиторный фонд{% endblock %}
+{# Аудиторный фонд (владелец — SCHEDULE+ROOMS). Вкладки: Аудиторный фонд | Свободные аудитории.
+   Виды: шахматка дня (по умолчанию: аудитории × пары, клик по занятой клетке — быстрый просмотр занятия,
+   по свободной — «добавить занятие здесь»), карточки недели, таблица. ?room= — неделя одной аудитории. #}
+{% block title %}{{ ('Аудитория ' ~ room) if single else 'Аудиторный фонд' }}{% endblock %}
+{% block crumbs_extra %}{% if single %}<li><a href="{{ url_for('schedule_rooms') }}" data-cc-back>Аудитории</a></li>{% endif %}{% endblock %}
+{% block page_title %}{% if single %}{{ room }}{% else %}{{ super() }}{% endif %}{% endblock %}
 {% block styles %}{{ ui.css('rooms') }}{% endblock %}
 {% block scripts %}{{ ui.js('rooms') }}{% endblock %}
 
 {% block content %}
-{% set here = request.full_path.rstrip('?') %}
+{% set here_url = here() %}
 {% set export_args = {'q': q or None, 'room': room or None, 'day': day, 'week': week or None} %}
-{% call ui.page_header('Аудиторный фонд', 'Аудитории колледжа: неделя занятий, загрузка и что идёт прямо сейчас', icon='door-open') %}
-    {{ rm.week_now(current_week, week_number) }}
-    <div class="dropdown">
-        <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
-        <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='xlsx', **export_args) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel: сетка, загрузка, детально</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='csv', **export_args) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='pdf', **export_args) }}"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i>PDF: текущая неделя</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><button type="button" class="dropdown-item" data-print><i class="bi bi-printer" aria-hidden="true"></i>Печать страницы</button></li>
-        </ul>
-    </div>
-{% endcall %}
+{% set export_menu = {'menu': [
+    {'header': 'Экспорт с текущими фильтрами'},
+    {'label': 'Excel: сетка, загрузка, детально', 'href': url_for('schedule_rooms_export', format='xlsx', **export_args), 'icon': 'file-earmark-excel'},
+    {'label': 'CSV', 'href': url_for('schedule_rooms_export', format='csv', **export_args), 'icon': 'filetype-csv'},
+    {'label': 'PDF: текущая неделя', 'href': url_for('schedule_rooms_export', format='pdf', **export_args), 'icon': 'file-earmark-pdf'},
+    {'label': 'Печать страницы', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
+], 'label': 'Экспорт'} %}
 
-{{ rm.tabs('rooms', tab_counts) }}
-
-<div class="cc-stats">
-    {{ ui.stat_card('Аудиторий', total_rooms, 'door-open', meta=('найдено по фильтру: %d'|format(rooms_count) if rooms_count != total_rooms else 'встречаются в расписании')) }}
-    {{ ui.stat_card('Заняты сейчас', busy_now, 'broadcast', tone='info', href=url_for('schedule_free_rooms'), meta=('свободно %d — найти аудиторию'|format(total_rooms - busy_now))) }}
-    {{ ui.stat_card('Средняя загрузка', avg_load|string ~ '%', 'speedometer2', tone='violet', meta='текущая неделя, Пн–Сб 8:00–18:00') }}
-    {{ ui.stat_card('Накладки аудиторий', room_conflicts, 'exclamation-diamond', tone=('danger' if room_conflicts else 'success'), href=url_for('schedule_conflicts', dim='room'), meta=('подробно — во вкладке «Накладки»' if room_conflicts else 'пересечений нет')) }}
+{% if single %}
+{# ============================== НЕДЕЛЯ ОДНОЙ АУДИТОРИИ ============================== #}
+{% set r = page.items[0] %}
+{{ ui.page_header('Аудитория ' ~ r.name, back={'href': url_for('schedule_rooms'), 'label': 'Все аудитории'}, meta=ui.week_now(current_week, week_number), actions=[
+    export_menu,
+    {'label': 'Добавить занятие', 'href': url_for('schedule_builder', room=r.name, next=here_url), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
+{% set summary = [{'value': r.total, 'label': r.total|plural('занятие', 'занятия', 'занятий'), 'title': 'Числитель: %d · Знаменатель: %d'|format(r.num, r.den)},
+                  {'value': r.load|round|int ~ '%', 'label': 'загрузка текущей недели'},
+                  (r.groups|length, r.groups|length|plural('группа', 'группы', 'групп')),
+                  (r.teachers|length, r.teachers|length|plural('преподаватель', 'преподавателя', 'преподавателей'))] %}
+{% if r.conflicts %}{% set _ = summary.append({'value': r.conflicts, 'label': r.conflicts|plural('накладка', 'накладки', 'накладок'), 'tone': 'danger', 'href': url_for('schedule_conflicts', dim='room', room=r.name)}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+<div class="rm-single-bar cc-no-print">
+    {{ rm.now_status(r.now) }}
+    {% call ui.filters_bar(inline=True, ignore=('room', 'view'), id='rmFilters') %}
+        {{ ui.filter_select('day', 'День', day_options, day) }}
+        {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+    {% endcall %}
+    <div class="rm-single-bar__legend">{{ rm.legend() }}</div>
+</div>
+<div class="rm-grid rm-grid--single">
+    <article class="rm-card rm-card--single{{ ' rm-card--conflict' if r.conflicts }}">
+        <div class="rm-week" style="--rm-cols: {{ r.columns|length }}" data-rm-week>
+            {% for d in r.columns %}
+            <section class="rm-day{{ ' is-today' if d == today_wd }}"{% if d == today_wd %} data-rm-today{% endif %}>
+                <h3 class="rm-day__name">{{ day_names[d] }}{% if d == today_wd %}<span class="rm-day__today">сегодня</span>{% endif %}</h3>
+                {% for l in r.by_day.get(d, []) %}{{ rm.lesson(l, l.id in r.conflict_ids, l.id in r.now.ids, True, here_url) }}{% else %}<span class="rm-day__empty">свободна</span>{% endfor %}
+            </section>
+            {% endfor %}
+        </div>
+        {% if r.groups %}
+        <footer class="rm-card__foot">
+            <span class="rm-card__label">Группы:</span>
+            <span class="rm-card__links">{% for g in r.groups %}<a href="{{ nav_url('schedule', group=g) }}">{{ g }}</a>{{ ', ' if not loop.last }}{% endfor %}</span>
+        </footer>
+        {% endif %}
+    </article>
 </div>
 
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Аудитория, группа, преподаватель, дисциплина') }}
-    {{ ui.filter_select('room', 'Аудитория', room_options, room, 'Все аудитории') }}
-    {{ ui.filter_select('day', 'День', day_options, day, 'Все дни') }}
-    {{ ui.filter_select('week', 'Неделя', week_filters, week, 'Все недели') }}
-    <input type="hidden" name="view" value="{{ view }}">
-{% endcall %}
+{% else %}
+{# ============================== ВСЕ АУДИТОРИИ ============================== #}
+{{ ui.page_header('Аудиторный фонд', meta=ui.week_now(current_week, week_number), actions=[export_menu]) }}
+{{ rm.tabs('rooms', tab_counts) }}
+{% set summary = [(total_rooms, total_rooms|plural('аудитория', 'аудитории', 'аудиторий')),
+                  {'value': busy_now, 'label': 'заняты сейчас', 'href': url_for('schedule_free_rooms'), 'title': 'Свободно %d — найти аудиторию'|format(total_rooms - busy_now)},
+                  {'value': avg_load|round|int ~ '%', 'label': 'средняя загрузка', 'title': 'Текущая неделя, Пн–Сб 8:00–18:00'}] %}
+{% if room_conflicts %}{% set _ = summary.append({'value': room_conflicts, 'label': room_conflicts|plural('накладка', 'накладки', 'накладок'), 'tone': 'danger', 'href': url_for('schedule_conflicts', dim='room')}) %}{% endif %}
+{% if rooms_count != total_rooms %}{% set _ = summary.append((rooms_count, 'по фильтру')) %}{% endif %}
+{{ ui.summary_line(summary) }}
 
-{% if top_load and not (q or room or day is not none or week) and total_rooms > 3 %}
-<section class="cc-card rm-top cc-no-print" aria-label="Самые загруженные аудитории">
-    <div class="rm-top__title"><i class="bi bi-fire" aria-hidden="true"></i>Самые загруженные</div>
-    <ol class="rm-top__list">
-        {% for r in top_load %}
-        <li><a href="{{ url_for('schedule_rooms', room=r.name) }}" class="rm-top__name">{{ r.name }}</a>{{ rm.load_bar(r.load) }}</li>
-        {% endfor %}
-    </ol>
-</section>
-{% endif %}
-
-<div class="rm-viewbar cc-no-print">
-    {{ ui.tabs([{'key': 'cards', 'label': 'Карточки', 'href': url_with(view='cards', page=None), 'icon': 'grid-3x2-gap'},
-                {'key': 'table', 'label': 'Таблица', 'href': url_with(view='table', page=None), 'icon': 'table'}], view, pills=True, label='Вид') }}
-    {{ rm.legend() }}
+<div class="rm-toolbar cc-no-print">
+    {{ ui.segmented([('matrix', 'Шахматка', url_with(view='matrix', page=None), 'grid-3x3'), ('cards', 'Карточки', url_with(view='cards', page=None), 'grid'), ('table', 'Таблица', url_with(view='table', page=None), 'table')], view, remember='schedule_rooms') }}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Аудитория, группа, преподаватель', 'label': 'Поиск аудиторий'}, inline=True, ignore=('view',), id='rmFilters') %}
+        {% if view != 'matrix' %}{{ ui.filter_select('day', 'День', day_options, day) }}{% endif %}
+        {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+    {% endcall %}
 </div>
 
 {% if no_room or virtual %}
-<p class="rm-note cc-no-print"><i class="bi bi-info-circle" aria-hidden="true"></i>
+{% call ui.hint(icon='info-circle', dismiss='rm-no-room') %}
     {% if no_room %}{{ no_room }} {{ no_room|plural('занятие', 'занятия', 'занятий') }} без аудитории{% endif %}{% if no_room and virtual %}, {% endif %}{% if virtual %}{{ virtual }} онлайн/дистанционно{% endif %} — в фонде не учитываются.
     {% if no_room %}<a href="{{ url_for('schedule_conflicts', dim='quality', code='no_room') }}">Показать</a>{% endif %}
-</p>
+{% endcall %}
 {% endif %}
 
 {% if not page.items %}
-<section class="cc-card">{{ ui.empty_state('door-closed', 'Аудитории не найдены',
-    'Измените поиск или фильтры. В фонд попадают аудитории, указанные в занятиях расписания.',
-    {'label': 'Сбросить фильтры', 'href': url_for('schedule_rooms'), 'icon': 'x-lg', 'variant': 'light'}) }}</section>
+<section class="cc-card">{% if q or day is not none or week %}{{ ui.empty_filtered(url_for('schedule_rooms'), 'Аудитории не найдены. В фонд попадают аудитории, указанные в занятиях расписания.') }}
+{% else %}{{ ui.empty_state('door-closed', 'Аудитории не найдены', 'В фонд попадают аудитории, указанные в занятиях расписания.') }}{% endif %}</section>
+
+{% elif view == 'matrix' %}
+{# ---------- Шахматка дня ---------- #}
+<section class="cc-card rm-matrix-card">
+    <div class="rm-matrix-card__head">
+        <nav class="cc-day-switch rm-days" aria-label="День шахматки">
+            {% for d in range(6) %}<a href="{{ url_with(day=d) }}" class="{{ 'active' if d == matrix_day }}{{ ' is-today' if d == today_wd }}"{% if d == matrix_day %} aria-current="true"{% endif %}><span>{{ day_short[d] }}</span>{% if d == today_wd %}<small>сегодня</small>{% endif %}</a>{% endfor %}
+            {% if matrix_day == 6 %}<a href="{{ url_with(day=6) }}" class="active" aria-current="true"><span>Вс</span></a>{% endif %}
+        </nav>
+        <p class="rm-matrix-card__sub">{{ day_names[matrix_day] }} · {{ week_label }} · нажмите на занятую клетку, чтобы открыть занятие, на свободную — чтобы добавить</p>
+    </div>
+    <div class="rm-mobile-list">
+        {% for row in grid_rows %}{% set r = row.room %}
+        <a class="rm-mobile-room" href="{{ url_for('schedule_rooms', room=row.name) }}">
+            <span class="rm-mobile-room__name">{{ row.name }}{% if r and r.conflicts %} <i class="bi bi-exclamation-triangle-fill rm-text-danger" aria-label="накладки"></i>{% endif %}</span>
+            {% if r %}{{ rm.now_status(r.now) }}{{ rm.load_bar(r.load) }}{% endif %}
+            <span class="rm-mobile-room__busy cc-num">{{ row.busy }} из {{ grid_slots|length }} пар</span>
+        </a>
+        {% endfor %}
+    </div>
+    <div class="cc-table-wrap cc-table-wrap--sticky rm-matrix-wrap">
+    <table class="cc-table rm-matrix" data-no-wrap>
+        <thead><tr>
+            <th class="rm-matrix__room cc-sticky-col" scope="col">Аудитория</th>
+            {% for s in grid_slots %}<th scope="col" class="cc-num{{ ' is-now' if matrix_day == today_wd and s.start <= now_minutes < s.end }}">{% if s.n %}<span class="rm-matrix__n">{{ s.n }}</span>{% endif %}{{ s.title|replace('–', '–​') }}</th>{% endfor %}
+        </tr></thead>
+        <tbody>
+        {% for row in grid_rows %}{% set r = row.room %}
+        <tr>
+            <th scope="row" class="rm-matrix__room cc-sticky-col">
+                <a href="{{ url_for('schedule_rooms', room=row.name) }}" title="Неделя аудитории">{{ row.name }}</a>
+                {% if r %}<span class="rm-matrix__load cc-num" title="Загрузка текущей недели">{{ r.load|round|int }}%</span>{% endif %}
+            </th>
+            {% for cell in row.cells %}{% set s = grid_slots[loop.index0] %}
+            {% if cell.lessons %}{% set l = cell.lessons[0] %}
+            <td class="rm-cell rm-cell--busy{{ ' is-conflict' if cell.conflict }}{{ ' is-now' if matrix_day == today_wd and s.start <= now_minutes < s.end }}">
+                <a href="{{ nav_url('schedule_edit', schedule_id=l.id, next=here_url) }}" data-cc-peek
+                   title="{% for x in cell.lessons %}{{ x.time_label }} {{ x.groupId }} · {{ x.subject }}{{ ' · ' ~ (x.teacher_name or x.teacher) if (x.teacher_name or x.teacher) }}{{ '; ' if not loop.last }}{% endfor %}">
+                    <span class="rm-cell__group">{{ l.groupId or '•' }}</span>{% if cell.lessons|length > 1 %}<b class="rm-cell__more">+{{ cell.lessons|length - 1 }}</b>{% endif %}
+                </a>
+            </td>
+            {% else %}
+            <td class="rm-cell rm-cell--free"><a href="{{ url_for('schedule_builder', day=matrix_day, time=s.label, room=row.name, next=here_url) }}" aria-label="{{ row.name }}, {{ s.title }} — свободна. Добавить занятие здесь" title="Свободна · добавить занятие здесь"><i class="bi bi-plus" aria-hidden="true"></i></a></td>
+            {% endif %}
+            {% endfor %}
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</section>
+{{ ui.pagination(page) }}
+
 {% elif view == 'table' %}
-{% call ui.data_table('rmTable', search=True, placeholder='Быстрый поиск по странице') %}
-<table class="cc-table rm-table" id="rmTable">
+{# ---------- Таблица аудитория × день ---------- #}
+{% call ui.list_card() %}
+<div class="cc-table-wrap cc-table-wrap--sticky">
+<table class="cc-table rm-table" id="rmTable" data-no-wrap>
     <thead><tr>
-        <th class="rm-table__room">Аудитория</th>
+        <th class="rm-table__room cc-sticky-col">Аудитория</th>
         {% for d in columns %}<th class="{{ 'is-today' if d == today_wd }}">{{ day_names[d] }}</th>{% endfor %}
     </tr></thead>
     <tbody>
     {% for r in page.items %}
     <tr>
-        <th scope="row" class="rm-table__room">
+        <th scope="row" class="rm-table__room cc-sticky-col">
             <a class="rm-table__name" href="{{ url_for('schedule_rooms', room=r.name) }}">{{ r.name }}</a>
-            <span class="cc-subtle small">{{ r.load|round|int }}% · {{ r.total }} {{ r.total|plural('пара', 'пары', 'пар') }}</span>
+            <span class="rm-table__sub cc-num">{{ r.load|round|int }}% · {{ r.total }} {{ r.total|plural('пара', 'пары', 'пар') }}</span>
             {% if r.conflicts %}<a class="cc-badge cc-badge--danger" href="{{ url_for('schedule_conflicts', dim='room', room=r.name) }}"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ r.conflicts }}</a>{% endif %}
         </th>
         {% for d in columns %}
         <td class="{{ 'is-today' if d == today_wd }}">
-            {% for l in r.by_day.get(d, []) %}{{ rm.lesson(l, l.id in r.conflict_ids, l.id in r.now.ids, False, here) }}{% else %}<span class="rm-day__empty">—</span>{% endfor %}
+            {% for l in r.by_day.get(d, []) %}{{ rm.lesson(l, l.id in r.conflict_ids, l.id in r.now.ids, False, here_url) }}{% else %}<span class="rm-day__empty">—</span>{% endfor %}
         </td>
         {% endfor %}
     </tr>
     {% endfor %}
-    <tr data-table-empty class="is-hidden"><td colspan="{{ columns|length + 1 }}" class="cc-table-empty">На этой странице ничего не найдено</td></tr>
     </tbody>
 </table>
-{% endcall %}
+</div>
 {{ ui.pagination(page) }}
+{% endcall %}
+
 {% else %}
-<div class="rm-grid{{ ' rm-grid--single' if single }}">
+{# ---------- Карточки недели ---------- #}
+<div class="rm-cards-head cc-no-print">{{ rm.legend() }}</div>
+<div class="rm-grid">
     {% for r in page.items %}
+    {% set busy_days = r.columns|select('in', r.by_day.keys()|list)|list %}
+    {% set free_days = r.columns|reject('in', r.by_day.keys()|list)|list %}
     <article class="rm-card{{ ' rm-card--conflict' if r.conflicts }}">
         <header class="rm-card__head">
-            <span class="rm-card__icon" aria-hidden="true"><i class="bi bi-door-open"></i></span>
             <div class="min-w-0 flex-grow-1">
                 <h2 class="rm-card__name"><a href="{{ url_for('schedule_rooms', room=r.name) }}">{{ r.name }}</a></h2>
                 <p class="rm-card__meta">
-                    <span title="Пар в неделю-числитель (с «каждую неделю»)">Ч {{ r.num }}</span> ·
-                    <span title="Пар в неделю-знаменатель (с «каждую неделю»)">З {{ r.den }}</span> ·
+                    <span title="Числитель: {{ r.num }} · Знаменатель: {{ r.den }}">{{ r.total }} {{ r.total|plural('занятие', 'занятия', 'занятий') }}</span> ·
                     {{ r.groups|length }} {{ r.groups|length|plural('группа', 'группы', 'групп') }} ·
                     {{ r.teachers|length }} {{ r.teachers|length|plural('преподаватель', 'преподавателя', 'преподавателей') }}
+                    {% if r.conflicts %} · <a class="rm-text-danger" href="{{ url_for('schedule_conflicts', dim='room', room=r.name) }}">{{ r.conflicts }} {{ r.conflicts|plural('накладка', 'накладки', 'накладок') }}</a>{% endif %}
                 </p>
             </div>
             {{ rm.now_status(r.now) }}
         </header>
-        <div class="rm-card__stats">
-            {{ rm.load_bar(r.load) }}
-            {% if r.conflicts %}<a class="cc-badge cc-badge--danger" href="{{ url_for('schedule_conflicts', dim='room', room=r.name) }}"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ r.conflicts }} {{ r.conflicts|plural('накладка', 'накладки', 'накладок') }}</a>{% endif %}
-        </div>
-        <div class="rm-week" style="--rm-cols: {{ r.columns|length }}" data-rm-week>
-            {% for d in r.columns %}
+        {{ rm.load_bar(r.load) }}
+        {% if busy_days %}
+        <div class="rm-week" style="--rm-cols: {{ busy_days|length }}" data-rm-week>
+            {% for d in busy_days %}
             <section class="rm-day{{ ' is-today' if d == today_wd }}"{% if d == today_wd %} data-rm-today{% endif %}>
                 <h3 class="rm-day__name"><abbr title="{{ day_names[d] }}">{{ day_short[d] }}</abbr>{% if d == today_wd %}<span class="rm-day__today">сегодня</span>{% endif %}</h3>
-                {% for l in r.by_day.get(d, []) %}{{ rm.lesson(l, l.id in r.conflict_ids, l.id in r.now.ids, single, here) }}{% else %}<span class="rm-day__empty">свободна</span>{% endfor %}
+                {% for l in r.by_day.get(d, []) %}{{ rm.lesson(l, l.id in r.conflict_ids, l.id in r.now.ids, False, here_url) }}{% endfor %}
             </section>
             {% endfor %}
         </div>
-        <footer class="rm-card__foot">
-            <div class="rm-chips">
-                {% for g in r.groups[:8] %}<a class="cc-chip" href="{{ nav_url('schedule', group=g) }}">{{ g }}</a>{% endfor %}
-                {% if r.groups|length > 8 %}<span class="cc-subtle small">и ещё {{ r.groups|length - 8 }}</span>{% endif %}
-            </div>
-            <a class="btn btn-ghost btn-sm cc-no-print" href="{{ url_for('schedule_rooms_export', format='xlsx', room=r.name) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i><span>Excel</span></a>
-        </footer>
-        {% if single and r.teachers %}
-        <div class="rm-card__teachers"><span class="cc-subtle small">Преподаватели:</span> {{ r.teachers|join(', ') }}</div>
         {% endif %}
+        {% if free_days %}<p class="rm-card__free">Свободна весь день: {% for d in free_days %}{{ day_short[d] }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
     </article>
     {% endfor %}
 </div>
 {{ ui.pagination(page) }}
 {% endif %}
 
-<p class="cc-subtle small mt-3">Обновлено {{ update_time }}. Загрузка — доля занятого времени аудитории в текущую неделю (Пн–Сб, 8:00–18:00), потоки не считаются дважды. «Аудитория» сопоставляется без учёта «ауд.»/«каб.», регистра и пробелов: «204» и «Каб. 204» — одна аудитория.</p>
+{% if top_load and not (q or day is not none or week) and total_rooms > 3 and view != 'matrix' %}
+{% call ui.details('Самые загруженные аудитории', key='rm-top', classes='rm-top cc-no-print') %}
+    <ol class="rm-top__list">
+        {% for r in top_load %}
+        <li><a href="{{ url_for('schedule_rooms', room=r.name) }}" class="rm-top__name">{{ r.name }}</a>{{ rm.load_bar(r.load, loop.first) }}</li>
+        {% endfor %}
+    </ol>
+{% endcall %}
+{% endif %}
+{% endif %}
+
+<p class="rm-footnote">Обновлено {{ update_time }}. Загрузка — доля занятого времени аудитории в текущую неделю (Пн–Сб, 8:00–18:00), потоки не считаются дважды. «204» и «Каб. 204» — одна аудитория.</p>
 {% endblock %}

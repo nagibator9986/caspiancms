@@ -18,8 +18,8 @@ from flask import Response, flash, jsonify, redirect, render_template, request, 
 
 from . import conflicts
 from .conflicts import DIM_LABELS, DIMS, FIXABLE, KINDS, QUALITY, SEV_LABELS, SEVERITIES, occurs_in, week_bounds
-from .core import (Routes, admin_required, audit, csv_response, current_admin, flash_error, fmt_dt, log, now_almaty,
-                   paginate_list, plural, safe_next_url, url_with)
+from .core import (Routes, admin_required, audit, csv_response, current_admin, flash_action, flash_error, fmt_dt, log,
+                   now_almaty, paginate_list, plural, safe_next_url, url_with, view_param)
 from .schedule_model import (DAY_NAMES_FULL, DAY_SHORT, WEEK_LABELS, academic_week_number, call_slots,
                              current_week_type, fmt_minutes, group_key, group_sort_key, intervals_overlap,
                              invalidate_schedule_caches, load_lessons_snapshot, norm_name, norm_text,
@@ -28,11 +28,15 @@ from .schedule_model import (DAY_NAMES_FULL, DAY_SHORT, WEEK_LABELS, academic_we
 
 routes = Routes()
 
-WEEK_FILTERS = [('current', 'Текущая неделя'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель')]
+WEEK_FILTERS = [('current', 'Текущая'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель')]
+# «Период» на странице «Накладки» (вместо отдельных кнопок «Сегодня / Эта неделя»)
+PERIODS = OrderedDict([('today', 'Сегодня'), ('week', 'Эта неделя'), ('numerator', 'Числитель'),
+                       ('denominator', 'Знаменатель')])
 DAY_OPTIONS = [(i, DAY_NAMES_FULL[i]) for i in range(7)]
 # Учебный день для расчёта загрузки аудитории: Пн–Сб, 08:00–18:00 (600 минут в день).
 LOAD_DAY_START, LOAD_DAY_END, LOAD_DAYS = 8 * 60, 18 * 60, 6
-ROOMS_PER_PAGE = {'cards': 12, 'table': 30}
+ROOMS_PER_PAGE = {'cards': 12, 'table': 30, 'matrix': 200}
+SERVICE_SLOT_MAX = 30   # слот сетки звонков короче 30 мин — служебный (перемена, кураторский час), а не пара
 ENTITIES_PER_PAGE = 12
 QUALITY_PER_PAGE = 50
 
@@ -68,6 +72,25 @@ def _parse_int(value, lo, hi):
 
 def _week_param(value):
     return value if value in ('current', 'numerator', 'denominator') else ''
+
+
+def slot_items(day):
+    """Сетка звонков дня для выбора пары: [{label, title, start, end, n, service}].
+    n — номер пары по порядку («1 пара · 08:25–09:15»); service — служебный слот (перемена,
+    кураторский час) — показывается отдельно и приглушённо."""
+    out, n = [], 0
+    for label, s, e in call_slots(day):
+        service = e - s < SERVICE_SLOT_MAX
+        if not service:
+            n += 1
+        out.append({'label': label, 'title': time_label(s, e), 'start': s, 'end': e,
+                    'n': None if service else n, 'service': service})
+    return out
+
+
+def default_day(ctx):
+    """День по умолчанию: сегодня, в воскресенье — понедельник."""
+    return ctx['today_wd'] if ctx['today_wd'] <= 5 else 0
 
 
 def lesson_in_week(l, week, ctx):
@@ -352,27 +375,31 @@ def _day_columns(rooms, day):
 @routes.route('/schedule/rooms')
 @admin_required
 def schedule_rooms():
-    """Аудиторный фонд: аудитории колледжа с неделей занятий, загрузкой и «что идёт сейчас».
+    """Аудиторный фонд: аудитории колледжа — шахматка дня (по умолчанию), карточки недели или таблица.
 
-    ?q= — поиск (аудитория, группа, преподаватель, дисциплина); ?room= — одна аудитория;
-    ?day=0..6; ?week=current|numerator|denominator (старое ?week_type= тоже понимается);
-    ?view=cards|table; ?page=."""
+    ?view=matrix|cards|table (запоминается: ui.segmented(remember='schedule_rooms'));
+    ?q= — поиск (аудитория, группа, преподаватель, дисциплина); ?room= — одна аудитория (неделя);
+    ?day=0..6 (в шахматке по умолчанию — сегодня); ?week=current|numerator|denominator
+    (старое ?week_type= тоже понимается); ?page=."""
     ctx = week_context()
     q = (request.args.get('q') or '').strip()[:80]
     room = (request.args.get('room') or '').strip()[:80]
     day = _parse_day(request.args.get('day'))
     week = _week_param(request.args.get('week') or request.args.get('week_type'))
-    view = 'table' if request.args.get('view') == 'table' else 'cards'
+    view = view_param('schedule_rooms', ('matrix', 'cards', 'table'), 'matrix')
+    if room:
+        view = 'cards'   # одна аудитория — её неделя
     rooms, total_rooms, room_options, no_room, virtual = [], 0, [], 0, 0
     analysis = _safe_analysis()
     acks = _safe_acks()
+    snap = None
     try:
         snap = load_lessons_snapshot()
         all_rooms = build_rooms(snap, ctx, analysis, acks)
         total_rooms = len(all_rooms)
         room_options = [(r['name'], r['name']) for r in all_rooms]
-        rooms = build_rooms(snap, ctx, analysis, acks, q=q, room=room, day=day, week=week) \
-            if (q or room or day is not None or week) else all_rooms
+        rooms = build_rooms(snap, ctx, analysis, acks, q=q, room=room, day=day if view != 'matrix' else None,
+                            week=week) if (q or room or day is not None or week) else all_rooms
         no_room = sum(1 for l in snap.lessons if not l['room'])
         virtual = sum(1 for l in snap.lessons if l['room_virtual'])
     except Exception as e:
@@ -383,6 +410,19 @@ def schedule_rooms():
     room_conf = sum(r['conflicts'] for r in all_rooms)
     page = paginate_list(rooms, request.args.get('page'), ROOMS_PER_PAGE[view])
     top_load = sorted(all_rooms, key=lambda r: -r['load'])[:5]
+    # шахматка: аудитории × пары выбранного дня (по умолчанию — сегодня, текущая неделя)
+    matrix_day = day if day is not None else default_day(ctx)
+    matrix_week = week or 'current'
+    grid_slots, grid_rows = [], []
+    if view == 'matrix' and snap is not None:
+        grid_slots, grid_rows = occupancy_grid(snap, matrix_day, matrix_week, ctx, page.items, lessons_only=True)
+        conflict_ids = set()
+        for r in page.items:
+            conflict_ids |= r['conflict_ids']
+        by_key = {r['key']: r for r in page.items}
+        for row in grid_rows:
+            row['room'] = by_key.get(row['key'])
+            row['cells'] = [{'lessons': cell, 'conflict': any(l['id'] in conflict_ids for l in cell)} for cell in row['cells']]
     return render_template(
         'schedule_rooms.html', page=page, rooms_count=len(rooms), total_rooms=total_rooms,
         lessons_count=sum(len(r['lessons']) for r in rooms), busy_now=busy_now, avg_load=avg_load,
@@ -390,7 +430,13 @@ def schedule_rooms():
         columns=_day_columns(page.items, day), day_names=DAY_NAMES_FULL, day_short=DAY_SHORT,
         room_options=room_options, day_options=DAY_OPTIONS, week_filters=WEEK_FILTERS,
         q=q, room=room, day=day, week=week, view=view, tab_counts=_tab_counts(),
-        single=bool(room) and len(rooms) == 1, **ctx)
+        matrix_day=matrix_day, matrix_week=matrix_week, grid_slots=grid_slots, grid_rows=grid_rows,
+        week_label=_week_label(matrix_week, ctx), single=bool(room) and len(rooms) == 1, **ctx)
+
+
+def _week_label(week, ctx):
+    return {'current': 'текущая неделя (%s)' % ctx['current_week_label'].lower(), 'numerator': 'числитель',
+            'denominator': 'знаменатель', 'both': 'обе недели', '': 'все недели'}.get(week, week)
 
 
 @routes.route('/schedule/rooms/export')
@@ -552,12 +598,28 @@ def conflict_filters(args=None):
     """Фильтры страницы «Накладки» из query-параметров (общие для страницы, экспорта и API)."""
     a = args if args is not None else request.args
     dim = a.get('dim')
+    day = _parse_day(a.get('day'))
+    week = _week_param(a.get('week'))
+    # «Период» (пилюля фильтров): today — сегодня в текущую неделю, week — эта неделя, numerator/denominator.
+    # Старые ссылки с ?week= продолжают работать: период выводится из недели.
+    period = a.get('period') if a.get('period') in PERIODS else ''
+    if period == 'today':
+        week = 'current'
+        if day is None:
+            day = default_day(week_context())
+    elif period == 'week':
+        week = 'current'
+    elif period in ('numerator', 'denominator'):
+        week = period
+    elif week:
+        period = {'current': 'week'}.get(week, week)
     return {
         'dim': dim if dim in DIM_LABELS else 'teacher',
         'q': (a.get('q') or '').strip()[:80],
-        'day': _parse_day(a.get('day')),
+        'day': day,
+        'period': period,
         'hour': _parse_int(a.get('hour'), 0, 23),
-        'week': _week_param(a.get('week')),
+        'week': week,
         'severity': a.get('severity') if a.get('severity') in SEVERITIES else '',
         'teacher': (a.get('teacher') or '').strip()[:200],
         'room': (a.get('room') or '').strip()[:80],
@@ -682,7 +744,8 @@ def _teacher_options(analysis, acks):
             continue
         e = seen.setdefault(c['key'], [c['entity'], 0])
         e[1] += 1
-    return sorted(((k, '%s (%d)' % (v[0], v[1])) for k, v in seen.items()), key=lambda kv: norm_name(kv[1]))
+    return sorted(((k, '%s (%d)' % (conflicts.short_name(v[0]), v[1])) for k, v in seen.items()),
+                  key=lambda kv: norm_name(kv[1]))
 
 
 def _conflicts_context():
@@ -752,7 +815,8 @@ def schedule_conflicts():
         heat=heat, quality_chips=quality_chips, tabs_counts=tabs_counts, teacher_options=teacher_options,
         stale=stale, fixable=fixable, filtered=filtered, kinds=KINDS, quality=QUALITY, sev_labels=SEV_LABELS,
         dim_labels=DIM_LABELS, day_options=DAY_OPTIONS, week_filters=WEEK_FILTERS, day_names=DAY_NAMES_FULL,
-        day_short=DAY_SHORT, tab_counts=_tab_counts(), here=request.full_path.rstrip('?'), **ctx)
+        day_short=DAY_SHORT, tab_counts=_tab_counts(), periods=list(PERIODS.items()),
+        here=request.full_path.rstrip('?'), **ctx)
 
 
 def _back_to_conflicts():
@@ -775,9 +839,12 @@ def schedule_conflicts_ack():
         return _back_to_conflicts()
     if n:
         audit('conflict_ack', 'schedule_conflicts', None, {'count': n, 'note': note or None, 'hashes': hashes[:20]})
-        flash('%s %d %s — %s из списка, пока занятия не изменятся' % (
-            plural(n, 'Принята', 'Приняты', 'Принято'), n, plural(n, 'накладка', 'накладки', 'накладок'),
-            'она скрыта' if n == 1 else 'они скрыты'), 'success')
+        # обратимое действие — без подтверждения, с «Отменить» в тосте (UX_SPEC_v2 §4.11)
+        msg = ('Накладка принята — скрыта, пока занятия не изменятся' if n == 1 else
+               '%s %d %s — скрыты, пока занятия не изменятся' % (plural(n, 'Принята', 'Приняты', 'Принято'), n,
+                                                                plural(n, 'накладка', 'накладки', 'накладок')))
+        flash_action(msg, 'Отменить', post=url_for('schedule_conflicts_unack'),
+                     fields={'hashes': ','.join(hashes), 'next': safe_next_url(request.form.get('next')) or ''})
     else:
         flash('Накладки уже изменились — обновите страницу', 'warning')
     return _back_to_conflicts()
@@ -787,7 +854,10 @@ def schedule_conflicts_ack():
 @admin_required
 def schedule_conflicts_unack():
     """Вернуть принятые накладки в список (удалить отметки)."""
-    hashes = [h for h in request.form.getlist('hash') if h][:500]
+    hashes = [h for h in request.form.getlist('hash') if h]
+    # «Отменить» в тосте после «Принять» присылает хэши одной строкой через запятую
+    hashes += [h.strip() for h in (request.form.get('hashes') or '').split(',') if h.strip()]
+    hashes = list(dict.fromkeys(hashes))[:500]
     if not hashes:
         flash('Не выбрано, что вернуть', 'warning')
         return _back_to_conflicts()
@@ -797,7 +867,7 @@ def schedule_conflicts_unack():
         flash_error('Не удалось снять отметку. Попробуйте ещё раз.', e)
         return _back_to_conflicts()
     audit('conflict_unack', 'schedule_conflicts', None, {'count': n, 'hashes': hashes[:20]})
-    flash('Возвращено в список: %d' % n, 'success')
+    flash('Возвращено в список: %d' % n if n != 1 else 'Накладка снова в списке', 'success')
     return _back_to_conflicts()
 
 
@@ -1044,9 +1114,10 @@ def free_rooms(snap, day, start, end, week, ctx, q=''):
     return free, busy
 
 
-def occupancy_grid(snap, day, week, ctx, rooms):
-    """Шахматка дня: аудитории × слоты сетки звонков → занятия в слоте (или пусто)."""
-    slots = call_slots(day)
+def occupancy_grid(snap, day, week, ctx, rooms, lessons_only=False):
+    """Шахматка дня: аудитории × слоты сетки звонков → занятия в слоте (или пусто).
+    lessons_only — без служебных слотов (перемены, кураторский час)."""
+    slots = [(it['label'], it['start'], it['end']) for it in slot_items(day) if not (lessons_only and it['service'])]
     rows = []
     for r in rooms:
         cells = []
@@ -1055,7 +1126,9 @@ def occupancy_grid(snap, day, week, ctx, rooms):
         for label, s, e in slots:
             cells.append([l for l in ls if intervals_overlap(l['start'], l['end'], s, e)])
         rows.append({'key': r['key'], 'name': r['name'], 'cells': cells, 'busy': sum(1 for c in cells if c)})
-    return [{'label': label, 'start': s, 'end': e, 'title': time_label(s, e)} for label, s, e in slots], rows
+    numbers = {it['label']: it['n'] for it in slot_items(day)}
+    return [{'label': label, 'start': s, 'end': e, 'title': time_label(s, e), 'n': numbers.get(label)}
+            for label, s, e in slots], rows
 
 
 @routes.route('/schedule/free-rooms')
@@ -1066,7 +1139,7 @@ def schedule_free_rooms():
     ctx = week_context()
     day = _parse_day(request.args.get('day'))
     if day is None:
-        day = ctx['today_wd'] if ctx['today_wd'] <= 5 else 0
+        day = default_day(ctx)
     slots = call_slots(day)
     week = request.args.get('week') if request.args.get('week') in ('current', 'numerator', 'denominator', 'both') \
         else 'current'
@@ -1074,16 +1147,19 @@ def schedule_free_rooms():
     t_from, t_to = _hm(request.args.get('from')), _hm(request.args.get('to'))
     slot = request.args.get('slot') or ''
     custom = t_from is not None and t_to is not None and t_to > t_from
+    same = next((l for l, s, e in slots if custom and (s, e) == (t_from, t_to)), None)
+    if same:   # «с — по» совпали с парой сетки (ссылка из правки занятия) — выбираем пару
+        custom, slot = False, same
     if custom:
         start, end = t_from, t_to
         slot = ''
     else:
-        if t_from is not None or t_to is not None:
+        if (t_from is not None or t_to is not None) and not same:
             flash('Время «с — по» указано не полностью — показана пара из сетки', 'warning')
         chosen = next(((l, s, e) for l, s, e in slots if l == slot), None)
         if chosen is None:  # по умолчанию — текущая или ближайшая пара сегодня
             now = ctx['now_minutes'] if day == ctx['today_wd'] else -1
-            chosen = next(((l, s, e) for l, s, e in slots if e > now), slots[0])
+            chosen = next(((l, s, e) for l, s, e in slots if e > now and e - s >= SERVICE_SLOT_MAX), slots[0])
         slot, start, end = chosen
     free, busy, grid_slots, grid_rows, total = [], [], [], [], 0
     try:
@@ -1091,7 +1167,7 @@ def schedule_free_rooms():
         total = len(snap.rooms())
         free, busy = free_rooms(snap, day, start, end, week, ctx, q)
         rooms = sorted(free + busy, key=lambda r: room_sort_key(r['name']))
-        grid_slots, grid_rows = occupancy_grid(snap, day, week, ctx, rooms)
+        grid_slots, grid_rows = occupancy_grid(snap, day, week, ctx, rooms, lessons_only=True)
     except Exception as e:
         flash_error('Не удалось загрузить расписание. Попробуйте обновить страницу.', e)
     week_label = {'current': 'текущая (%s)' % ctx['current_week_label'].lower(), 'numerator': 'числитель',
@@ -1099,7 +1175,7 @@ def schedule_free_rooms():
     copy_text = '%s, %s, %s: свободны %s' % (DAY_NAMES_FULL[day], time_label(start, end), week_label,
                                               ', '.join(r['name'] for r in free) or '—')
     return render_template(
-        'rooms/free_rooms.html', day=day, slot=slot, slots=[(l, time_label(s, e), s, e) for l, s, e in slots],
+        'rooms/free_rooms.html', day=day, slot=slot, slots=slot_items(day),
         start=start, end=end, interval=time_label(start, end), custom=custom, week=week, week_label=week_label,
         q=q, free=free, busy=busy, total=total, grid_slots=grid_slots, grid_rows=grid_rows,
         from_value=fmt_minutes(start) if custom else '', to_value=fmt_minutes(end) if custom else '',

@@ -1,68 +1,69 @@
-{# Аналитика приёма: KPI, регистрации по дням, воронка, источники, QR, специальности, города, коины (APPLICANTS). #}
+{# Аналитика приёма (CRM): KPI, регистрации по дням, воронка, источники и QR, специальности, города, классы;
+   второстепенные блоки (каналы, дни недели, заполненность профиля, приглашения, коины) — в «Подробнее».
+   Цвет графиков нейтральный, бренд — только у выделенного (сегодня / первое место), UX_SPEC_v2 §1.8. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'applicants/_macros.html' as ap with context %}
 {% block title %}Аналитика приёма{% endblock %}
 {% block styles %}{{ ui.css('applicants') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Аналитика приёма', 'Абитуриенты из приложения и по QR-кодам' ~ (' · данные на ' ~ (loaded_at|timeonly) if loaded_at else ''), icon='graph-up-arrow') %}
-    <form method="post" action="{{ url_for('applicants_refresh') }}" class="m-0">
-        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
-        {{ ui.button('Обновить', type='submit', icon='arrow-clockwise', variant='light', attrs={'title': 'Пересчитать сейчас (иначе — раз в 5 минут)'}) }}
-    </form>
-    {{ ui.button('QR-источники', href=url_for('applicant_sources'), icon='qr-code', variant='light') }}
-    {{ ui.button('Все лиды', href=url_for('applicants_leads'), icon='person-lines-fill') }}
-{% endcall %}
+{{ ui.page_header('Аналитика приёма', 'Абитуриенты из приложения и по QR-кодам' ~ (' · данные на ' ~ (loaded_at|timeonly) if loaded_at else ''), [
+    {'label': 'Все лиды', 'href': url_for('applicants_leads'), 'icon': 'person-lines-fill'},
+    {'menu': [
+        {'label': 'Обновить данные сейчас', 'action': url_for('applicants_refresh'), 'fields': {'next': here()}, 'icon': 'arrow-clockwise'},
+        {'label': 'QR-источники', 'href': url_for('applicant_sources'), 'icon': 'qr-code'},
+        {'label': 'Экспорт лидов CSV', 'href': url_for('applicants_leads_export'), 'icon': 'download'},
+    ]},
+]) }}
 
 {% if not stats %}
     <section class="cc-card">{{ ui.empty_state('cloud-slash', 'Данные не загрузились', 'Проверьте соединение и обновите страницу.') }}</section>
 {% elif not stats.total %}
     <section class="cc-card">
-        {{ ui.empty_state('mortarboard', 'Абитуриентов пока нет', 'Создайте QR-источник, распечатайте плакат и поставьте его на стенд — регистрации появятся здесь.', {'label': 'Создать QR-источник', 'href': url_for('applicant_sources') ~ '#new-source', 'icon': 'qr-code'}) }}
+        {{ ui.empty_state('mortarboard', 'Абитуриентов пока нет', 'Создайте QR-источник, распечатайте плакат и поставьте его на стенд — регистрации появятся здесь.', {'label': 'Создать QR-источник', 'href': url_for('applicant_sources') ~ '#new-source', 'icon': 'qr-code', 'variant': 'primary'}) }}
     </section>
 {% else %}
 {% set s = stats %}
-<div class="cc-stats">
-    {{ ui.stat_card('Всего абитуриентов', s.total, 'people', href=url_for('applicants_leads'), meta=('сегодня +' ~ s.today) if s.today else 'сегодня пока никого') }}
-    {{ ui.stat_card('За 7 дней', s.week, 'calendar-week', trend=s.week_trend, href=url_for('applicants_leads', period='7'), meta='к прошлой неделе' if s.week_trend is not none else None, tone='info') }}
-    {{ ui.stat_card('За 30 дней', s.month, 'calendar3', trend=s.month_trend, href=url_for('applicants_leads', period='30'), meta='к прошлым 30 дням' if s.month_trend is not none else None, tone='violet') }}
-    {{ ui.stat_card('Заполнили профиль', '%.0f%%'|format(s.complete_pct), 'person-check', href=url_for('applicants_leads', profile='complete'), meta=(s.complete|num) ~ ' из ' ~ (s.total|num), tone='success') }}
-    {{ ui.stat_card('Конверсия в «Поступил»', '%.1f%%'|format(s.enrolled_pct), 'mortarboard', href=url_for('applicants_leads', status='enrolled'), meta=(s.enrolled|num) ~ ' ' ~ s.enrolled|plural('поступил', 'поступили', 'поступили'), tone='warning') }}
-</div>
+{{ ui.stat_strip([
+    {'label': 'Всего абитуриентов', 'value': s.total, 'icon': 'people', 'href': url_for('applicants_leads'), 'meta': ('сегодня +' ~ s.today) if s.today else 'сегодня пока никого'},
+    {'label': 'За 7 дней', 'value': s.week, 'icon': 'calendar-week', 'trend': s.week_trend, 'href': url_for('applicants_leads', period='7'), 'meta': 'к прошлой неделе' if s.week_trend is not none else None},
+    {'label': 'За 30 дней', 'value': s.month, 'icon': 'calendar3', 'trend': s.month_trend, 'href': url_for('applicants_leads', period='30'), 'meta': 'к прошлым 30 дням' if s.month_trend is not none else None},
+    {'label': 'Заполнили профиль', 'value': '%.0f%%'|format(s.complete_pct), 'icon': 'person-check', 'href': url_for('applicants_leads', profile='complete'), 'meta': (s.complete|num) ~ ' из ' ~ (s.total|num)},
+    {'label': 'Конверсия в «Поступил»', 'value': '%.1f%%'|format(s.enrolled_pct), 'icon': 'mortarboard', 'href': url_for('applicants_leads', status='enrolled'), 'meta': (s.enrolled|num) ~ ' ' ~ s.enrolled|plural('поступил', 'поступили', 'поступили')},
+]) }}
 
-<div class="cc-grid ap-grid-main">
-    {% call ui.card('Регистрации по дням', icon='bar-chart-line', subtitle=(s.in_range|num) ~ ' за ' ~ s.days ~ ' дней' ~ ((' · пик ' ~ s.peak.label ~ ' — ' ~ s.peak.count) if s.peak and s.peak.count else '')) %}
-        {{ ui.tabs([
+<div class="cc-grid ap-grid-main ap-section">
+    {% call ui.card('Регистрации по дням', subtitle=(s.in_range|num) ~ ' за ' ~ s.days ~ ' дней' ~ ((' · пик ' ~ s.peak.label ~ ' — ' ~ s.peak.count) if s.peak and s.peak.count else '')) %}
+        {{ ui.segmented([
             {'key': 30, 'label': '30 дней', 'href': url_with(days=None)},
             {'key': 90, 'label': '90 дней', 'href': url_with(days=90)},
             {'key': 180, 'label': '180 дней', 'href': url_with(days=180)},
-        ], days, pills=True, label='Период графика') }}
+        ], days, label='Период графика') }}
         <div class="ap-chart" role="img" aria-label="Регистрации абитуриентов по дням за {{ s.days }} дней: всего {{ s.in_range }}">
             <canvas id="apDailyChart"></canvas>
         </div>
-        <details class="ap-table-view">
-            <summary>Показать таблицей</summary>
+        {% call ui.details('Показать таблицей', key='ap-daily-table', classes='ap-table-view') %}
             <div class="cc-table-wrap ap-table-view__wrap">
                 <table class="cc-table cc-table--compact">
-                    <thead><tr><th>Дата</th><th class="text-end">Регистраций</th><th class="text-end">Среднее за 7 дней</th></tr></thead>
+                    <thead><tr><th>Дата</th><th class="cc-num-col">Регистраций</th><th class="cc-num-col">Среднее за 7 дней</th></tr></thead>
                     <tbody>
                     {% for d in s.daily|reverse %}
-                        <tr><td>{{ d.label }}</td><td class="text-end cc-num">{{ d.count }}</td><td class="text-end cc-num">{{ '%.1f'|format(d.avg) }}</td></tr>
+                        <tr><td>{{ d.label }}</td><td class="cc-num-col">{{ d.count }}</td><td class="cc-num-col">{{ '%.1f'|format(d.avg) }}</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>
             </div>
-        </details>
+        {% endcall %}
         {{ ui.json_data('apDailyData', chart.daily) }}
     {% endcall %}
 
-    {% call ui.card('Воронка приёма', icon='funnel', subtitle='Сколько дошли хотя бы до этапа') %}
+    {% call ui.card('Воронка приёма', subtitle='Сколько дошли хотя бы до этапа') %}
         <ol class="ap-funnel">
             {% for st in s.funnel %}
             <li class="ap-funnel__step">
                 <div class="ap-funnel__head">
                     <span class="ap-funnel__label">{{ st.label }}</span>
-                    <span class="ap-funnel__value"><b>{{ st.count|num }}</b> <small>{{ '%.0f'|format(st.pct) }}%</small></span>
+                    <span class="ap-funnel__value"><b class="cc-num">{{ st.count|num }}</b> <small>{{ '%.0f'|format(st.pct) }}%</small></span>
                 </div>
                 <div class="ap-funnel__track" aria-hidden="true"><span style="width: {{ [st.pct, 0.5]|max }}%"></span></div>
                 {% if st.step is not none %}<div class="ap-funnel__step-conv"><i class="bi bi-arrow-return-right" aria-hidden="true"></i>{{ '%.0f'|format(st.step) }}% от предыдущего этапа</div>{% endif %}
@@ -70,27 +71,28 @@
             {% endfor %}
         </ol>
         <div class="ap-funnel__foot">
-            <a href="{{ url_for('applicants_leads', status='declined') }}"><i class="bi bi-x-circle" aria-hidden="true"></i>Отказались: <b>{{ s.declined|num }}</b></a>
-            <a href="{{ url_for('applicants_leads', status='new') }}"><i class="bi bi-stars" aria-hidden="true"></i>Ждут звонка: <b>{{ (s.status_bars|selectattr('key', 'equalto', 'new')|first).count|num }}</b></a>
+            <a class="cc-link-quiet" href="{{ url_for('applicants_leads', status='new') }}"><i class="bi bi-stars" aria-hidden="true"></i>Ждут звонка: <b>{{ (s.status_bars|selectattr('key', 'equalto', 'new')|first).count|num }}</b></a>
+            <a class="cc-link-quiet" href="{{ url_for('applicants_leads', status='declined') }}"><i class="bi bi-x-circle" aria-hidden="true"></i>Отказались: <b>{{ s.declined|num }}</b></a>
         </div>
     {% endcall %}
 </div>
 
 <div class="cc-grid cc-grid-2 ap-section">
-    {% call ui.card('Источники', icon='signpost-split', subtitle='Откуда пришли абитуриенты', flush=True) %}
+    {% call ui.card('Источники', subtitle='Откуда пришли абитуриенты', flush=True) %}
         <div class="cc-table-wrap">
-            <table class="cc-table cc-table--compact ap-sources-table">
-                <thead><tr><th>Источник</th><th class="text-end">Всего</th><th class="text-end d-none d-sm-table-cell" title="Заполнили профиль">С профилем</th><th class="text-end">Поступили</th></tr></thead>
+            <table class="cc-table cc-table--compact cc-table--stack ap-sources-table">
+                <thead><tr><th>Источник</th><th class="cc-num-col">Всего</th><th class="cc-num-col cc-col-md" title="Заполнили профиль">С профилем</th><th class="cc-num-col">Поступили</th></tr></thead>
                 <tbody>
                 {% for r in s.sources %}
-                    <tr data-href="{{ url_for('applicants_leads', source=r.code) if r.code else url_for('applicants_leads') }}">
-                        <td>
-                            {{ ap.source_label(r.title, r.icon, r.code) }}
-                            <div class="ap-inline-bar" aria-hidden="true"><span style="width: {{ r.width }}%"></span></div>
+                    {%- set link = url_for('applicants_leads', source=r.code) if r.code else url_for('applicants_leads') -%}
+                    <tr data-href="{{ link }}">
+                        <td class="cc-cell-primary">
+                            <a class="cc-row-link" href="{{ link }}">{{ ap.source_label(r.title, r.icon, r.code) }}</a>
+                            <div class="ap-inline-bar{{ ' is-top' if loop.first }}" aria-hidden="true"><span style="width: {{ r.width }}%"></span></div>
                         </td>
-                        <td class="text-end cc-num"><b>{{ r.count|num }}</b> <span class="cc-subtle small">{{ '%.0f'|format(r.pct) }}%</span>{% if r.week %}<div class="cc-cell-sub cc-nowrap">+{{ r.week }} за 7 дн.</div>{% endif %}</td>
-                        <td class="text-end cc-num d-none d-sm-table-cell">{{ r.complete }}</td>
-                        <td class="text-end cc-num">{{ r.enrolled }}{% if r.enrolled %} <span class="cc-subtle small">{{ '%.0f'|format(r.conv) }}%</span>{% endif %}</td>
+                        <td class="cc-num-col" data-label="Всего"><b class="cc-num">{{ r.count|num }}</b> <span class="cc-subtle small">{{ '%.0f'|format(r.pct) }}%</span>{% if r.week %}<div class="cc-cell-sub cc-nowrap">+{{ r.week }} за 7 дн.</div>{% endif %}</td>
+                        <td class="cc-num-col cc-col-md cc-col-optional">{{ r.complete }}</td>
+                        <td class="cc-num-col" data-label="Поступили">{{ r.enrolled }}{% if r.enrolled %} <span class="cc-subtle small">{{ '%.0f'|format(r.conv) }}%</span>{% endif %}</td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -98,20 +100,20 @@
         </div>
     {% endcall %}
 
-    {% call ui.card('QR-коды: сканы → регистрации', icon='qr-code-scan', subtitle='Какой стенд работает лучше', flush=True, actions=[{'label': 'Управлять', 'href': url_for('applicant_sources'), 'icon': 'gear'}]) %}
+    {% call ui.card('QR-коды: сканы → регистрации', subtitle='Какой стенд работает лучше', flush=True, actions=[{'label': 'Управлять', 'href': url_for('applicant_sources'), 'icon': 'gear'}]) %}
         {% if s.qr %}
         <div class="cc-table-wrap">
-            <table class="cc-table cc-table--compact">
-                <thead><tr><th>Источник</th><th class="text-end">Сканы</th><th class="text-end">Регистр.</th><th class="text-end d-none d-sm-table-cell">Конверсия</th></tr></thead>
+            <table class="cc-table cc-table--compact cc-table--stack">
+                <thead><tr><th>Источник</th><th class="cc-num-col">Сканы</th><th class="cc-num-col">Регистр.</th><th class="cc-num-col cc-col-md">Конверсия</th></tr></thead>
                 <tbody>
                 {% for r in s.qr %}
                     <tr data-href="{{ url_for('applicants_leads', source=r.code) }}">
-                        <td><div class="cc-cell-main">{{ r.title }}</div><div class="cc-cell-sub">{{ r.code }} · {{ r.channel }}{% if not r.active %} · выключен{% endif %}</div></td>
-                        <td class="text-end cc-num">{{ r.scans|num }}</td>
-                        <td class="text-end cc-num"><b>{{ r.registrations|num }}</b></td>
-                        <td class="text-end ap-conv-cell d-none d-sm-table-cell">
+                        <td class="cc-cell-primary"><a class="cc-row-link cc-cell-main cc-truncate d-block ap-max-260" href="{{ url_for('applicants_leads', source=r.code) }}" title="{{ r.title }}">{{ r.title }}</a><div class="cc-cell-sub">{{ r.code }} · {{ r.channel }}{% if not r.active %} · выключен{% endif %}</div></td>
+                        <td class="cc-num-col" data-label="Сканы">{{ r.scans|num }}</td>
+                        <td class="cc-num-col" data-label="Регистраций"><b class="cc-num">{{ r.registrations|num }}</b></td>
+                        <td class="cc-num-col cc-col-md ap-conv-cell" data-label="Конверсия">
                             {% if r.conv is not none %}<span class="cc-num">{{ '%.0f'|format(r.conv) }}%</span>
-                            <div class="ap-inline-bar ap-inline-bar--success" aria-hidden="true"><span style="width: {{ r.width }}%"></span></div>
+                            <div class="ap-inline-bar{{ ' is-top' if r.width >= 100 }}" aria-hidden="true"><span style="width: {{ r.width }}%"></span></div>
                             {% else %}<span class="cc-subtle">—</span>{% endif %}
                         </td>
                     </tr>
@@ -126,52 +128,52 @@
 </div>
 
 <div class="cc-grid cc-grid-3 ap-section">
-    {% call ui.card('Специальности', icon='mortarboard', subtitle=(s.with_specialties|num) ~ ' указали интерес · можно выбрать несколько') %}
+    {% call ui.card('Специальности', subtitle=(s.with_specialties|num) ~ ' указали интерес · можно выбрать несколько') %}
         {{ ap.bars(s.specialties, 'specialty', 'Абитуриенты ещё не выбрали специальности') }}
     {% endcall %}
-    {% call ui.card('Города', icon='geo-alt', subtitle=('топ-10 из ' ~ s.cities_total) if s.cities_total > 10 else 'по профилю') %}
+    {% call ui.card('Города', subtitle=('топ-10 из ' ~ s.cities_total) if s.cities_total > 10 else 'по профилю') %}
         {{ ap.bars(s.cities, 'city', 'Город пока никто не указал') }}
     {% endcall %}
-    {% call ui.card('Класс', icon='backpack', subtitle='Ступень обучения') %}
-        {{ ap.bars(s.grades, 'grade') }}
+    {% call ui.card('Класс', subtitle='Ступень обучения') %}
+        {{ ap.bars(s.grades, 'grade', highlight='max') }}
     {% endcall %}
 </div>
 
-<div class="cc-grid cc-grid-3 ap-section">
-    {% call ui.card('Каналы', icon='diagram-3', subtitle='QR по типу площадки, приложение, сайт') %}
+{% call ui.details('Подробнее: каналы, дни недели, профиль, приглашения, коины', key='ap-more', classes='ap-section ap-more-details') %}
+<div class="cc-grid cc-grid-3">
+    {% call ui.card('Каналы', subtitle='QR по типу площадки, приложение, сайт') %}
         {{ ap.bars(s.channels) }}
     {% endcall %}
-    {% call ui.card('Заполненность профиля', icon='ui-checks', subtitle='Доля абитуриентов, указавших поле') %}
+    {% call ui.card('Заполненность профиля', subtitle='Доля абитуриентов, указавших поле') %}
         <ul class="ap-fields">
             {% for f in s.fields %}
             <li>
                 <span class="ap-fields__label">{{ f.label }}</span>
-                {{ ui.progress_bar(f.pct, 100, 'success' if f.pct >= 70 else None, f.label ~ ': ' ~ ('%.0f'|format(f.pct)) ~ '%') }}
+                {{ ui.progress_bar(f.pct, 100, None, f.label ~ ': ' ~ ('%.0f'|format(f.pct)) ~ '%') }}
                 <span class="ap-fields__value cc-num">{{ '%.0f'|format(f.pct) }}%</span>
             </li>
             {% endfor %}
         </ul>
-        <p class="cc-subtle small mt-3 mb-0"><i class="bi bi-coin" aria-hidden="true"></i> За полностью заполненный профиль приложение начисляет коины.
+        <p class="cc-subtle small mt-3 mb-0">За полностью заполненный профиль приложение начисляет коины.
             {% if s.marketing %}Согласие на звонки: {{ s.marketing|num }} ({{ pct(s.marketing, s.total) }}).{% endif %}</p>
     {% endcall %}
-    {% call ui.card('Дни недели', icon='calendar-range', subtitle='Когда регистрируются (по Алматы)') %}
-        {{ ap.bars(s.weekdays) }}
+    {% call ui.card('Дни недели', subtitle='Когда регистрируются (по Алматы)') %}
+        {{ ap.bars(s.weekdays, highlight='max') }}
     {% endcall %}
 </div>
-
 <div class="cc-grid cc-grid-2 ap-section">
-    {% call ui.card('Топ пригласивших', icon='people', subtitle=(s.referred_total|num) ~ ' ' ~ s.referred_total|plural('пришёл', 'пришли', 'пришли') ~ ' по приглашению друга', flush=True) %}
+    {% call ui.card('Топ пригласивших', subtitle=(s.referred_total|num) ~ ' ' ~ s.referred_total|plural('пришёл', 'пришли', 'пришли') ~ ' по приглашению друга', flush=True) %}
         {% if s.referrers %}
         <div class="cc-table-wrap">
-            <table class="cc-table cc-table--compact">
-                <thead><tr><th>Пригласивший</th><th class="text-end">Друзей</th><th class="text-end d-none d-sm-table-cell">С профилем</th><th class="text-end">Наград</th></tr></thead>
+            <table class="cc-table cc-table--compact cc-table--stack">
+                <thead><tr><th>Пригласивший</th><th class="cc-num-col">Друзей</th><th class="cc-num-col cc-col-md">С профилем</th><th class="cc-num-col">Наград</th></tr></thead>
                 <tbody>
                 {% for r in s.referrers %}
                     <tr {% if r.exists %}data-href="{{ url_for('applicant_detail', uid=r.uid) }}"{% endif %}>
-                        <td><div class="d-flex align-items-center gap-2 min-w-0">{{ ui.avatar(r.title, size='sm') }}<div class="min-w-0"><div class="cc-cell-main cc-truncate">{{ r.title }}</div>{% if r.login and r.login != r.title %}<div class="cc-cell-sub cc-truncate">{{ r.login }}</div>{% endif %}</div></div></td>
-                        <td class="text-end cc-num"><b>{{ r.count }}</b></td>
-                        <td class="text-end cc-num d-none d-sm-table-cell">{{ r.complete }}</td>
-                        <td class="text-end cc-num">{{ r.rewarded }}</td>
+                        <td class="cc-cell-primary"><div class="d-flex align-items-center gap-2 min-w-0">{{ ui.avatar(r.title, size='sm') }}<div class="min-w-0">{% if r.exists %}<a class="cc-row-link cc-cell-main cc-truncate d-block" href="{{ url_for('applicant_detail', uid=r.uid) }}">{{ r.title }}</a>{% else %}<div class="cc-cell-main cc-truncate">{{ r.title }}</div>{% endif %}{% if r.login and r.login != r.title %}<div class="cc-cell-sub cc-truncate">{{ r.login }}</div>{% endif %}</div></div></td>
+                        <td class="cc-num-col" data-label="Друзей"><b class="cc-num">{{ r.count }}</b></td>
+                        <td class="cc-num-col cc-col-md cc-col-optional">{{ r.complete }}</td>
+                        <td class="cc-num-col" data-label="Наград">{{ r.rewarded }}</td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -182,21 +184,21 @@
         {% endif %}
     {% endcall %}
 
-    {% call ui.card('Caspian Coin у абитуриентов', icon='coin', subtitle='По кошелькам: начислено, потрачено, на руках') %}
-        <div class="ap-coins">
-            <div><span>Начислено</span><b>{{ s.coins.earned|num }}</b></div>
-            <div><span>Потрачено и списано</span><b>{{ s.coins.spent|num }}</b></div>
-            <div><span>На балансах</span><b>{{ s.coins.balance|num }}</b><small>{{ s.coins.holders|num }} {{ s.coins.holders|plural('человек', 'человека', 'человек') }}</small></div>
-        </div>
-        <div class="ap-coins__links">
-            {% if orders.reserved is not none %}<a class="cc-chip" href="{{ nav_url('coins_orders') }}"><i class="bi bi-box-seam" aria-hidden="true"></i>Ждут выдачи: <b>{{ orders.reserved|num }}</b></a>{% endif %}
-            {% if orders.issued is not none %}<a class="cc-chip" href="{{ nav_url('coins_orders') }}"><i class="bi bi-bag-check" aria-hidden="true"></i>Выдано мерча: <b>{{ orders.issued|num }}</b></a>{% endif %}
-            <a class="cc-chip" href="{{ nav_url('coins_journal') }}"><i class="bi bi-journal-text" aria-hidden="true"></i>Журнал</a>
-        </div>
+    {% call ui.card('Caspian Coin у абитуриентов', subtitle='По кошелькам: начислено, потрачено, на руках') %}
+        <dl class="ap-wallet">
+            <div><dt>Начислено</dt><dd class="cc-num">{{ s.coins.earned|num }}</dd></div>
+            <div><dt>Потрачено и списано</dt><dd class="cc-num">{{ s.coins.spent|num }}</dd></div>
+            <div><dt>На балансах</dt><dd class="cc-num">{{ s.coins.balance|num }}</dd><small>{{ s.coins.holders|num }} {{ s.coins.holders|plural('человек', 'человека', 'человек') }}</small></div>
+        </dl>
+        <p class="ap-coins__links">
+            {% if orders.reserved is not none %}<a class="cc-link-quiet" href="{{ nav_url('coins_orders') }}">Ждут выдачи: <b class="cc-num">{{ orders.reserved|num }}</b></a>{% endif %}
+            {% if orders.issued is not none %}<a class="cc-link-quiet" href="{{ nav_url('coins_orders', status='issued') }}">Выдано мерча: <b class="cc-num">{{ orders.issued|num }}</b></a>{% endif %}
+            <a class="cc-link-quiet" href="{{ nav_url('coins_journal') }}">Журнал коинов</a>
+        </p>
     {% endcall %}
 </div>
 
-{% call ui.card('Последние регистрации', icon='clock-history', flush=True, actions=[{'label': 'Все лиды', 'href': url_for('applicants_leads'), 'icon': 'arrow-right'}], classes='ap-section') %}
+{% call ui.card('Последние регистрации', flush=True, actions=[{'label': 'Все лиды', 'href': url_for('applicants_leads'), 'icon': 'arrow-right'}], classes='ap-section') %}
     <ul class="ap-recent">
         {% for x in s.recent %}
         <li>
@@ -208,6 +210,7 @@
         </li>
         {% endfor %}
     </ul>
+{% endcall %}
 {% endcall %}
 {% endif %}
 {% endblock %}

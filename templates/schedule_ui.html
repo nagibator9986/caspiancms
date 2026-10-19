@@ -3,24 +3,19 @@
       {% import 'schedule_ui.html' as sch with context %}
   Занятие `l` — нормализованный dict из schedule_model.normalize_lesson (weekday, start, end,
   week, teacher_name, room …). Цвета и отступы — только токены дизайн-системы (schedule.css).
+  Общие компоненты (неделя, легенда, бейджи) — из _ui.html; здесь только то, что есть лишь в расписании.
 #}
 {% import '_ui.html' as ui with context %}
 
-{# Текущая неделя: «Сейчас: числитель · 8-я неделя» #}
+{# Текущая неделя — общий нейтральный чип ui.week_now (today_label — для совместимости, в title) #}
 {% macro week_now(current_week, week_number=None, today_label=None) -%}
-<span class="cc-week-pill cc-week-pill--{{ current_week }}" data-current-week="{{ current_week }}"{% if today_label %} title="Сегодня {{ today_label }}"{% endif %}>
-    <i class="bi bi-calendar-week" aria-hidden="true"></i>Сейчас {{ 'числитель' if current_week == 'numerator' else 'знаменатель' }}{% if week_number %} · {{ week_number }}-я неделя{% endif %}
-</span>
+{{ ui.week_now(current_week, week_number) }}
 {%- endmacro %}
 
-{# Легенда типов недели #}
-{% macro week_legend(current_week=None) -%}
-<div class="sch-legend" aria-label="Обозначения">
-    <span class="sch-legend__item"><span class="sch-swatch sch-swatch--always"></span>Каждую неделю</span>
-    <span class="sch-legend__item"><span class="sch-swatch sch-swatch--numerator"></span>Числитель</span>
-    <span class="sch-legend__item"><span class="sch-swatch sch-swatch--denominator"></span>Знаменатель</span>
-    {% if current_week %}<span class="sch-legend__item sch-legend__item--muted"><span class="sch-swatch sch-swatch--off"></span>Не на этой неделе</span>{% endif %}
-</div>
+{# Легенда сетки расписания — общий ui.legend #}
+{% macro week_legend(current_week=None, conflicts=True) -%}
+{{ ui.legend([('always', 'Каждую неделю'), ('numerator', 'Числитель'), ('denominator', 'Знаменатель')]
+             + ([('conflict', 'Накладка')] if conflicts else []) + [('now', 'Идёт сейчас')]) }}
 {%- endmacro %}
 
 {# Подпись дня: 0..6 → «Понедельник», None → «Без дня» #}
@@ -28,38 +23,41 @@
 {%- if d is none -%}Без дня{%- elif short -%}{{ day_short[d] }}{%- else -%}{{ day_names[d] }}{%- endif -%}
 {%- endmacro %}
 
-{# Карточка занятия. show: 'teacher' (страницы групп) | 'group' (страницы преподавателей) #}
-{% macro lesson_card(l, cur, show='teacher', today_wd=None, now_minutes=None, overlap=False, edit=False, next_url=None, compact=False) -%}
+{# Карточка занятия. show: 'teacher' (страницы групп) | 'group' (страницы преподавателей) | 'both' (аудитории).
+   edit=True — вся карточка — ссылка на правку (быстрый просмотр на ≥ 768 px, next_url — возврат).
+   mark — накладка из движка {'severity', 'items'} (подсказка в title); overlap — подсветить как накладку. #}
+{% macro lesson_card(l, cur, show='teacher', today_wd=None, now_minutes=None, overlap=False, edit=False, next_url=None, compact=False, mark=None) -%}
 {%- set current = l.week in ('always', cur) -%}
 {%- set is_today = today_wd is not none and l.weekday == today_wd and current -%}
 {%- set is_now = is_today and now_minutes is not none and l.start is not none and l.end is not none and l.start <= now_minutes < l.end -%}
 {%- set who = (l|sch_teacher) if show == 'teacher' else l.groupId -%}
-<article class="sch-lesson sch-lesson--{{ l.week }}{{ ' is-off' if not current }}{{ ' is-today' if is_today }}{{ ' is-now' if is_now }}{{ ' is-overlap' if overlap }}{{ ' sch-lesson--compact' if compact }}{{ ' sch-lesson--editable' if edit }}"
-         data-search="{{ [l.groupId, l.subject, l|sch_teacher, l.room]|join(' ')|lower }}"{% if overlap %} data-overlap{% endif %}>
-    <div class="sch-lesson__top">
-        <span class="sch-lesson__time cc-num">{{ l|sch_time }}</span>
+{%- set conflict = overlap or mark -%}
+{%- set tip = ((mark['items']|join('; ')) if mark else ('Пересекается с другим занятием' if overlap else '')) -%}
+{%- set tag = 'a' if edit else 'div' -%}
+<{{ tag }} class="sch-lesson sch-lesson--{{ l.week }}{{ ' is-off' if not current }}{{ ' is-now' if is_now }}{{ ' is-conflict' if conflict }}{{ ' is-warning' if mark and mark.severity == 'warning' and not overlap }}{{ ' sch-lesson--compact' if compact }}"
+   {%- if edit %} href="{{ url_for('schedule_edit', schedule_id=l.id, next=next_url) }}" data-cc-peek{% endif %}
+   data-search="{{ [l.groupId, l.subject, l|sch_teacher, l.room]|join(' ')|lower }}"{% if conflict %} data-overlap{% endif %}
+   {%- if tip or not current %} title="{{ tip }}{{ ' · ' if tip and not current }}{{ 'Не на этой неделе' if not current }}"{% endif %}>
+    <span class="sch-lesson__top">
+        <span class="sch-lesson__time cc-num">{{ (l|sch_time)|time_range }}</span>
         {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}
-        {% if is_now %}<span class="cc-badge cc-badge--brand"><span class="cc-dot" aria-hidden="true"></span>идёт</span>{% endif %}
-        {% if overlap %}<span class="sch-lesson__warn" title="Пересекается с другим занятием" aria-label="Пересекается с другим занятием"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>{% endif %}
-        {% if edit %}<a class="sch-lesson__edit" href="{{ url_for('schedule_edit', schedule_id=l.id, next=next_url) }}" aria-label="Изменить занятие «{{ l.subject }}»" title="Изменить"><i class="bi bi-pencil" aria-hidden="true"></i></a>{% endif %}
-    </div>
-    <div class="sch-lesson__subject">{{ l.subject or '—' }}</div>
-    <div class="sch-lesson__meta">
-        {% if show == 'teacher' %}
-        <span class="cc-truncate" title="{{ who }}"><i class="bi bi-person" aria-hidden="true"></i>{{ (who|sch_short) if who else 'без преподавателя' }}</span>
-        {% else %}
-        <span><i class="bi bi-people" aria-hidden="true"></i>{{ who or '—' }}</span>
-        {% endif %}
-        {% if l.room %}<span class="cc-nowrap"><i class="bi bi-geo-alt" aria-hidden="true"></i>{{ l.room }}</span>{% endif %}
-    </div>
-</article>
+        {% if is_now %}<span class="sch-lesson__now"><span class="cc-dot" aria-hidden="true"></span>идёт</span>{% endif %}
+        {% if conflict %}<i class="bi bi-exclamation-triangle-fill sch-lesson__warn" aria-hidden="true"></i><span class="visually-hidden">Накладка: {{ tip }}</span>{% endif %}
+    </span>
+    <span class="sch-lesson__subject">{{ l.subject or '—' }}</span>
+    <span class="sch-lesson__meta">
+        {%- if show in ('teacher', 'both') -%}<span class="cc-truncate" title="{{ l|sch_teacher }}">{{ ((l|sch_teacher)|sch_short) if (l|sch_teacher) else 'без преподавателя' }}</span>{%- endif -%}
+        {%- if show in ('group', 'both') -%}<span class="sch-lesson__group">{{ l.groupId or '—' }}</span>{%- endif -%}
+        {%- if l.room and show != 'room' -%}<span class="cc-nowrap">{{ l.room }}</span>{%- endif -%}
+    </span>
+</{{ tag }}>
 {%- endmacro %}
 
-{# Компактная строка занятия (карточки преподавателей): время · группа/преподаватель · дисциплина · ауд. #}
+{# Компактная строка занятия (карточки преподавателей): время · группа · дисциплина · ауд. #}
 {% macro lesson_line(l, cur, show='group', overlap=False, edit=False, next_url=None) -%}
 {%- set who = l.groupId if show == 'group' else (l|sch_teacher) -%}
 <li class="sch-line sch-line--{{ l.week }}{{ ' is-off' if l.week not in ('always', cur) }}{{ ' is-overlap' if overlap }}"{% if overlap %} data-overlap{% endif %}>
-    <span class="sch-line__time cc-num">{{ l|sch_time }}</span>
+    <span class="sch-line__time cc-num">{{ (l|sch_time)|time_range }}</span>
     <span class="sch-line__main">
         {% if show == 'group' and who %}<a class="sch-line__who" href="{{ url_for('schedule', group=who) }}">{{ who }}</a>{% else %}<span class="sch-line__who">{{ (who|sch_short) or '—' }}</span>{% endif %}
         {% if l.week != 'always' %}{{ ui.week_badge(l.week, short=True) }}{% endif %}
@@ -67,43 +65,53 @@
     </span>
     <span class="sch-line__room">{{ l.room }}</span>
     <span class="sch-line__end">
-        {% if overlap %}<i class="bi bi-exclamation-triangle-fill sch-line__warn" title="Пересекается с другим занятием" aria-label="Пересекается с другим занятием"></i>{% endif %}
-        {% if edit %}<a class="sch-line__edit" href="{{ url_for('schedule_edit', schedule_id=l.id, next=next_url) }}" aria-label="Изменить занятие «{{ l.subject }}»" title="Изменить"><i class="bi bi-pencil" aria-hidden="true"></i></a>{% endif %}
+        {% if overlap %}<i class="bi bi-exclamation-triangle-fill sch-line__warn" title="Накладка" aria-label="Накладка"></i>{% endif %}
+        {% if edit %}<a class="sch-line__edit" href="{{ url_for('schedule_edit', schedule_id=l.id, next=next_url) }}" data-cc-peek aria-label="Изменить занятие «{{ l.subject }}»" title="Изменить"><i class="bi bi-pencil" aria-hidden="true"></i></a>{% endif %}
     </span>
 </li>
 {%- endmacro %}
 
-{# Мини-полоска дней недели (карточка группы/преподавателя): Пн–Сб, число пар #}
+{# Мини-полоска дней недели (карточка группы/преподавателя): Пн–Сб, число пар. Нейтрально; сегодня — обводка. #}
 {% macro mini_days(days, today_wd=None) -%}
 <div class="sch-mini-days" aria-label="Пары по дням">
     {% for d in range(6) %}
     {%- set n = days.get(d, 0) -%}
-    <span class="sch-mini-days__day{{ ' is-empty' if not n }}{{ ' is-today' if d == today_wd }}" title="{{ day_names[d] }}: {{ n }} {{ n|plural('пара', 'пары', 'пар') }}">
+    <span class="sch-mini-days__day{{ ' is-empty' if not n }}{{ ' is-today' if d == today_wd }}" title="{{ day_names[d] }}{{ ' (сегодня)' if d == today_wd }}: {{ n }} {{ n|plural('пара', 'пары', 'пар') }}">
         <b>{{ day_short[d] }}</b><span class="cc-num">{{ n or '·' }}</span>
     </span>
     {% endfor %}
 </div>
 {%- endmacro %}
 
-{# Запись журнала (история изменений) #}
+{# Переключатель дня (телефон, < 768 px): показывает одну колонку недели. counts — {день: число занятий};
+   target — CSS-селектор сетки (её колонки/ячейки помечены data-day);
+   alerts — дни, где есть накладки (красная точка: видно, куда листать, не открывая каждый день). #}
+{% macro day_switch(columns, counts, focus, today_wd=None, target='#schWeek', alerts=()) -%}
+<nav class="cc-day-switch sch-dayswitch" aria-label="День недели" data-sch-dayswitch="{{ target }}">
+    {% for d in columns %}
+    <button type="button" class="{{ 'active' if d == focus }}{{ ' is-today' if d == today_wd }}{{ ' has-alert' if d in alerts }}" data-day="{{ '' if d is none else d }}" aria-pressed="{{ 'true' if d == focus else 'false' }}"{% if d is not none %} aria-label="{{ day_names[d] }}{{ ', сегодня' if d == today_wd }}: {{ counts.get(d, 0) }} {{ counts.get(d, 0)|plural('занятие', 'занятия', 'занятий') }}{{ ', есть накладки' if d in alerts }}"{% endif %}>
+        <span>{{ day_title(d, True) if d is not none else '—' }}</span><small class="cc-num">{{ counts.get(d, 0) or '·' }}{% if d in alerts %}<i class="sch-dayswitch__alert" aria-hidden="true"></i>{% endif %}</small>
+    </button>
+    {% endfor %}
+</nav>
+{%- endmacro %}
+
+{# Запись журнала (компактный список: последние изменения группы, история занятия) #}
 {% macro log_item(e, show_group=True) -%}
 <li class="sch-log sch-log--{{ e.tone }}">
     <span class="sch-log__icon" aria-hidden="true"><i class="bi bi-{{ e.icon }}"></i></span>
     <div class="sch-log__body">
         <div class="sch-log__head">
-            {{ ui.badge(e.action, e.action_label, e.tone) }}
+            <span class="sch-log__action">{{ e.action_label }}</span>
             {% if show_group and e.group_id %}<a class="sch-log__group" href="{{ url_for('schedule', group=e.group_id) }}">{{ e.group_id }}</a>{% endif %}
             <span class="sch-log__summary">{{ e.summary or e.lesson_id or '—' }}</span>
         </div>
         {% if e.changes %}
         <ul class="sch-log__changes">
-            {% for c in e.changes %}<li><span class="cc-muted">{{ c.label }}:</span> <s>{{ c.old }}</s> <i class="bi bi-arrow-right" aria-hidden="true"></i> <b>{{ c.new }}</b></li>{% endfor %}
+            {% for c in e.changes %}<li><span class="cc-muted">{{ c.label }}:</span> <s>{{ c.old|time_range if c.label == 'Время' else c.old }}</s> <i class="bi bi-arrow-right" aria-hidden="true"></i> <b>{{ c.new|time_range if c.label == 'Время' else c.new }}</b></li>{% endfor %}
         </ul>
         {% endif %}
-        <div class="sch-log__meta cc-subtle">
-            <span title="{{ e.when }}">{{ e.ago }}</span> · <span>{{ e.author }}</span>
-            {% if e.lesson_exists %} · <a href="{{ url_for('schedule_edit', schedule_id=e.lesson_id) }}">открыть занятие</a>{% endif %}
-        </div>
+        <div class="sch-log__meta"><span title="{{ e.when }}">{{ e.ago }}</span> · <span>{{ e.author }}</span></div>
     </div>
 </li>
 {%- endmacro %}
@@ -124,7 +132,8 @@
 
 {# ---------- Редактор занятий (конструктор и редактор группы) ---------- #}
 
-{# Одна строка-занятие. f — функции списков из form_context(); имена полей — как у формы конструктора. #}
+{# Одна строка-занятие. f — функции списков из form_context(); имена полей — как у формы конструктора.
+   День строки задаёт секция (селект дня виден только в секции «Без дня»); перенос — «Перенести на…» в ⋯. #}
 {% macro editor_row(row, f) -%}
 {%- set k = row.key or 'new' -%}
 <div class="sch-row{{ ' has-error' if row.errors }}" data-row data-key="{{ k }}" data-id="{{ row.id }}"{% if row.orig %} data-orig='{{ row.orig|tojson }}'{% endif %}>
@@ -164,12 +173,20 @@
     <div class="sch-row__field sch-row__field--week">
         <label class="sch-row__label" for="r-{{ k }}-week">Неделя</label>
         <select class="form-select form-select-sm" id="r-{{ k }}-week" name="week_type" data-f="week_type">
-            {% for v, label in f.week_choices(row.week_type) %}<option value="{{ v }}"{{ ' selected' if v == row.week_type }}>{{ {'always': 'Всегда', 'numerator': 'Числитель', 'denominator': 'Знаменатель'}.get(v, label) }}</option>{% endfor %}
+            {% for v, label in f.week_choices(row.week_type) %}<option value="{{ v }}"{{ ' selected' if v == row.week_type }}>{{ {'always': 'Каждую', 'numerator': 'Числитель', 'denominator': 'Знаменатель'}.get(v, label) }}</option>{% endfor %}
         </select>
     </div>
     <div class="sch-row__actions">
         <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-row-duplicate aria-label="Дублировать занятие" title="Дублировать"><i class="bi bi-copy" aria-hidden="true"></i></button>
-        <button type="button" class="btn btn-ghost btn-sm cc-btn-icon sch-row__delete" data-row-delete aria-label="Удалить занятие" title="Удалить"><i class="bi bi-trash" aria-hidden="true"></i></button>
+        <div class="dropdown sch-row__menu">
+            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" aria-label="Действия с занятием" title="Ещё"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><h6 class="dropdown-header">Перенести на</h6></li>
+                {% for d in range(7) %}<li><button type="button" class="dropdown-item" data-row-move="{{ d }}"><span>{{ f.day_names_full[d] }}</span></button></li>{% endfor %}
+                <li><hr class="dropdown-divider"></li>
+                <li><button type="button" class="dropdown-item text-danger" data-row-delete><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить занятие</span></button></li>
+            </ul>
+        </div>
         <button type="button" class="btn btn-light btn-sm sch-row__restore" data-row-restore><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Вернуть</span></button>
     </div>
     <div class="sch-row__issues" data-issues aria-live="polite">
@@ -179,25 +196,24 @@
 </div>
 {%- endmacro %}
 
-{# Секции дней с строками. rows — список строк (_row_view), days — какие секции показывать #}
+{# Секции дней с строками. rows — список строк (_row_view) #}
 {% macro editor_sections(rows, f, show_empty_sunday=False) -%}
 {%- set has_none = rows|selectattr('day', 'none')|list|length > 0 -%}
 {%- set sections = [none] if has_none else [] -%}
 {% for d in (sections + [0, 1, 2, 3, 4, 5, 6]) %}
 {%- set day_rows = rows|selectattr('day', 'none')|list if d is none else rows|selectattr('day', 'equalto', d)|list -%}
-<section class="sch-section{{ ' sch-section--none' if d is none }}" data-day-section="{{ '' if d is none else d }}"{% if d == 6 and not day_rows and not show_empty_sunday %} hidden{% endif %}>
+<section class="sch-section{{ ' sch-section--none' if d is none }}{{ ' is-empty' if not day_rows }}" data-day-section="{{ '' if d is none else d }}"{% if d == 6 and not day_rows and not show_empty_sunday %} hidden{% endif %}>
     <header class="sch-section__head">
         <h2 class="sch-section__title">{% if d is none %}<i class="bi bi-question-circle" aria-hidden="true"></i>Без дня недели{% else %}{{ f.day_names_full[d] }}{% endif %}</h2>
-        <span class="sch-section__count cc-badge cc-badge--neutral" data-section-count>{{ day_rows|length }}</span>
-        {% if d is none %}<span class="cc-subtle small">Выберите день у каждого занятия — иначе приложение их не покажет</span>{% endif %}
+        <span class="sch-section__count cc-num" data-section-count>{{ day_rows|length or '' }}</span>
+        {% if d is none %}<span class="sch-section__note">Выберите день у каждого занятия — иначе приложение их не покажет</span>{% endif %}
         {% if d is not none %}
-        <button type="button" class="btn btn-ghost btn-sm ms-auto" data-add-row="{{ d }}"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Занятие</span></button>
+        <button type="button" class="btn btn-ghost btn-sm ms-auto" data-add-row="{{ d }}" aria-label="Добавить занятие: {{ f.day_names_full[d]|lower }}"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Занятие</span></button>
         {% endif %}
     </header>
     <div class="sch-section__rows" data-rows>
         {% for row in day_rows %}{{ editor_row(row, f) }}{% endfor %}
     </div>
-    <p class="sch-section__empty" data-empty{% if day_rows %} hidden{% endif %}>Занятий нет</p>
 </section>
 {% endfor %}
 {%- endmacro %}

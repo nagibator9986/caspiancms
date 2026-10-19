@@ -1,73 +1,83 @@
 {# Товар (products): название, цена ₸, ссылка, фото, варианты [{filterName, options:[{name, price}]}] —
-   ровно в формате, который читает shop_screen.dart (CONTENT). #}
+   ровно в формате, который читает shop_screen.dart. Справа — превью карточки магазина (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_edit = product is not none %}
 {% block title %}{{ 'Редактирование товара' if is_edit else 'Новый товар' }}{% endblock %}
-{% block page_title %}{{ 'Редактирование товара' if is_edit else 'Новый товар' }}{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
 {% call ui.page_header('Редактирование товара' if is_edit else 'Новый товар',
                        ('Добавлен ' ~ (product.createdAt|dt)) if is_edit else 'Товар появится в магазине приложения студентов',
-                       icon='cart') %}
-    {{ ui.button('К списку', href=url_for('products'), icon='arrow-left', variant='light') }}
+                       back={'href': back_url('products'), 'label': 'Товары колледжа'}) %}
+    {% if is_edit %}{{ ui.header_menu([
+        {'label': 'Удалить товар', 'action': url_for('product_delete', product_id=product.id), 'fields': {'next': back_url('products')}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': 'Удалить товар «' ~ (product.name or '') ~ '»? Из магазина приложения он тоже пропадёт.'},
+    ]) }}{% endif %}
 {% endcall %}
 
-<form method="post" enctype="multipart/form-data" class="ct-editor ct-editor--single" data-dirty-guard data-ct-variants-form novalidate>
-    {{ ui.csrf_field() }}
+<form method="post" enctype="multipart/form-data" id="productForm" data-dirty-guard data-ct-variants-form data-ct-preview-form novalidate>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
     <input type="hidden" name="variants_json" value="{{ values.variants_json }}" data-ct-variants-input>
-    <div class="ct-editor__main">
-        {% call ui.card('Товар', icon='box') %}
-            {{ ui.field('name', 'Название', value=values.name, required=True, error=errors.name, attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
-            <div class="row g-3">
-                <div class="col-sm-5">{{ ui.field('price', 'Базовая цена, ₸', value=values.price, required=True, error=errors.price, attrs={'inputmode': 'decimal', 'autocomplete': 'off'}, classes='') }}</div>
-                <div class="col-sm-7">{{ ui.field('url', 'Ссылка на товар', 'url', value=values.url, error=errors.url, placeholder='https://…', help='Необязательно. Иначе заказ уходит в WhatsApp', classes='') }}</div>
-            </div>
-        {% endcall %}
-
-        {% call ui.card('Варианты', icon='sliders', subtitle='Размер, цвет и т. п. У каждого значения может быть своя цена') %}
-            {% if errors.variants %}<div class="alert alert-danger py-2 small" role="alert">{{ errors.variants }}</div>{% endif %}
-            <div class="ct-variants" data-ct-variants></div>
-            <p class="cc-muted small mb-2" data-ct-variants-empty>Вариантов нет — товар продаётся по базовой цене.</p>
-            <button type="button" class="btn btn-light btn-sm" data-ct-variant-add><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить параметр</span></button>
-            <noscript><p class="form-text">Чтобы изменить варианты, включите JavaScript. Текущие варианты сохранятся без изменений.</p></noscript>
-
-            <template data-ct-variant-template>
-                <fieldset class="ct-variant">
-                    <div class="ct-variant__head">
-                        <input class="form-control" data-ct-variant-name maxlength="60" placeholder="Параметр: Размер, Цвет…" aria-label="Название параметра">
-                        <button type="button" class="btn btn-outline-danger btn-sm cc-btn-icon" data-ct-variant-remove aria-label="Удалить параметр" title="Удалить параметр"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                    </div>
-                    <div class="ct-variant__options" data-ct-variant-options></div>
-                    <button type="button" class="btn btn-ghost btn-sm" data-ct-option-add-value><i class="bi bi-plus" aria-hidden="true"></i><span>Значение</span></button>
-                </fieldset>
-            </template>
-            <template data-ct-value-template>
-                <div class="ct-value">
-                    <input class="form-control" data-ct-value-name maxlength="60" placeholder="M, Синий…" aria-label="Значение">
-                    <div class="input-group ct-value__price">
-                        <input class="form-control" data-ct-value-price inputmode="decimal" placeholder="Цена" aria-label="Цена значения, ₸">
-                        <span class="input-group-text">₸</span>
-                    </div>
-                    <button type="button" class="btn btn-light btn-sm cc-btn-icon" data-ct-value-remove aria-label="Удалить значение"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors(errors) }}
+            {% call ui.card() %}
+                {{ ui.field('name', 'Название', value=values.name, required=True, error=errors.name, placeholder='Например: Худи Caspian College', attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-5">{{ ui.field('price', 'Базовая цена, ₸', value=values.price, required=True, error=errors.price,
+                                                      attrs={'inputmode': 'decimal', 'autocomplete': 'off', 'pattern': '[0-9 ]+([.,][0-9]{1,2})?', 'title': 'Число, например 1500 или 1 500'}, classes='') }}</div>
+                    <div class="col-sm-7">{{ ui.field('url', 'Ссылка на товар', 'url', value=values.url, error=errors.url, placeholder='https://…', help='Необязательно. Без ссылки заказ уходит в WhatsApp', classes='') }}</div>
                 </div>
-            </template>
-        {% endcall %}
-    </div>
-    <aside class="ct-editor__side">
-        {% call ui.card('Фото', icon='image') %}
-            {{ ui.image_uploader('image', [{'url': product.imageUrl}] if (is_edit and product.imageUrl) else [], max=1, label=None,
-                                 help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ — лучше квадратная.') }}
-            {% if errors.image %}<div class="invalid-feedback d-block mb-2">{{ errors.image }}</div>{% endif %}
-        {% endcall %}
-        <div class="ct-editor__actions">
-            {% if is_edit %}{{ ui.button('Отмена', href=url_for('products'), variant='light') }}{% endif %}
-            {{ ui.button('Сохранить' if is_edit else 'Добавить товар', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+                {{ ui.image_uploader('image', [{'url': product.imageUrl}] if (is_edit and product.imageUrl) else [], max=1, label='Фото', id='f-image',
+                                     help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ — лучше квадратная. Можно перетащить или вставить (Ctrl+V).') }}
+                {% if errors.image %}<div class="invalid-feedback d-block mb-3">{{ errors.image }}</div>{% endif %}
+            {% endcall %}
+
+            {% call ui.card('Варианты', subtitle='Размер, цвет и т. п. У каждого значения может быть своя цена', id='f-variants') %}
+                {% if errors.variants %}<div class="invalid-feedback d-block mb-2">{{ errors.variants }}</div>{% endif %}
+                <div class="ct-variants" data-ct-variants></div>
+                <p class="cc-muted small mb-2" data-ct-variants-empty>Вариантов нет — товар продаётся по базовой цене.</p>
+                <button type="button" class="btn btn-light btn-sm" data-ct-variant-add><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить параметр</span></button>
+                <noscript><p class="form-text">Чтобы изменить варианты, включите JavaScript. Текущие варианты сохранятся без изменений.</p></noscript>
+
+                <template data-ct-variant-template>
+                    <fieldset class="ct-variant">
+                        <div class="ct-variant__head">
+                            <input class="form-control" data-ct-variant-name maxlength="60" placeholder="Параметр: Размер, Цвет…" aria-label="Название параметра">
+                            <button type="button" class="btn btn-ghost btn-sm cc-btn-icon ct-option__remove" data-ct-variant-remove aria-label="Удалить параметр" title="Удалить параметр"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                        </div>
+                        <div class="ct-variant__options" data-ct-variant-options></div>
+                        <button type="button" class="btn btn-ghost btn-sm" data-ct-option-add-value><i class="bi bi-plus" aria-hidden="true"></i><span>Значение</span></button>
+                    </fieldset>
+                </template>
+                <template data-ct-value-template>
+                    <div class="ct-value">
+                        <input class="form-control" data-ct-value-name maxlength="60" placeholder="M, Синий…" aria-label="Значение">
+                        <div class="input-group ct-value__price">
+                            <input class="form-control" data-ct-value-price inputmode="decimal" placeholder="Цена" aria-label="Цена значения, ₸">
+                            <span class="input-group-text">₸</span>
+                        </div>
+                        <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-ct-value-remove aria-label="Удалить значение" title="Удалить значение"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                    </div>
+                </template>
+            {% endcall %}
         </div>
-    </aside>
+        <aside class="cc-form-aside" aria-label="Превью">
+            {% call ui.card('Как увидят в магазине', classes='ct-preview-card') %}
+                <article class="ct-phone ct-phone--product" data-ct-preview-card>
+                    <div class="ct-phone__media ct-phone__media--square" data-ct-preview-media data-ct-fixed-ratio>
+                        <img alt="" data-ct-preview-img hidden>
+                        <div class="ct-phone__placeholder" data-ct-preview-empty><i class="bi bi-box" aria-hidden="true"></i><span>Без фото</span></div>
+                    </div>
+                    <div class="ct-phone__body">
+                        <h3 class="ct-phone__title mt-0" data-ct-out="name" data-ct-empty="Название товара">Название товара</h3>
+                        <div class="ct-phone__price"><span data-ct-out="price" data-ct-format="money" data-ct-empty="0">0</span> ₸</div>
+                    </div>
+                </article>
+            {% endcall %}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить' if is_edit else 'Добавить товар', cancel_href=back_url('products'), submit_attrs={'data-loading': 'Сохраняем…'}) }}
 </form>
-{% if is_edit %}
-<div class="mt-3">{{ ui.confirm_button(url_for('product_delete', product_id=product.id), 'Удалить товар', 'Удалить товар «' ~ (product.name or '') ~ '»?', size=None) }}</div>
-{% endif %}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

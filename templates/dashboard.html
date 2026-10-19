@@ -1,171 +1,216 @@
-{# Главная «/» — обзор колледжа (PEOPLE). Данные: cms/routes_home.py:dashboard. #}
+{# Главная «/» — обзор колледжа (FOUNDATION, UX_SPEC_v2 §3). Данные: cms/routes_home.py:dashboard. Стили: static/css/home.css (hm-*). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Обзор{% endblock %}
-{% block styles %}{{ ui.css('people') }}{% endblock %}
+{% block styles %}{{ ui.css('home') }}{% endblock %}
 {% block content %}
 {% set week_label = 'числитель' if today.week == 'numerator' else 'знаменатель' %}
 {% call ui.page_header(greeting ~ (', ' ~ admin_first if admin_first else '') ~ '!',
-                       'Сегодня ' ~ today.weekday|lower ~ ', ' ~ now.strftime('%d.%m.%Y') ~ ' · ' ~ today.week_no ~ '-я учебная неделя, ' ~ week_label) %}
-    {{ ui.button('Новость', href=nav_url('news_form'), icon='newspaper', variant='light') }}
-    {{ ui.button('Занятие', href=nav_url('schedule_builder'), icon='calendar-plus') }}
+                       today.weekday ~ ', ' ~ now.strftime('%d.%m.%Y') ~ ' · ' ~ today.week_no ~ '-я неделя · ' ~ week_label) %}
+    {{ ui.header_menu([
+        {'label': 'Новый опрос', 'href': nav_url('poll_form'), 'icon': 'ui-checks'},
+        {'label': 'Новое событие', 'href': nav_url('event_form'), 'icon': 'calendar-event'},
+        {'label': 'Новый пользователь', 'href': nav_url('admin_add_user'), 'icon': 'person-plus'},
+        {'divider': True},
+        {'label': 'Свободные аудитории', 'href': nav_url('schedule_free_rooms'), 'icon': 'door-closed'},
+    ], label='Ещё: создать') }}
+    {{ ui.button('Новость', href=nav_url('news_form'), icon='newspaper', variant='light', classes='hm-hide-xs') }}
+    {{ ui.button('Занятие', href=nav_url('schedule_builder'), icon='plus-lg', attrs={'data-cc-hotkey': 'n', 'title': 'Добавить занятие (n)'}) }}
 {% endcall %}
 
-{# ---------- KPI ---------- #}
-<div class="cc-stats pp-stats-6">
-    {{ ui.stat_card('Студенты', counts.get('students'), 'backpack', href=nav_url('admin_users', role='student'), meta='в базе пользователей') }}
-    {{ ui.stat_card('Преподаватели', counts.get('teachers'), 'person-badge', href=nav_url('teachers_list'), tone='info',
-                    meta=(today.teachers ~ ' ведут пары сегодня') if today.teachers else 'сегодня пар нет') }}
-    {{ ui.stat_card('Абитуриенты', counts.get('applicants'), 'mortarboard', trend=applicants_trend,
-                    href=nav_url('applicants_dashboard'), tone='violet',
-                    meta=('+' ~ week_now ~ ' за 7 дней') if week_now is not none else None) }}
-    {{ ui.stat_card('Заказы ждут выдачи', orders, 'box-seam', href=nav_url('coins_orders'),
-                    tone='warning' if orders else 'success', meta='мерч за Caspian Coin') }}
-    {{ ui.stat_card('Обращения без ответа', feedback, 'chat-dots', href=nav_url('feedback_list'),
-                    tone='info' if feedback else 'success', meta='обратная связь') }}
-    {% if summary %}
-    {{ ui.stat_card('Накладки', summary.critical, 'exclamation-diamond', href=nav_url('schedule_conflicts'),
-                    tone='danger' if summary.critical else 'success',
-                    meta=(summary.warning|default(0)) ~ ' ' ~ plural(summary.warning|default(0), 'предупреждение', 'предупреждения', 'предупреждений') ~ ' · ' ~ (summary.teachers|default(0)) ~ ' ' ~ plural(summary.teachers|default(0), 'преподаватель', 'преподавателя', 'преподавателей')) }}
-    {% else %}
-    {{ ui.stat_card('Накладки', None, 'exclamation-diamond', href=nav_url('schedule_conflicts'), meta='ещё не посчитаны — откройте раздел') }}
-    {% endif %}
-</div>
+{# ---------- KPI: расписание и то, что ждёт реакции ---------- #}
+{% if today.error %}{% set pairs_meta = 'расписание не загрузилось' %}
+{% elif not today.lessons %}{% set pairs_meta = 'сегодня занятий нет' %}
+{% elif today.slot %}{% set pairs_meta = 'идёт ' ~ today.slot.number ~ '-я пара' %}
+{% elif today.finished %}{% set pairs_meta = 'занятия закончились' %}
+{% elif today.not_started %}{% set pairs_meta = 'начало в ' ~ today.next_slot %}
+{% elif today.next_slot %}{% set pairs_meta = 'следующая в ' ~ today.next_slot %}
+{% else %}{% set pairs_meta = today.groups ~ ' ' ~ plural(today.groups, 'группа', 'группы', 'групп') %}{% endif %}
+{% set kpis = [
+    {'label': 'Пары сегодня', 'value': today.lessons if not today.error else None, 'icon': 'calendar-day', 'href': nav_url('schedule_all'), 'meta': pairs_meta},
+] %}
+{% if summary %}
+    {% set _ = kpis.append({'label': 'Накладки', 'value': summary.critical, 'icon': 'exclamation-diamond', 'href': nav_url('schedule_conflicts'),
+                           'tone': 'danger' if summary.critical else None,
+                           'meta': (summary.warning|default(0)) ~ ' ' ~ plural(summary.warning|default(0), 'предупреждение', 'предупреждения', 'предупреждений')}) %}
+{% else %}
+    {% set _ = kpis.append({'label': 'Накладки', 'value': None, 'icon': 'exclamation-diamond', 'href': nav_url('schedule_conflicts'), 'meta': 'откройте раздел, чтобы посчитать'}) %}
+{% endif %}
+{% set _ = kpis.append({'label': 'Обращения', 'value': feedback, 'icon': 'chat-dots', 'href': nav_url('feedback_list', status='new') if feedback else nav_url('feedback_list'),
+                       'tone': 'warning' if feedback else None, 'meta': 'без ответа' if feedback else 'все отвечены'}) %}
+{% set _ = kpis.append({'label': 'Опросы идут', 'value': content.polls_active, 'icon': 'ui-checks', 'href': nav_url('polls'),
+                       'meta': ('до ' ~ (content.polls_next_end|dateonly)[:5]) if content.polls_next_end else ('без срока' if content.polls_active else 'нет активных')}) %}
+{% set _ = kpis.append({'label': 'Студенты', 'value': counts.get('students'), 'icon': 'backpack', 'href': nav_url('admin_users', role='student'),
+                       'meta': (counts.get('teachers')|num) ~ ' ' ~ plural(counts.get('teachers') or 0, 'преподаватель', 'преподавателя', 'преподавателей')}) %}
+{{ ui.stat_strip(kpis) }}
 
-<div class="cc-grid cc-grid-2 pp-home-grid">
+<div class="hm-grid">
     {# ---------- Сегодня в колледже ---------- #}
-    {% call ui.card('Сегодня в колледже', icon='calendar-day', subtitle=today.weekday ~ ', ' ~ week_label,
-                    actions=[{'label': 'Таблица', 'href': nav_url('schedule_all'), 'icon': 'table'}]) %}
+    {% call ui.card('Сегодня в колледже', icon='calendar-day', subtitle=today.weekday ~ ', ' ~ week_label, classes='hm-today',
+                    actions=[{'label': 'Единая таблица', 'href': nav_url('schedule_all'), 'icon': 'table'}]) %}
         {% if today.error %}
             {{ ui.empty_state('cloud-slash', 'Расписание не загрузилось', 'Обновите страницу через минуту.') }}
         {% elif not today.lessons %}
             {{ ui.empty_state('cup-hot', 'Сегодня занятий нет', 'Выходной или расписание на этот день ещё не составлено.',
-                              {'label': 'Конструктор', 'href': nav_url('schedule_builder'), 'icon': 'plus-lg', 'variant': 'light'}) }}
+                              {'label': 'Добавить занятие', 'href': nav_url('schedule_builder'), 'icon': 'plus-lg'}) }}
         {% else %}
-            <div class="pp-today">
-                <div class="pp-today__nums">
-                    <div><b class="cc-num">{{ today.lessons }}</b><span>{{ plural(today.lessons, 'занятие', 'занятия', 'занятий') }}</span></div>
-                    <div><b class="cc-num">{{ today.groups }}</b><span>{{ plural(today.groups, 'группа', 'группы', 'групп') }}</span></div>
-                    <div><b class="cc-num">{{ today.teachers }}</b><span>{{ plural(today.teachers, 'преподаватель', 'преподавателя', 'преподавателей') }}</span></div>
-                </div>
-                <p class="pp-today__now">
-                    {% if today.slot %}
-                        <span class="pp-live" aria-hidden="true"></span>Сейчас идут занятия · {{ today.slot.label }}
-                    {% elif today.finished %}
-                        <i class="bi bi-moon-stars" aria-hidden="true"></i>Занятия на сегодня закончились
-                    {% elif today.next_slot %}
-                        <i class="bi bi-clock" aria-hidden="true"></i>Перемена · следующая пара в {{ today.next_slot }}
-                    {% endif %}
-                </p>
-            </div>
+            <p class="hm-today__sum">
+                <span><b class="cc-num">{{ today.lessons }}</b> {{ plural(today.lessons, 'занятие', 'занятия', 'занятий') }}</span>
+                <span><b class="cc-num">{{ today.groups }}</b> {{ plural(today.groups, 'группа', 'группы', 'групп') }}</span>
+                <span><b class="cc-num">{{ today.teachers }}</b> {{ plural(today.teachers, 'преподаватель', 'преподавателя', 'преподавателей') }}</span>
+            </p>
+            <p class="hm-today__now">
+                {% if today.slot %}
+                    <span class="hm-live" aria-hidden="true"></span><span>Сейчас идёт <b>{{ today.slot.number }}-я пара</b> · {{ today.slot.label }}</span>
+                {% elif today.finished %}
+                    <i class="bi bi-moon-stars" aria-hidden="true"></i><span>Занятия на сегодня закончились</span>
+                {% elif today.not_started %}
+                    <i class="bi bi-sunrise" aria-hidden="true"></i><span>Занятия начнутся в {{ today.next_slot }}</span>
+                {% elif today.next_slot %}
+                    <i class="bi bi-clock" aria-hidden="true"></i><span>Перемена · следующая пара в {{ today.next_slot }}</span>
+                {% endif %}
+            </p>
             {% if today.timeline %}
-            <div class="pp-timeline" aria-label="Занятий по времени начала">
+            <ol class="hm-timeline" aria-label="Занятий по времени начала">
                 {% for t in today.timeline[:10] %}
-                <div class="pp-timeline__row{{ ' is-current' if t.current }}{{ ' is-past' if t.past }}">
-                    <span class="pp-timeline__time cc-num">{{ t.label }}</span>
-                    <span class="pp-timeline__bar"><span style="width: {{ t.pct }}%"></span></span>
-                    <span class="pp-timeline__n cc-num">{{ t.count }}</span>
-                </div>
+                <li class="hm-timeline__row{{ ' is-current' if t.current }}{{ ' is-past' if t.past }}"{% if t.current %} aria-current="true"{% endif %}>
+                    <span class="hm-timeline__time cc-num">{{ t.label }}</span>
+                    <span class="hm-timeline__bar"><span style="width: {{ t.pct }}%"></span></span>
+                    <span class="hm-timeline__n cc-num" title="{{ t.count }} {{ plural(t.count, 'занятие', 'занятия', 'занятий') }}">{{ t.count }}</span>
+                </li>
                 {% endfor %}
-            </div>
+            </ol>
             {% endif %}
             {% if today.now %}
-            <ul class="pp-now-list">
+            <div class="hm-subhead">Идёт сейчас</div>
+            <ul class="hm-now">
                 {% for l in today.now[:6] %}
                 <li>
-                    <span class="pp-now-list__group">{{ l.groupId or '—' }}</span>
+                    <a class="hm-now__group" href="{{ nav_url('schedule', group=l.groupId) }}">{{ l.groupId or '—' }}</a>
                     <span class="min-w-0">
-                        <span class="cc-cell-main d-block cc-truncate">{{ l.subject or 'Без дисциплины' }}</span>
-                        <span class="cc-cell-sub d-block cc-truncate">{{ l.teacher_name or l.teacher or 'преподаватель не указан' }}{% if l.room %} · ауд. {{ l.room }}{% endif %}</span>
+                        <span class="hm-now__subject cc-truncate d-block">{{ l.subject or 'Без дисциплины' }}</span>
+                        <span class="cc-cell-sub cc-truncate d-block">{{ l.teacher_name or l.teacher or 'преподаватель не указан' }}{% if l.room %} · ауд. {{ l.room }}{% endif %}</span>
                     </span>
-                    <span class="cc-subtle small cc-nowrap">{{ l.time_label }}</span>
+                    <span class="hm-now__time cc-num">{{ l.time_label }}</span>
                 </li>
                 {% endfor %}
             </ul>
             {% if today.now|length > 6 %}<p class="cc-muted small mb-0 mt-2">И ещё {{ today.now|length - 6 }} — в <a href="{{ nav_url('schedule_all') }}">единой таблице</a>.</p>{% endif %}
             {% endif %}
+            {% if today.free_rooms is not none %}
+            <a class="hm-rooms" href="{{ nav_url('schedule_free_rooms') }}">
+                <i class="bi bi-door-closed" aria-hidden="true"></i>
+                <span>Свободные аудитории сейчас: <b class="cc-num">{{ today.free_rooms }}</b> из {{ today.rooms_total }}</span>
+                <i class="bi bi-chevron-right" aria-hidden="true"></i>
+            </a>
+            {% else %}
+            <a class="hm-rooms" href="{{ nav_url('schedule_free_rooms') }}">
+                <i class="bi bi-door-closed" aria-hidden="true"></i><span>Свободные аудитории на любую пару</span><i class="bi bi-chevron-right" aria-hidden="true"></i>
+            </a>
+            {% endif %}
         {% endif %}
     {% endcall %}
 
-    {# ---------- Регистрации абитуриентов ---------- #}
-    {% call ui.card('Регистрации абитуриентов', icon='graph-up-arrow', subtitle='последние 14 дней',
-                    actions=[{'label': 'Аналитика', 'href': nav_url('applicants_dashboard'), 'icon': 'bar-chart'}]) %}
-        {% if chart is none %}
-            {{ ui.empty_state('cloud-slash', 'Данные не загрузились', 'Обновите страницу через минуту.') }}
-        {% else %}
-            <div class="pp-reg-head">
-                <div><b class="cc-num">{{ week_now|num }}</b><span>за 7 дней</span></div>
-                <div class="cc-subtle"><b class="cc-num">{{ week_prev|num }}</b><span>неделей раньше</span></div>
-            </div>
-            <div class="pp-bars" role="img" aria-label="Регистрации по дням: {% for d in chart %}{{ d.label }} — {{ d.count }}{{ ', ' if not loop.last }}{% endfor %}">
-                {% for d in chart %}
-                <div class="pp-bars__col{{ ' is-today' if loop.last }}" title="{{ d.weekday }}, {{ d.label }}: {{ d.count }}">
-                    <span class="pp-bars__val">{{ d.count if d.count else '' }}</span>
-                    <span class="pp-bars__bar" style="height: {{ ((d.count / max_day * 100) if max_day else 0)|round(1) }}%"></span>
-                    <span class="pp-bars__label">{{ d.weekday if not loop.last else 'сег.' }}</span>
-                </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-    {% endcall %}
-</div>
-
-<div class="cc-grid cc-grid-2 pp-home-grid">
     {# ---------- Требует внимания ---------- #}
-    {% call ui.card('Требует внимания', icon='bell') %}
+    {% call ui.card('Требует внимания', icon='bell', classes='hm-attention', flush=True) %}
         {% if attention %}
-        <ul class="pp-attention">
+        <ul class="hm-list">
             {% for a in attention %}
-            <li><a href="{{ a.href }}" class="pp-attention__item pp-tone--{{ a.tone }}">
-                <span class="pp-attention__icon"><i class="bi bi-{{ a.icon }}" aria-hidden="true"></i></span>
-                <span class="pp-attention__text"><b class="cc-num">{{ a.count }}</b> {{ a.label }}</span>
-                <i class="bi bi-chevron-right cc-subtle" aria-hidden="true"></i>
+            <li><a href="{{ a.href }}" class="hm-list__item hm-tone--{{ a.tone }}">
+                <i class="bi bi-{{ a.icon }} hm-list__icon" aria-hidden="true"></i>
+                <span class="hm-list__text">{{ a.label }}</span>
+                <span class="hm-list__count cc-num">{{ a.count }}</span>
+                <i class="bi bi-chevron-right hm-list__chev" aria-hidden="true"></i>
             </a></li>
             {% endfor %}
         </ul>
         {% else %}
-            {{ ui.empty_state('check2-circle', 'Всё в порядке', 'Нет заказов к выдаче, обращений без ответа и новых лидов.') }}
+            {{ ui.empty_state('check2-circle', 'Всё в порядке', 'Нет накладок, обращений без ответа и заказов к выдаче.') }}
+        {% endif %}
+    {% endcall %}
+
+    {# ---------- Ближайшее: опросы и события ---------- #}
+    {% call ui.card('Ближайшее: опросы и события', icon='calendar-event', classes='hm-upcoming', flush=True,
+                    actions=[{'label': 'Опросы', 'href': nav_url('polls'), 'icon': 'ui-checks'}, {'label': 'События', 'href': nav_url('events'), 'icon': 'calendar-event'}]) %}
+        {% if content.polls or content.events %}
+        <ul class="hm-list">
+            {% for p in content.polls %}
+            <li><a href="{{ nav_url('poll_results', poll_id=p.id) }}" class="hm-list__item">
+                <i class="bi bi-ui-checks hm-list__icon" aria-hidden="true"></i>
+                <span class="hm-list__text"><span class="hm-list__title">{{ p.title }}</span><span class="hm-list__sub">Опрос · идёт{% if p.left %} · {{ p.left }}{% endif %}</span></span>
+                <i class="bi bi-chevron-right hm-list__chev" aria-hidden="true"></i>
+            </a></li>
+            {% endfor %}
+            {% for e in content.events %}
+            <li><a href="{{ nav_url('event_form', event_id=e.id) }}" class="hm-list__item">
+                <i class="bi bi-calendar-event hm-list__icon" aria-hidden="true"></i>
+                <span class="hm-list__text"><span class="hm-list__title">{{ e.title }}</span><span class="hm-list__sub">Событие · {{ e.when }}{% if e.time %} · {{ e.time }}{% endif %}{% if e.location %} · {{ e.location }}{% endif %}</span></span>
+                <i class="bi bi-chevron-right hm-list__chev" aria-hidden="true"></i>
+            </a></li>
+            {% endfor %}
+        </ul>
+        {% elif content.error %}
+            {{ ui.empty_state('cloud-slash', 'Не удалось загрузить', 'Обновите страницу через минуту.') }}
+        {% else %}
+            {% call ui.empty_state('calendar-check', 'На этой неделе ничего', 'Нет идущих опросов и событий на ближайшие 7 дней.') %}
+                <div class="d-flex flex-wrap justify-content-center gap-2">
+                    {{ ui.button('Новый опрос', href=nav_url('poll_form'), icon='ui-checks', variant='light', size='sm') }}
+                    {{ ui.button('Новое событие', href=nav_url('event_form'), icon='calendar-event', variant='light', size='sm') }}
+                </div>
+            {% endcall %}
         {% endif %}
     {% endcall %}
 
     {# ---------- Быстрые действия ---------- #}
-    {% call ui.card('Быстрые действия', icon='lightning-charge') %}
+    {% call ui.card('Быстрые действия', icon='lightning-charge', classes='hm-quick') %}
         {% set quick = [
-            ('newspaper', 'Новость', 'для студентов и преподавателей', nav_url('news_form')),
-            ('calendar-plus', 'Занятие', 'конструктор расписания', nav_url('schedule_builder')),
-            ('person-plus', 'Пользователь', 'студент, преподаватель, админ', nav_url('admin_add_user')),
-            ('qr-code', 'QR-источник', 'стенд, школа, событие', nav_url('applicant_sources')),
-            ('coin', 'Начислить коины', 'журнал Caspian Coin', nav_url('coins_journal')),
-            ('door-closed', 'Свободная аудитория', 'на любую пару', nav_url('schedule_free_rooms')),
+            ('calendar-plus', 'Занятие', nav_url('schedule_builder')),
+            ('newspaper', 'Новость', nav_url('news_form')),
+            ('ui-checks', 'Опрос', nav_url('poll_form')),
+            ('calendar-event', 'Событие', nav_url('event_form')),
+            ('door-closed', 'Свободная аудитория', nav_url('schedule_free_rooms')),
+            ('person-plus', 'Пользователь', nav_url('admin_add_user')),
         ] %}
-        <div class="pp-quick">
-            {% for icon, label, sub, href in quick if href != '#' %}
-            <a class="pp-quick__item" href="{{ href }}">
-                <span class="pp-quick__icon"><i class="bi bi-{{ icon }}" aria-hidden="true"></i></span>
-                <span class="min-w-0"><b class="d-block cc-truncate">{{ label }}</b><small class="d-block cc-truncate">{{ sub }}</small></span>
-            </a>
+        <div class="hm-quick__grid">
+            {% for icon, label, href in quick if href != '#' %}
+            <a class="hm-quick__item" href="{{ href }}"><i class="bi bi-{{ icon }}" aria-hidden="true"></i><span class="hm-quick__label">{{ label }}</span></a>
             {% endfor %}
         </div>
     {% endcall %}
-</div>
 
-{# ---------- Последние действия ---------- #}
-{% call ui.card('Последние действия', icon='clock-history', subtitle='журнал админ-панели',
-                actions=[{'label': 'Журнал', 'href': url_for('audit_log'), 'icon': 'shield-check'}]) %}
-    {% if recent %}
-    <ul class="cc-timeline pp-feed">
-        {% for e in recent %}
-        <li>
-            <div class="pp-feed__line">
-                {{ ui.badge(e.action, e.action_label, e.tone) }}
-                <span class="pp-feed__what">{{ e.entity_label }}{% if e.entity_id %} · {% if e.link %}<a href="{{ e.link }}">{{ e.entity_id }}</a>{% else %}<span class="cc-muted">{{ e.entity_id }}</span>{% endif %}{% endif %}</span>
-            </div>
-            <div class="cc-timeline__meta">{{ e.by or 'система' }} · <span title="{{ e.at|dt }}">{{ e.at|ago }}</span></div>
-        </li>
-        {% endfor %}
-    </ul>
-    {% else %}
-        {{ ui.empty_state('shield-check', 'Журнал пуст', 'Здесь появятся входы, правки и удаления.') }}
+    {# ---------- Последние действия ---------- #}
+    {% call ui.card('Последние действия', icon='clock-history', classes='hm-recent', flush=True,
+                    actions=[{'label': 'Журнал', 'href': url_for('audit_log'), 'icon': 'shield-check'}]) %}
+        {% if recent %}
+        <ul class="hm-feed">
+            {% for e in recent %}
+            <li>
+                {{ ui.badge(e.action, e.action_label, 'danger' if e.tone == 'danger' else 'neutral') }}
+                <span class="hm-feed__what">{{ e.entity_label }}{% if e.entity_id %} · {% if e.link %}<a href="{{ e.link }}">{{ e.entity_id }}</a>{% else %}<span class="cc-muted">{{ e.entity_id }}</span>{% endif %}{% endif %}</span>
+                <span class="hm-feed__meta">{{ e.by or 'система' }} · <span title="{{ e.at|dt }}">{{ e.at|ago }}</span></span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+            {{ ui.empty_state('shield-check', 'Пока тихо', 'Здесь появятся правки и удаления в админ-панели.') }}
+        {% endif %}
+    {% endcall %}
+
+    {# ---------- Приём и Caspian Coin: второстепенно, одна строка ---------- #}
+    {% if admissions.show %}
+    <section class="hm-admissions" aria-label="Приём и Caspian Coin">
+        <span class="hm-admissions__title"><i class="bi bi-mortarboard" aria-hidden="true"></i>Приём и Caspian Coin</span>
+        <span class="hm-admissions__items">
+            {% if admissions.reg7 is not none %}<span>Абитуриенты: <b class="cc-num">+{{ admissions.reg7 }}</b> за 7 дней</span>{% endif %}
+            {% if admissions.crm_new %}<span><b class="cc-num">{{ admissions.crm_new }}</b> {{ plural(admissions.crm_new, 'новый лид', 'новых лида', 'новых лидов') }}</span>{% endif %}
+            {% if admissions.orders %}<span>Заказы: <b class="cc-num">{{ admissions.orders }}</b> {{ plural(admissions.orders, 'ждёт', 'ждут', 'ждут') }} выдачи</span>{% endif %}
+        </span>
+        <span class="hm-admissions__links">
+            <a href="{{ nav_url('applicants_leads', status='new') }}">Лиды</a>
+            <a href="{{ nav_url('applicants_dashboard') }}">Аналитика</a>
+            {% if admissions.orders %}<a href="{{ nav_url('coins_orders') }}">Заказы</a>{% endif %}
+        </span>
+    </section>
     {% endif %}
-{% endcall %}
+</div>
 {% endblock %}

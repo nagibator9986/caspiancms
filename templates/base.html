@@ -1,14 +1,28 @@
+{#
+  base.html — каркас админ-панели (FOUNDATION).
+  Блоки: title, page_title (последняя крошка), breadcrumbs, crumbs_extra (доп. уровень крошек: <li><a href="…">…</a></li>),
+  page_actions (кнопки в топбаре), content, peek (компактная версия для быстрого просмотра; по умолчанию = content),
+  styles, head, scripts, body_class.
+  Быстрый просмотр: запрос с заголовком X-CC-Partial: 1 (is_partial) → только styles + peek, без каркаса и без
+  забора flash-сообщений.
+#}
+{% if is_partial %}
+<div class="cc-peek-fragment" data-cc-title="{{ self.title()|striptags|trim }}">
+{{ self.styles() }}
+{% block peek %}{{ self.content() }}{% endblock %}
+</div>
+{% else %}
 <!DOCTYPE html>
 <html lang="ru" data-bs-theme="light">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="robots" content="noindex, nofollow">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <meta name="theme-color" content="#FF6200">
+    <meta name="theme-color" content="#15181C">
     <title>{% block title %}Админ-панель{% endblock %} · Caspian College</title>
-    {# Тема до первой отрисовки (без «вспышки»): выбор хранится в localStorage. #}
-    <script>(function(){try{var t=localStorage.getItem('cc-theme');document.documentElement.setAttribute('data-bs-theme',t==='dark'?'dark':'light');}catch(e){}})();</script>
+    {# До первой отрисовки (без «вспышки»): класс cc-js, тема и скрытые подсказки — из localStorage. #}
+    <script>(function(){var d=document.documentElement;d.className+=' cc-js';try{var t=localStorage.getItem('cc-theme');d.setAttribute('data-bs-theme',t==='dark'?'dark':'light');var c='';for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf('cc-hint:')===0&&localStorage.getItem(k)==='hidden'){c+='[data-cc-hint="'+k.slice(8).replace(/["\\]/g,'')+'"]{display:none!important}';}}if(c){var s=document.createElement('style');s.textContent=c;document.head.appendChild(s);}}catch(e){}})();</script>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,11 +39,12 @@
 <a class="cc-skip" href="#cc-main">Перейти к содержимому</a>
 
 {% if nav_sections %}
+{%- set crumbs = nav_crumb_links or [] -%}
 <div class="cc-shell">
     <aside class="cc-sidebar offcanvas-lg offcanvas-start" id="ccSidebar" tabindex="-1" aria-label="Разделы админ-панели">
         <div class="cc-sidebar__head">
             <a class="cc-sidebar__brand" href="{{ nav_url('dashboard') }}">
-                <img class="cc-sidebar__logo" src="{{ static_url('img/logo.png') }}" alt="" width="40" height="40">
+                <img class="cc-sidebar__logo" src="{{ static_url('img/logo.png') }}" alt="" width="36" height="36">
                 <span><b>Caspian College</b><small>Админ-панель</small></span>
             </a>
             <button type="button" class="cc-sidebar__close d-lg-none" data-bs-dismiss="offcanvas" data-bs-target="#ccSidebar" aria-label="Закрыть меню">
@@ -39,26 +54,27 @@
         <nav class="cc-sidebar__nav" aria-label="Главное меню">
             {% for sec in nav_sections %}
                 {% if loop.first %}
-                <ul class="cc-nav-list">
+                <ul class="cc-nav-list cc-nav-list--top">
                     {% for it in sec['items'] %}
                     <li><a class="cc-nav-link {{ 'active' if it.active }}" href="{{ it.url }}" {% if it.active %}aria-current="page"{% endif %}>
                         <i class="bi bi-{{ it.icon }}" aria-hidden="true"></i><span>{{ it.label }}</span>
-                        {% if it.badge %}<span class="cc-nav-badge">{{ it.badge }}</span>{% endif %}
+                        {% if it.badge %}<span class="cc-nav-badge cc-nav-badge--{{ it.badge_tone }}">{{ it.badge }}</span>{% endif %}
                     </a></li>
                     {% endfor %}
                 </ul>
                 {% else %}
-                <div class="cc-nav-group is-open" data-nav-group="{{ sec.title }}">
-                    <button type="button" class="cc-nav-group__toggle" aria-expanded="true">
+                {% if sec.secondary and not loop.previtem.secondary %}<div class="cc-nav-sep" role="separator"></div>{% endif %}
+                <div class="cc-nav-group{{ ' is-open' if not sec.collapsed_default }}{{ ' cc-nav-group--secondary' if sec.secondary }}" data-nav-group="{{ sec.title }}"{% if sec.active %} data-nav-active{% endif %}>
+                    <button type="button" class="cc-nav-group__toggle" aria-expanded="{{ 'false' if sec.collapsed_default else 'true' }}" aria-controls="ccNav{{ loop.index }}">
                         <span>{{ sec.title }}</span>
-                        {% if sec.badge %}<span class="cc-nav-group__count">{{ sec.badge }}</span>{% endif %}
+                        {% if sec.badge %}<span class="cc-nav-group__count cc-nav-group__count--{{ sec.badge_tone }}">{{ sec.badge }}</span>{% endif %}
                         <i class="bi bi-chevron-down" aria-hidden="true"></i>
                     </button>
-                    <ul class="cc-nav-list">
+                    <ul class="cc-nav-list" id="ccNav{{ loop.index }}">
                         {% for it in sec['items'] %}
                         <li><a class="cc-nav-link {{ 'active' if it.active }}" href="{{ it.url }}" {% if it.active %}aria-current="page"{% endif %}>
                             <i class="bi bi-{{ it.icon }}" aria-hidden="true"></i><span>{{ it.label }}</span>
-                            {% if it.badge %}<span class="cc-nav-badge {{ 'cc-nav-badge--danger' if it.endpoint == 'schedule_conflicts' }}">{{ it.badge }}</span>{% endif %}
+                            {% if it.badge %}<span class="cc-nav-badge cc-nav-badge--{{ it.badge_tone }}">{{ it.badge }}</span>{% endif %}
                         </a></li>
                         {% endfor %}
                     </ul>
@@ -66,6 +82,9 @@
                 {% endif %}
             {% endfor %}
         </nav>
+        {# Состояние групп из localStorage['cc-nav'] — синхронно, до отрисовки (без мигания). Явный выбор важнее
+           умолчания; группа с активным пунктом открыта всегда. Старый ключ cc-nav-closed переносится. #}
+        <script>(function(){try{var ls=window.localStorage,raw=ls.getItem('cc-nav'),st=raw?(JSON.parse(raw)||{}):{},old=ls.getItem('cc-nav-closed');if(old){var o=JSON.parse(old)||{};for(var k in o){if(o[k]&&!st[k])st[k]='closed';}ls.setItem('cc-nav',JSON.stringify(st));ls.removeItem('cc-nav-closed');}var gs=document.querySelectorAll('#ccSidebar [data-nav-group]');for(var i=0;i<gs.length;i++){var g=gs[i],v=st[g.getAttribute('data-nav-group')];if(!v||g.hasAttribute('data-nav-active'))continue;var open=v==='open';g.classList.toggle('is-open',open);var b=g.querySelector('.cc-nav-group__toggle');if(b)b.setAttribute('aria-expanded',open?'true':'false');}}catch(e){}})();</script>
         <div class="cc-sidebar__foot">
             <span class="cc-avatar cc-avatar--sm" aria-hidden="true">{{ ((admin.name or admin.email or 'A')[:1]) if admin else 'A' }}</span>
             <div class="cc-sidebar__user">
@@ -86,23 +105,47 @@
             </button>
             <div class="cc-topbar__title">
                 {% block breadcrumbs %}
-                {% if nav_crumbs and nav_crumbs|length > 1 %}
-                <nav aria-label="Навигационная цепочка">
-                    <ol class="cc-crumbs">{% for c in nav_crumbs[:-1] %}<li>{{ c }}</li>{% endfor %}</ol>
+                {%- set crumbs = nav_crumb_links or [] -%}
+                <nav class="cc-crumbs-nav" aria-label="Навигационная цепочка">
+                    <ol class="cc-crumbs">
+                        {% for c in (crumbs if nav_is_child else crumbs[:-1]) %}
+                        <li>{% if c.url %}<a href="{{ c.url }}" data-cc-back>{{ c.label }}</a>{% else %}<span>{{ c.label }}</span>{% endif %}</li>
+                        {% endfor %}
+                        {% block crumbs_extra %}{% endblock %}
+                        <li class="cc-crumbs__current" aria-current="page">{% block page_title %}{{ self.title() if (nav_is_child or not nav_crumb_links) else nav_crumb_links[-1].label }}{% endblock %}</li>
+                    </ol>
                 </nav>
-                {% endif %}
                 {% endblock %}
-                <div class="cc-topbar__page">{% block page_title %}{{ nav_crumbs[-1] if nav_crumbs else self.title() }}{% endblock %}</div>
+                {# Телефон: раздел (или «‹ Список» на дочерней странице) — без дубля заголовка страницы #}
+                <div class="cc-topbar__mobile">
+                    {% if nav_is_child and crumbs %}
+                    <a class="cc-topbar__back" href="{{ crumbs[-1].url }}" data-cc-back><i class="bi bi-chevron-left" aria-hidden="true"></i><span>{{ crumbs[-1].label }}</span></a>
+                    {% elif crumbs %}
+                    <span class="cc-topbar__section">{{ crumbs[0].label }}</span>
+                    {% else %}
+                    <span class="cc-topbar__section">{{ self.page_title() }}</span>
+                    {% endif %}
+                </div>
             </div>
             <div class="cc-topbar__actions">
                 {% block page_actions %}{% endblock %}
-                <button type="button" class="cc-search-trigger" data-cc-palette-open aria-label="Поиск раздела (Ctrl+K)">
-                    <i class="bi bi-search" aria-hidden="true"></i><span>Поиск раздела</span><kbd>Ctrl K</kbd>
+                {% if nav_create %}
+                <div class="dropdown">
+                    <button type="button" class="cc-icon-btn cc-create-btn" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Создать" title="Создать"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><h6 class="dropdown-header">Создать</h6></li>
+                        {% for it in nav_create %}<li><a class="dropdown-item" href="{{ it.url }}"><i class="bi bi-{{ it.icon }}" aria-hidden="true"></i><span>{{ it.label }}</span></a></li>{% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                <button type="button" class="cc-search-trigger" data-cc-palette-open aria-label="Поиск (Ctrl+K)">
+                    <i class="bi bi-search" aria-hidden="true"></i><span>Поиск</span><kbd data-cc-mod>Ctrl</kbd><kbd>K</kbd>
                 </button>
                 <button type="button" class="cc-icon-btn" data-cc-theme-toggle aria-label="Сменить тему" title="Светлая / тёмная тема">
                     <i class="bi bi-moon-stars" aria-hidden="true"></i>
                 </button>
             </div>
+            <div class="cc-progress" id="ccProgress" aria-hidden="true"><span></span></div>
         </header>
 
         <main id="cc-main" class="cc-content" tabindex="-1">
@@ -111,21 +154,44 @@
     </div>
 </div>
 
-{# Поиск по разделам (Ctrl+K / «/») #}
-<div class="modal fade cc-palette" id="ccPalette" tabindex="-1" aria-label="Поиск раздела" aria-hidden="true">
+{# Поиск: разделы, группы, преподаватели, аудитории, люди, новости, команды (Ctrl+K / «/») #}
+<div class="modal fade cc-palette" id="ccPalette" tabindex="-1" aria-label="Поиск" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="cc-palette__search">
                 <i class="bi bi-search" aria-hidden="true"></i>
-                <input type="search" placeholder="Куда перейти? Например: накладки, лиды, новости" aria-label="Название раздела" autocomplete="off">
+                <input type="search" placeholder="Группа, преподаватель, человек, раздел…" aria-label="Что найти" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="ccPaletteList">
                 <kbd>Esc</kbd>
             </div>
-            <ul class="cc-palette__list" role="listbox"></ul>
-            <div class="cc-palette__foot"><span><kbd>↑</kbd> <kbd>↓</kbd> выбор</span><span><kbd>Enter</kbd> перейти</span></div>
+            <ul class="cc-palette__list" id="ccPaletteList" role="listbox"></ul>
+            <div class="cc-palette__foot"><span><kbd>↑</kbd> <kbd>↓</kbd> выбор</span><span><kbd>Enter</kbd> перейти</span><span><kbd>Shift</kbd>+<kbd>Enter</kbd> действие</span></div>
         </div>
     </div>
 </div>
 <script type="application/json" id="cc-nav-data">{{ nav_search|tojson }}</script>
+
+{# Быстрый просмотр: <a href="…" data-cc-peek> (CC.peek(url)) #}
+<div class="offcanvas offcanvas-end cc-peek" id="ccPeek" tabindex="-1" aria-labelledby="ccPeekTitle">
+    <div class="offcanvas-header cc-peek__head">
+        <h2 class="offcanvas-title cc-truncate" id="ccPeekTitle">Просмотр</h2>
+        <a class="btn btn-ghost btn-sm cc-btn-icon" href="#" data-cc-peek-full aria-label="Открыть полностью" title="Открыть полностью"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Закрыть"></button>
+    </div>
+    <div class="offcanvas-body cc-peek__body" data-cc-peek-body></div>
+</div>
+
+{# Горячие клавиши («?») — список собирает app.js (в т. ч. сочетания модулей CC.hotkey) #}
+<div class="modal fade" id="ccHotkeys" tabindex="-1" aria-labelledby="ccHotkeysTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="ccHotkeysTitle">Горячие клавиши</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body"><dl class="cc-hotkeys" data-cc-hotkeys-list></dl></div>
+        </div>
+    </div>
+</div>
 {% else %}
 <main id="cc-main" class="cc-content cc-content--bare" tabindex="-1">
     {{ self.content() }}
@@ -149,20 +215,12 @@
     </div>
 </div>
 
-{# Flash → тосты (успех скрывается сам, ошибки — по кнопке) #}
-<div class="cc-toasts" id="ccToasts" aria-live="polite">
-    {% for category, message in get_flashed_messages(with_categories=true) %}
-    {% set cat = 'danger' if category in ('error', 'danger') else (category if category in ('success', 'warning') else 'info') %}
-    <div class="cc-toast cc-toast--{{ cat }}" role="{{ 'alert' if cat == 'danger' else 'status' }}" data-category="{{ cat }}">
-        <i class="cc-toast__icon bi bi-{{ {'success': 'check-circle-fill', 'danger': 'exclamation-octagon-fill', 'warning': 'exclamation-triangle-fill'}.get(cat, 'info-circle-fill') }}" aria-hidden="true"></i>
-        <div class="cc-toast__text">{{ message }}</div>
-        <button type="button" class="cc-toast__close" aria-label="Закрыть"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-    </div>
-    {% endfor %}
-</div>
+{# Flash → тосты (успех скрывается сам, ошибки — по кнопке). flash_action() добавляет действие «Отменить»/«Открыть». #}
+{% include '_toasts.html' %}
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <script src="{{ static_url('js/app.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
+{% endif %}

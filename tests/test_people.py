@@ -449,6 +449,207 @@ class AdministrationTest(CmsTestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class UsersV2Test(CmsTestCase):
+    """UX v2 (PPL-1, PPL-2, PPL-9): «Все» без абитуриентов, порядок вкладок, быстрый просмотр, действия строки."""
+
+    def _tabs(self, html):
+        import re
+        m = re.search(r'<nav class="cc-tabs"[^>]*aria-label="Роли".*?</nav>', html, re.S)
+        self.assertIsNotNone(m, 'нет вкладок ролей')
+        return m.group(0)
+
+    def test_all_tab_hides_applicants(self):
+        html = self.get_ok('/admin/users')
+        self.assertNotIn('ap_00', html)                      # ни строк, ни ссылок на абитуриентов
+        self.assertIn('data-cc-hint="users-applicants"', html)
+        tabs = self._tabs(html)
+        labels = ['Все', 'Студенты', 'Преподаватели', 'Администраторы', 'Клубы', 'Абитуриенты']
+        pos = [tabs.index('<span>%s</span>' % l) for l in labels]
+        self.assertEqual(pos, sorted(pos), 'порядок вкладок: абитуриенты — последними')
+        from cms.routes_people import _users_snapshot
+        staff = sum(1 for r in _users_snapshot() if r['role_key'] != 'applicant')
+        self.assertRegex(tabs, r'<span>Все</span>\s*<span class="cc-tab__count">%d</span>' % staff)
+        html = self.get_ok('/admin/users?role=applicant')
+        self.assertIn('ap_001', html)
+        body = self.client.get('/admin/users?format=csv').get_data(as_text=True)
+        self.assertNotIn('ap_001', body)                     # CSV «Всех» — тоже без абитуриентов
+        self.assertIn('student01@caspian.test', body)
+
+    def test_search_hints_applicants(self):
+        name = self.doc('users', 'ap_001')['name']
+        html = self.get_ok('/admin/users?q=%s' % name.split()[0])
+        self.assertIn('pp-also', html)                       # «есть ещё N абитуриентов — Показать»
+        self.assertIn('role=applicant', html)
+        self.assertNotIn('ap_001', html)
+
+    def test_row_menu_and_bulk_markup(self):
+        html = self.get_ok('/admin/users?role=student')
+        self.assertIn('data-cc-bulkbar="usersBulk"', html)
+        self.assertIn('data-cc-select="usersBulk"', html)
+        self.assertIn('cc-table--stack', html)
+        self.assertIn('id="usersGroupModal"', html)          # перевод в группу — одного и выбранных
+        self.assertIn('data-pp-user="st_001"', html)
+        self.assertIn('data-cc-peek', html)                  # строка → быстрый просмотр
+        self.assertNotIn('pp-desktop-actions', html)         # на телефоне действия не прячутся
+        html = self.get_ok('/admin/users?role=applicant')
+        self.assertIn('Сбросить пароль', html)
+        self.assertIn('станет abiturient123', html)          # новый пароль — в тексте подтверждения
+
+    def test_peek_partial(self):
+        r = self.client.get('/admin/users/edit/st_001?next=/admin/users%3Frole%3Dstudent', headers={'X-CC-Partial': '1'})
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self.assertNotIn('cc-sidebar', html)
+        self.assertIn('pp-peek', html)
+        self.assertIn('action="/admin/users/edit/st_001"', html)
+        self.assertIn('name="next" value="/admin/users?role=student"', html)   # после сохранения — в список
+        html = self.client.get('/admin/users/edit/ap_001', headers={'X-CC-Partial': '1'}).get_data(as_text=True)
+        self.assertIn('/applicants/ap_001', html)
+
+    def test_refresh_redirects_without_param(self):
+        r = self.client.get('/admin/users?role=student&refresh=1')
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers['Location'].endswith('/admin/users?role=student'), r.headers['Location'])
+
+
+class UsersV2ActionsTest(CmsTestCase):
+
+    fresh_seed_each_test = True
+
+    def test_disable_has_undo_toast(self):
+        nxt = '/admin/users?role=applicant'
+        r = self.post('/admin/users/ap_001/disable', {'disabled': '1', 'next': nxt})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers['Location'].endswith(nxt))
+        self.assertTrue(_auth_user('ap_001').disabled)
+        import json
+        cat, raw = self.flashes()[-1]
+        self.assertEqual(cat, 'cc-action')
+        action = json.loads(raw)
+        self.assertEqual(action['label'], 'Отменить')
+        self.assertEqual(action['post'], '/admin/users/ap_001/disable')
+        self.assertEqual(action['fields'], {'disabled': '0', 'next': nxt})
+        r = self.post(action['post'], action['fields'])            # «Отменить» из тоста
+        self.assertFalse(_auth_user('ap_001').disabled)
+
+    def test_move_one_student_from_row_menu(self):
+        r = self.post('/admin/users/bulk', {'action': 'group', 'group': 'ВТ 24-1', 'ids': ['st_001'],
+                                            'next': '/admin/users?role=student'})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers['Location'].endswith('/admin/users?role=student'))
+        self.assertEqual(self.doc('users', 'st_001')['group'], 'ВТ 24-1')
+        self.assertIn('переведён', ' '.join(m for _c, m in self.flashes()))
+
+    def test_edit_returns_to_list(self):
+        r = self.post('/admin/users/edit/st_003', {'name': 'Студент Новый', 'role': 'student', 'group': 'ИС 24-1',
+                                                    'course': '2', 'next': '/admin/users?role=student&page=2'})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(r.headers['Location'].endswith('/admin/users?role=student&page=2'))
+        self.assertEqual(self.flashes()[-1][0], 'cc-action')       # «Изменения сохранены · Открыть»
+
+
+class TeachersV2Test(CmsTestCase):
+    """UX v2 (PPL-3, PPL-4, PPL-6): форма добавления без redirect, тёзки, карточка, «Передать занятия…»."""
+
+    fresh_seed_each_test = True
+
+    def test_add_errors_render_open_form(self):
+        html = self.get_ok('/teachers')
+        self.assertIn('method="post" action="/teachers"', html)    # модалка шлёт POST на адрес списка
+        r = self.post('/teachers', {'name': 'Новый Препод', 'email': 'не-email', 'password': '123'})
+        self.assertEqual(r.status_code, 200)                       # не redirect на ?add=1
+        html = r.get_data(as_text=True)
+        self.assertIn('data-cc-open-on-load', html)
+        self.assertIn('value="Новый Препод"', html)                 # значения не потерялись
+        self.assertIn('Некорректный email', html)
+        self.assertIn('is-invalid', html)
+        self.assertEqual(self.docs('users', name='Новый Препод'), [])
+
+    def test_namesake_needs_confirmation(self):
+        name = 'Петров Дмитрий Игоревич'
+        before = len(self.docs('users', name=name))
+        r = self.post('/teachers/add', {'name': '  петров  дмитрий игоревич '})
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self.assertIn('Всё равно добавить', html)
+        self.assertIn('name="confirm_duplicate" value="1"', html)
+        self.assertEqual(len(self.docs('users', name=name)), before)
+        r = self.post('/teachers/add', {'name': name, 'confirm_duplicate': '1'})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/teachers/edit/', r.headers['Location'])
+        self.assertEqual(len(self.docs('users', name=name)), before + 1)
+
+    def test_add_redirects_to_card_with_action(self):
+        r = self.post('/teachers/add', {'name': 'Совсем Новый Преподаватель'})
+        self.assertEqual(r.status_code, 302)
+        uid = self.docs('users', name='Совсем Новый Преподаватель')[0]['id']
+        self.assertTrue(r.headers['Location'].endswith('/teachers/edit/%s' % uid))
+        import json
+        cat, raw = self.flashes()[-1]
+        self.assertEqual(cat, 'cc-action')
+        self.assertEqual(json.loads(raw)['label'], 'Добавить занятия')
+
+    def test_list_filters_and_card(self):
+        html = self.get_ok('/teachers?lessons=no')
+        self.assertIn('kim.v2@caspian.test', html)
+        self.assertNotIn('petrov@caspian.test', html)
+        html = self.get_ok('/teachers')
+        self.assertIn('cc-summary', html)
+        self.assertNotIn('cc-stat__value', html)                   # KPI-плиток больше нет
+        self.assertIn('тёзка', html)                                # два «Ким Виктор Александрович»
+        html = self.get_ok('/teachers/edit/t_petrov')
+        self.assertIn('cc-savebar', html)
+        self.assertIn('data-cc-back', html)
+        r = self.client.get('/teachers/edit/t_petrov?next=/teachers', headers={'X-CC-Partial': '1'})
+        html = r.get_data(as_text=True)                            # быстрый просмотр из списка
+        self.assertNotIn('cc-sidebar', html)
+        self.assertIn('pp-peek', html)
+        self.assertIn('is-clash', html)
+
+    def test_transfer_form_posts_to_schedule_bulk(self):
+        import re
+        from cms.schedule_model import load_lessons_snapshot
+        html = self.get_ok('/teachers/edit/t_petrov')
+        self.assertIn('id="teacherTransfer"', html)
+        form = re.search(r'<form class="modal-content" method="post" action="([^"]+)"[^>]*>(.*?)</form>',
+                         html[html.index('id="teacherTransfer"'):], re.S)
+        self.assertEqual(form.group(1), '/schedule/bulk')
+        body = form.group(2)
+        self.assertIn('name="teacher_from" value="t_petrov"', body)
+        ids = re.findall(r'name="ids" value="([^"]+)"', body)
+        lessons = load_lessons_snapshot(force=True).by_teacher.get('uid:t_petrov', [])
+        self.assertEqual(sorted(ids), sorted(l['id'] for l in lessons))
+        r = self.post('/schedule/bulk', {'action': 'teacher', 'teacher': 't_kim', 'teacher_from': 't_petrov',
+                                         'ids': ids, 'next': '/teachers/edit/t_petrov'})
+        self.assertEqual(r.status_code, 302)
+        snap = load_lessons_snapshot(force=True)
+        self.assertEqual(snap.by_teacher.get('uid:t_petrov', []), [])
+
+
+class DirectoriesV2Test(CmsTestCase):
+    """UX v2 (PPL-5, PPL-7): группы, дисциплины, администрация, аудит — новые компоненты."""
+
+    def test_groups_and_subjects(self):
+        html = self.get_ok('/groups')
+        self.assertIn('cc-table--stack', html)
+        self.assertIn('id="groupRename"', html)
+        self.assertIn('data-pp-rename="ПО 24-1"', html)
+        self.assertNotIn('cc-stat__value', html)
+        html = self.get_ok('/subjects?q=физ')
+        self.assertIn('Физика', html)
+        self.assertNotIn('Математика', html)
+        self.assertIn('id="subjectRename"', html)
+
+    def test_administration_and_audit(self):
+        html = self.get_ok('/administration')
+        self.assertIn('pp-mgmt__card', html)
+        self.assertIn('data-pp-order-bar', html)
+        html = self.get_ok('/audit')
+        self.assertIn('cc-table--stack', html)
+        self.assertIn('cc-summary', html)
+        self.assertNotIn('cc-stat__value', html)
+
+
 class HomeTest(CmsTestCase):
 
     def test_dashboard_kpi(self):

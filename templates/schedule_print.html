@@ -9,24 +9,15 @@
 
 {% block content %}
 <div class="cc-no-print">
-    {% call ui.page_header('Бланки для печати', sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · одна группа на листе A4', icon='printer') %}
-        {{ ui.button('Назад', href=url_for('schedule', group=selected[0] if selected|length == 1 else None), icon='arrow-left', variant='light') }}
+    {% set back_href = url_for('schedule', group=selected[0]) if selected|length == 1 else url_for('schedule') %}
+    {% call ui.page_header('Бланки для печати', subtitle=sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · одна группа на листе A4',
+                           back={'href': back_href, 'label': selected[0] if selected|length == 1 else 'Расписание групп'}) %}
         <button type="button" class="btn btn-primary" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать / PDF</span></button>
     {% endcall %}
-    <form method="get" class="cc-filters" action="{{ url_for('schedule_print') }}">
-        {% for g in selected %}<input type="hidden" name="group" value="{{ g }}">{% endfor %}
-        {% if course %}<input type="hidden" name="course" value="{{ course }}">{% endif %}
-        {% if major %}<input type="hidden" name="major" value="{{ major }}">{% endif %}
-        {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
-        <div class="cc-filters__field">
-            <label class="form-label" for="sch-print-week">Какие пары</label>
-            <select class="form-select" id="sch-print-week" name="week" data-autosubmit>
-                <option value="" {{ 'selected' if not week }}>Все недели (Ч и З с пометками)</option>
-                <option value="current" {{ 'selected' if week == 'current' }}>Только текущая неделя ({{ current_week_label|lower }})</option>
-            </select>
-        </div>
-        <p class="cc-subtle small mb-0 align-self-center">Совет: в окне печати выберите «Сохранить как PDF», чтобы отправить бланки в мессенджер.</p>
-    </form>
+    {% call ui.filters_bar(inline=True, ignore=('group', 'course', 'major', 'q'), id='schPrintFilters') %}
+        {{ ui.filter_select('week', 'Какие пары', [('current', 'Только текущая неделя (' ~ current_week_label|lower ~ ')')], week, all_label='Все недели (Ч и З с пометками)') }}
+    {% endcall %}
+    {{ ui.hint('В окне печати выберите «Сохранить как PDF», чтобы отправить бланки в мессенджер.', icon='lightbulb', dismiss='sch-print-pdf') }}
 </div>
 
 {% if not sheets %}
@@ -55,7 +46,7 @@
             {% for l in ls %}
             <tr class="{{ 'sch-sheet__row--first' if loop.first }}">
                 {% if loop.first %}<th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day">{{ day_names[d] }}</th>{% endif %}
-                <td class="sch-sheet__time cc-num">{{ l|sch_time }}</td>
+                <td class="sch-sheet__time cc-num">{{ (l|sch_time)|time_range }}</td>
                 <td>
                     <b>{{ l.subject }}</b>{% if l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}
                     {% if l|sch_teacher %}<div class="sch-sheet__teacher">{{ l|sch_teacher }}</div>{% endif %}

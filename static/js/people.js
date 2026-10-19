@@ -1,5 +1,7 @@
-/* Разделы «Главная» и «Люди» (PEOPLE): массовый выбор пользователей, поля по роли, генератор
-   пароля, модалки переименования группы/дисциплины, порядок администрации, превью карточки.
+/* Раздел «Люди» (PEOPLE): поля по роли, генератор пароля, модалки «Перевести в группу / курс» (одного или
+   выбранных), переименование группы и дисциплины, «Передать занятия…», порядок администрации, превью карточки.
+   Выбор строк и панель массовых действий — общие (app.js: ui.select_* + ui.bulkbar).
+   Виджеты внутри быстрого просмотра инициализируются через CC.onInit (событие cc:content-loaded).
    Пользовательские данные — только через value/textContent (никакого innerHTML). */
 (function () {
   'use strict';
@@ -8,58 +10,37 @@
   function qsa(sel, root) { return Array.prototype.slice.call((root || doc).querySelectorAll(sel)); }
   function ready(fn) { if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', fn); else fn(); }
   function toast(text, kind) { if (window.CC && CC.toast) CC.toast(text, kind || 'info'); }
-
-  /* ----------------------------- Массовый выбор ----------------------------- */
-  // [data-pp-check-all="formId"] — «выбрать все»; строки — input[name=ids][form=formId];
-  // панель [data-pp-bulk="formId"] видна, когда что-то выбрано.
-  function initBulk() {
-    qsa('[data-pp-bulk]').forEach(function (bar) {
-      var formId = bar.getAttribute('data-pp-bulk');
-      var boxes = qsa('input[name="ids"][form="' + formId + '"]');
-      var all = qsa('[data-pp-check-all="' + formId + '"]');
-      var counter = qs('[data-pp-bulk-count]', bar);
-      function sync() {
-        var n = boxes.filter(function (b) { return b.checked; }).length;
-        bar.hidden = n === 0;
-        if (counter) counter.textContent = String(n);
-        all.forEach(function (a) { a.checked = n > 0 && n === boxes.length; a.indeterminate = n > 0 && n < boxes.length; });
-      }
-      boxes.forEach(function (b) { b.addEventListener('change', sync); });
-      all.forEach(function (a) {
-        a.addEventListener('change', function () { boxes.forEach(function (b) { b.checked = a.checked; }); sync(); });
-      });
-      sync();
-    });
-    // клик по ячейке с галочкой — переключить галочку, а не открыть строку
-    qsa('td.pp-check').forEach(function (td) {
-      td.addEventListener('click', function (e) {
-        e.stopPropagation();
-        if (e.target.tagName === 'INPUT') return;
-        var box = qs('input[type="checkbox"]', td);
-        if (box) { box.checked = !box.checked; box.dispatchEvent(new Event('change', { bubbles: true })); }
-      });
-    });
+  function plural(n, forms) {
+    if (window.CC && CC.plural) return CC.plural(n, forms);
+    var m10 = n % 10, m100 = n % 100;
+    return forms[(m10 === 1 && m100 !== 11) ? 0 : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? 1 : 2];
+  }
+  // инициализатор для страницы и для фрагментов быстрого просмотра
+  function onInit(fn) {
+    if (window.CC && CC.onInit) { CC.onInit(fn); return; }
+    ready(function () { fn(doc); });
+    doc.addEventListener('cc:content-loaded', function (e) { fn((e.detail && e.detail.root) || doc); });
   }
 
   /* ----------------------------- Поля по роли ----------------------------- */
-  // select[data-pp-role-select] управляет [data-pp-role-only="student"] / "teacher,admin,club".
-  function initRoleFields() {
-    qsa('select[data-pp-role-select]').forEach(function (select) {
-      var form = select.form || doc;
+  // select[data-pp-role-select] управляет [data-pp-role-only="student"] / "teacher,admin,club" в своей форме.
+  onInit(function (root) {
+    qsa('select[data-pp-role-select]', root).forEach(function (select) {
+      if (select._ppRole) return;
+      select._ppRole = true;
+      var form = select.form || root;
       function sync() {
-        var role = select.value;
         qsa('[data-pp-role-only]', form).forEach(function (el) {
-          var roles = el.getAttribute('data-pp-role-only').split(',');
-          el.hidden = roles.indexOf(role) === -1;
+          el.hidden = el.getAttribute('data-pp-role-only').split(',').indexOf(select.value) === -1;
         });
       }
       select.addEventListener('change', sync);
       sync();
     });
-  }
+  });
 
   /* ----------------------------- Генератор пароля ----------------------------- */
-  // [data-pp-generate="#inputId"] — 10 символов без похожих (0/O, 1/l/I), видимым текстом.
+  // [data-pp-generate="#inputId"] — 10 символов без похожих (0/O, 1/l/I), видимым текстом, сразу в буфер.
   var ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   function randomPassword(len) {
     var out = '';
@@ -71,14 +52,17 @@
     if (!/\d/.test(out)) out = out.slice(0, -1) + String(buf[0] % 8 + 2);
     return out;
   }
-  function initGenerate() {
-    qsa('[data-pp-generate]').forEach(function (btn) {
+  onInit(function (root) {
+    qsa('[data-pp-generate]', root).forEach(function (btn) {
+      if (btn._ppGen) return;
+      btn._ppGen = true;
       btn.addEventListener('click', function () {
-        var input = qs(btn.getAttribute('data-pp-generate'));
+        var sel = btn.getAttribute('data-pp-generate');
+        var input = qs(sel);
         if (!input) return;
         input.value = randomPassword(10);
         input.type = 'text';
-        var toggle = qs('[data-password-toggle="' + btn.getAttribute('data-pp-generate') + '"]');
+        var toggle = qs('[data-password-toggle="' + sel + '"]');
         if (toggle) {
           toggle.setAttribute('aria-pressed', 'true');
           toggle.setAttribute('aria-label', 'Скрыть пароль');
@@ -92,41 +76,102 @@
         }
       });
     });
+  });
+
+  /* ----------------------------- «Перевести в группу» / «Назначить курс» ----------------------------- */
+  // Модалки #usersGroupModal / #usersCourseModal шлют POST admin_users_bulk. Кто открыл:
+  //   пункт меню строки [data-pp-user] — один студент; кнопка панели [data-pp-bulk="formId"] — выбранные строки.
+  // id кладём скрытыми полями ids, в тексте модалки — кого затронет (изменятся только студенты).
+  function initIdsModal(modal) {
+    var box = qs('[data-pp-ids]', modal);
+    var who = qs('[data-pp-who]', modal);
+    var submit = qs('button[type="submit"]', modal);
+    var groupSelect = qs('select[name="group"]', modal);
+    modal.addEventListener('show.bs.modal', function (e) {
+      var trigger = e.relatedTarget;
+      var ids = [];
+      var students = 0;
+      box.textContent = '';
+      if (trigger && trigger.hasAttribute('data-pp-user')) {
+        ids = [trigger.getAttribute('data-pp-user')];
+        students = 1;
+        who.textContent = 'Студент: ' + (trigger.getAttribute('data-pp-user-name') || '');
+        if (groupSelect) groupSelect.value = trigger.getAttribute('data-pp-user-group') || '';
+      } else {
+        var fid = (trigger && trigger.getAttribute('data-pp-bulk')) || 'usersBulk';
+        ids = window.CC && CC.selection ? CC.selection(fid) : [];
+        ids.forEach(function (id) {
+          var cb = qsa('input[data-cc-select="' + fid + '"]').filter(function (b) { return b.value === id; })[0];
+          var tr = cb && cb.closest('tr');
+          if (tr && tr.getAttribute('data-pp-role') === 'student') students++;
+        });
+        var n = ids.length;
+        var text = 'Выбрано: ' + n + ' ' + plural(n, ['пользователь', 'пользователя', 'пользователей']);
+        if (!students) text += ' — среди них нет студентов, менять нечего.';
+        else if (students < n) text += ', из них студентов: ' + students + ' — изменятся только они.';
+        else text += '. Изменятся все ' + students + ' ' + plural(students, ['студент', 'студента', 'студентов']) + '.';
+        who.textContent = text;
+        if (groupSelect) groupSelect.value = '';
+      }
+      ids.forEach(function (id) {
+        var input = doc.createElement('input');
+        input.type = 'hidden'; input.name = 'ids'; input.value = id;
+        box.appendChild(input);
+      });
+      if (submit) submit.disabled = !students;
+    });
+    modal.addEventListener('shown.bs.modal', function () { var s = qs('select', modal); if (s) s.focus(); });
   }
 
-  /* ----------------------------- Переименование группы ----------------------------- */
-  function initGroupRename() {
-    var modal = qs('#groupRename');
-    if (!modal) return;
+  /* ----------------------------- Переименование группы / дисциплины ----------------------------- */
+  // Кто открыл модалку (пункт меню строки) — в его data-атрибутах старое название и URL формы.
+  function initGroupRename(modal) {
     var old = qs('[data-pp-rename-old]', modal);
     var input = qs('[data-pp-rename-input]', modal);
     var label = qs('[data-pp-rename-label]', modal);
-    function fill(name) {
-      old.value = name; input.value = name; label.textContent = '«' + name + '»';
-    }
-    qsa('[data-pp-rename]').forEach(function (btn) {
-      btn.addEventListener('click', function () { fill(btn.getAttribute('data-pp-rename') || ''); });
+    modal.addEventListener('show.bs.modal', function (e) {
+      var t = e.relatedTarget;
+      if (!t || !t.hasAttribute('data-pp-rename')) return;
+      var name = t.getAttribute('data-pp-rename') || '';
+      old.value = name; input.value = name;
+      if (label) label.textContent = 'Сейчас: «' + name + '»';
+    });
+    modal.addEventListener('shown.bs.modal', function () { input.focus(); input.select(); });
+  }
+  function initSubjectRename(modal) {
+    var form = qs('form', modal);
+    var input = qs('[data-pp-subject-input]', modal);
+    var usage = qs('[data-pp-subject-usage]', modal);
+    modal.addEventListener('show.bs.modal', function (e) {
+      var t = e.relatedTarget;
+      if (!t || !t.hasAttribute('data-pp-subject-action')) return;
+      form.setAttribute('action', t.getAttribute('data-pp-subject-action'));
+      input.value = t.getAttribute('data-pp-subject-name') || '';
+      var n = parseInt(t.getAttribute('data-pp-subject-lessons') || '0', 10);
+      usage.hidden = !n;
+      usage.textContent = n ? 'В расписании занятий с этой дисциплиной: ' + n + '.' : '';
     });
     modal.addEventListener('shown.bs.modal', function () { input.focus(); input.select(); });
   }
 
-  /* ----------------------------- Переименование дисциплины ----------------------------- */
-  function initSubjectRename() {
-    var modal = qs('#subjectRename');
-    if (!modal) return;
-    var form = qs('[data-pp-subject-form]', modal);
-    var input = qs('[data-pp-subject-input]', modal);
-    var usage = qs('[data-pp-subject-usage]', modal);
-    qsa('[data-pp-subject-action]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        form.setAttribute('action', btn.getAttribute('data-pp-subject-action'));
-        input.value = btn.getAttribute('data-pp-subject-name') || '';
-        var n = parseInt(btn.getAttribute('data-pp-subject-lessons') || '0', 10);
-        usage.hidden = !n;
-        usage.textContent = n ? 'В расписании занятий с этой дисциплиной: ' + n + '.' : '';
+  /* ----------------------------- «Передать занятия…» (карточка преподавателя) ----------------------------- */
+  // Галочки дней [data-pp-day="N"] включают/выключают скрытые ids [data-pp-day-of="N"]; счётчик и кнопка.
+  function initTransfer(modal) {
+    var counter = qs('[data-pp-transfer-count]', modal);
+    var submit = qs('button[type="submit"]', modal);
+    function sync() {
+      var n = 0;
+      qsa('[data-pp-day]', modal).forEach(function (cb) {
+        qsa('[data-pp-day-of="' + cb.getAttribute('data-pp-day') + '"]', modal).forEach(function (inp) {
+          inp.disabled = !cb.checked;
+          if (cb.checked) n++;
+        });
       });
-    });
-    modal.addEventListener('shown.bs.modal', function () { input.focus(); input.select(); });
+      if (counter) counter.textContent = n + ' ' + plural(n, ['занятие', 'занятия', 'занятий']);
+      if (submit) submit.disabled = !n;
+    }
+    qsa('[data-pp-day]', modal).forEach(function (cb) { cb.addEventListener('change', sync); });
+    sync();
   }
 
   /* ----------------------------- Порядок администрации ----------------------------- */
@@ -219,12 +264,22 @@
     }
   }
 
+  /* ----------------------------- Тёзка при добавлении преподавателя ----------------------------- */
+  // «Всё равно добавить» относится к конкретному ФИО: изменили имя — сервер снова проверит тёзок.
+  function initDupConfirm(inp) {
+    var name = inp.form && inp.form.elements.namedItem('name');
+    if (!name) return;
+    function norm(v) { return String(v || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+    var orig = norm(inp.getAttribute('data-name'));
+    name.addEventListener('input', function () { inp.disabled = norm(name.value) !== orig; });
+  }
+
   ready(function () {
-    initBulk();
-    initRoleFields();
-    initGenerate();
-    initGroupRename();
-    initSubjectRename();
+    qsa('[data-pp-dup-confirm]').forEach(initDupConfirm);
+    ['#usersGroupModal', '#usersCourseModal'].forEach(function (sel) { var m = qs(sel); if (m) initIdsModal(m); });
+    var g = qs('#groupRename'); if (g) initGroupRename(g);
+    var s = qs('#subjectRename'); if (s) initSubjectRename(s);
+    var t = qs('#teacherTransfer'); if (t) initTransfer(t);
     initOrder();
     initMgmtPreview();
   });

@@ -1,41 +1,39 @@
-{# Кампании с кодами Caspian Coin: список-карточки, состояние, прогресс вводов, «показать на экране» (COINS). #}
+{# Кампании с кодами Caspian Coin: карточки (состояние, прогресс вводов), «На экран», вкл/выкл без подтверждения
+   (тост «Отменить»), меню действий (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'coins/_macros.html' as cn with context %}
 {% block title %}Кампании коинов{% endblock %}
 {% block styles %}{{ ui.css('coins') }}{% endblock %}
 {% block scripts %}{{ ui.js('coins') }}{% endblock %}
-{% set here = request.full_path.rstrip('?') %}
 {% block content %}
-{{ ui.page_header('Кампании с кодами', 'Код для Дня открытых дверей, квиза или стенда: абитуриент вводит его в приложении во вкладке «Коины» и получает награду. Один код — один раз на человека.', [
-    {'label': 'Новая кампания', 'href': url_for('coins_campaign_form'), 'icon': 'plus-lg'},
-], icon='ticket-perforated') }}
+{%- set sitems = [{'value': kpi.live, 'label': 'идут сейчас', 'href': url_with(state='live', page=None), 'tone': 'success' if kpi.live else None}] -%}
+{%- if kpi.scheduled %}{% set _ = sitems.append({'value': kpi.scheduled, 'label': 'скоро начнутся', 'href': url_with(state='scheduled', page=None)}) %}{% endif -%}
+{%- set _ = sitems.append((kpi.claims, kpi.claims|plural('ввод', 'ввода', 'вводов') ~ ' кода')) -%}
+{%- set _ = sitems.append({'value': kpi.coins or 0, 'label': 'коинов начислено', 'href': url_for('coins_journal', type='campaign')}) -%}
+{{ ui.page_header('Кампании с кодами', None, meta=ui.summary_line(sitems), actions=[
+    {'label': 'Новая кампания', 'href': url_for('coins_campaign_form'), 'icon': 'plus-lg', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 {{ cn.section_tabs('campaigns') }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Идут сейчас', kpi.live, 'broadcast', tone='success', meta='из ' ~ kpi.total ~ ' ' ~ kpi.total|plural('кампании', 'кампаний', 'кампаний'), href=url_with(state='live')) }}
-    {{ ui.stat_card('Запланированы', kpi.scheduled, 'clock', tone='info', href=url_with(state='scheduled') if kpi.scheduled else None, meta='ещё не начались') }}
-    {{ ui.stat_card('Вводов кода', kpi.claims, 'people', meta='за всё время') }}
-    {{ ui.stat_card('Начислено по кодам', kpi.coins, 'coin', tone='warning', meta='коинов', href=url_for('coins_journal', type='campaign')) }}
-</div>
-
-<div class="cn-toolbar-plain">
-    <nav class="cn-chips" aria-label="Состояние кампаний">
-        <a class="cc-chip {{ 'active' if not state }}" href="{{ url_with(state=None, page=None) }}">Все <span class="cc-chip__count">{{ kpi.total }}</span></a>
-        {% for k, meta in states.items() %}{% if state_counts[k] or state == k %}
-        <a class="cc-chip {{ 'active' if state == k }}" href="{{ url_with(state=k, page=None) }}"><i class="bi bi-{{ meta[2] }}" aria-hidden="true"></i>{{ meta[0] }} <span class="cc-chip__count">{{ state_counts[k] }}</span></a>
-        {% endif %}{% endfor %}
-    </nav>
-    <form class="cc-search cn-toolbar__search" method="get" role="search">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
-        <input class="form-control form-control-sm" type="search" name="q" value="{{ q }}" placeholder="Код, название или место" aria-label="Поиск кампании">
-    </form>
+<div class="cn-listbar cn-listbar--plain">
+    {%- set chips = [] -%}
+    {%- for k, meta in states.items() %}{% if state_counts[k] or state == k %}{% set _ = chips.append((k, meta[0], state_counts[k])) %}{% endif %}{% endfor -%}
+    {{ ui.filter_chips('state', chips, state, all_count=kpi.total) }}
+    {{ ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Код, название или место', 'label': 'Поиск кампании'}, inline=True, ignore=('state',)) }}
 </div>
 
 {% if page.items %}
 <div class="cn-campaigns">
     {% for c in page.items %}
+    {%- set menu = [
+        {'label': 'Статистика и вводы', 'href': url_for('coins_campaign_detail', code=c.code), 'icon': 'bar-chart'},
+        {'label': 'Изменить', 'href': url_for('coins_campaign_form', code=c.code), 'icon': 'pencil'},
+        {'label': 'Скопировать код', 'href': '#', 'icon': 'copy', 'attrs': {'data-copy': c.code, 'data-copy-message': 'Код ' ~ c.code ~ ' скопирован'}},
+        {'divider': True},
+        {'label': 'Выключить' if c.active else 'Включить', 'action': url_for('coins_campaign_toggle', code=c.code), 'fields': {'next': here() ~ '#c-' ~ c.code}, 'icon': 'pause-circle' if c.active else 'play-circle'},
+    ] -%}
+    {%- if not c.claims %}{% set _ = menu.append({'label': 'Удалить', 'action': url_for('coins_campaign_delete', code=c.code), 'icon': 'trash', 'danger': True, 'confirm': 'Удалить кампанию ' ~ c.code ~ '? Код ещё никто не вводил.'}) %}{% endif -%}
     <article class="cn-campaign cn-campaign--{{ c.state }}" id="c-{{ c.code }}">
         <header class="cn-campaign__head">
             <button type="button" class="cn-code" data-copy="{{ c.code }}" data-copy-message="Код {{ c.code }} скопирован" title="Скопировать код" aria-label="Скопировать код {{ c.code }}">{{ c.code }}<i class="bi bi-copy" aria-hidden="true"></i></button>
@@ -43,24 +41,17 @@
         </header>
         <h3 class="cn-campaign__title"><a href="{{ url_for('coins_campaign_detail', code=c.code) }}">{{ c.title }}</a></h3>
         <ul class="cn-campaign__meta">
-            <li>{{ cn.coins(c.amount, signed=True) }}<span class="cc-subtle">за ввод</span></li>
+            <li>{{ cn.coins(c.amount, signed=True) }}<span>за ввод</span></li>
             {% if c.place %}<li><i class="bi bi-geo-alt" aria-hidden="true"></i><span class="cc-truncate">{{ c.place }}</span></li>{% endif %}
             <li><i class="bi bi-calendar-range" aria-hidden="true"></i><span>{{ c.starts|dateonly }} — {{ c.ends|dateonly }}{% if c.days_left is not none %} · {{ 'последний день' if c.days_left == 0 else ('ещё ' ~ c.days_left ~ ' ' ~ c.days_left|plural('день', 'дня', 'дней')) }}{% endif %}</span></li>
         </ul>
         <div class="cn-campaign__progress">
-            <div class="d-flex justify-content-between small"><span>Вводов: <b>{{ c.claims|num }}</b>{% if c.max %} из {{ c.max|num }}{% endif %}</span><span class="cc-subtle">≈ {{ c.issued|num }} коинов</span></div>
-            {% if c.max %}{{ ui.progress_bar(c.claims, c.max, 'success' if c.pct < 90 else None, 'Вводов: ' ~ c.claims ~ ' из ' ~ c.max) }}{% else %}<div class="cc-subtle small">без лимита участников</div>{% endif %}
+            <div class="d-flex justify-content-between small"><span>Вводов: <b class="cc-num">{{ c.claims|num }}</b>{% if c.max %} из {{ c.max|num }}{% endif %}</span><span class="cc-subtle">≈ {{ c.issued|num }} коинов</span></div>
+            {% if c.max %}{{ ui.progress_bar(c.claims, c.max, None, 'Вводов: ' ~ c.claims ~ ' из ' ~ c.max) }}{% else %}<div class="cc-subtle small">без лимита участников</div>{% endif %}
         </div>
         <footer class="cn-campaign__actions">
-            {{ ui.button('На экран', href=url_for('coins_campaign_present', code=c.code), icon='display', variant='primary' if c.state == 'live' else 'light', size='sm', attrs={'target': '_blank', 'rel': 'noopener'}) }}
-            {{ ui.button('Статистика и вводы', href=url_for('coins_campaign_detail', code=c.code), icon='bar-chart', variant='light', size='sm', icon_only=True) }}
-            {{ ui.button('Изменить', href=url_for('coins_campaign_form', code=c.code), icon='pencil', variant='light', size='sm', icon_only=True) }}
-            {{ ui.confirm_button(url_for('coins_campaign_toggle', code=c.code), 'Выключить' if c.active else 'Включить',
-                ('Выключить код ' ~ c.code ~ '? Новые вводы будут отклоняться, начисленные коины останутся.') if c.active else ('Включить код ' ~ c.code ~ '?'),
-                variant='light', icon='pause-circle' if c.active else 'play-circle', icon_only=True, ok='Выключить' if c.active else 'Включить', fields={'next': here ~ '#c-' ~ c.code}) }}
-            {% if not c.claims %}
-            {{ ui.confirm_button(url_for('coins_campaign_delete', code=c.code), 'Удалить', 'Удалить кампанию ' ~ c.code ~ '? Код ещё никто не вводил.', icon_only=True, title='Удалить кампанию') }}
-            {% endif %}
+            {{ ui.button('На экран', href=url_for('coins_campaign_present', code=c.code), icon='display', variant='light', size='sm', attrs={'target': '_blank', 'rel': 'noopener'}) }}
+            {{ ui.row_menu(menu, label='Действия: ' ~ c.code) }}
         </footer>
     </article>
     {% endfor %}
@@ -69,7 +60,7 @@
 {% else %}
 {% call ui.card() %}
     {% if q or state %}
-    {{ ui.empty_state('search', 'Ничего не найдено', 'Измените поиск или фильтр.', {'label': 'Все кампании', 'href': url_for('coins_campaigns'), 'variant': 'light'}) }}
+    {{ ui.empty_filtered(url_for('coins_campaigns')) }}
     {% else %}
     {{ ui.empty_state('ticket-perforated', 'Кампаний пока нет', 'Создайте код для мероприятия: например, «DOD2026» на День открытых дверей — 100 коинов каждому, кто введёт его в приложении.', {'label': 'Новая кампания', 'href': url_for('coins_campaign_form'), 'icon': 'plus-lg'}) }}
     {% endif %}

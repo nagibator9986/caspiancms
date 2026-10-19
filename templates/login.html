@@ -9,12 +9,12 @@
             <span><b>Caspian College</b><small>Админ-панель</small></span>
         </div>
         <div class="cc-auth__pitch">
-            <h2>Всё управление приложением колледжа — в одном месте</h2>
-            <p>Расписание и накладки, абитуриенты и приёмная, новости, Caspian Coin и магазин мерча.</p>
+            <h2>Админ-панель колледжа</h2>
+            <p>Расписание, контент и люди — в одном месте.</p>
             <ul class="cc-auth__features">
-                <li><i class="bi bi-calendar-week"></i>Расписание без накладок</li>
-                <li><i class="bi bi-mortarboard"></i>Абитуриенты и аналитика приёма</li>
-                <li><i class="bi bi-coin"></i>Коины, кампании и заказы</li>
+                <li><i class="bi bi-calendar-week" aria-hidden="true"></i>Расписание без накладок</li>
+                <li><i class="bi bi-newspaper" aria-hidden="true"></i>Новости, опросы и события</li>
+                <li><i class="bi bi-people" aria-hidden="true"></i>Пользователи и обратная связь</li>
             </ul>
         </div>
         <div class="cc-auth__foot">© Caspian College</div>
@@ -26,7 +26,7 @@
                 <span><b>Caspian College</b><small>Админ-панель</small></span>
             </div>
             <h1>Вход</h1>
-            <p class="cc-lead">Для администраторов колледжа. Используйте email и пароль учётной записи приложения.</p>
+            <p class="cc-lead">Для администраторов колледжа: email и пароль учётной записи приложения.</p>
             <form method="post" action="{{ url_for('login') }}" novalidate>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}

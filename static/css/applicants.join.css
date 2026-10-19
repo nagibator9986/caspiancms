@@ -24,7 +24,7 @@
   background: var(--cc-info-soft); color: var(--cc-info-fg); font-weight: 600; font-size: 14px; line-height: 1.4;
 }
 .jn-banner .bi { font-size: 20px; flex: 0 0 auto; }
-.jn-banner--coins { background: var(--cc-brand-tint); color: var(--cc-brand-strong); border: 1px solid var(--cc-brand-soft); }
+.jn-banner--coins { background: var(--cc-brand-tint); color: var(--cc-brand-ink); border: 1px solid var(--cc-brand-soft); }
 .jn-banner--coins .bi { color: var(--cc-brand); }
 .jn-banner--muted { background: var(--cc-surface); color: var(--cc-text-muted); border: 1px solid var(--cc-border); font-weight: 500; }
 
@@ -89,7 +89,7 @@
 .jn-login__value { font-size: 22px; font-weight: 800; letter-spacing: -.01em; word-break: break-all; }
 .jn-coins {
   display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: var(--cc-radius-md);
-  background: var(--cc-brand-tint); color: var(--cc-brand-strong); font-weight: 700; border: 1px solid var(--cc-brand-soft);
+  background: var(--cc-brand-tint); color: var(--cc-brand-ink); font-weight: 700; border: 1px solid var(--cc-brand-soft);
 }
 .jn-coins .bi { font-size: 22px; color: var(--cc-brand); }
 

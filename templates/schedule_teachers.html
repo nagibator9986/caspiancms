@@ -1,139 +1,195 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# Расписание по преподавателям (владелец — SCHEDULE). Занятия, записанные uid и ФИО текстом, — в одной карточке. #}
-{% block title %}Расписание преподавателей{% endblock %}
+{# Расписание по преподавателям (владелец — SCHEDULE). Без ?teacher — таблица нагрузки (или карточки);
+   с ?teacher= — неделя одного преподавателя (занятия, записанные uid и ФИО текстом, — вместе). #}
+{% block title %}{{ single.name if single else 'Расписание преподавателей' }}{% endblock %}
+{% block crumbs_extra %}{% if single %}<li><a href="{{ url_for('schedule_teachers') }}" data-cc-back>По преподавателям</a></li>{% endif %}{% endblock %}
+{% block page_title %}{% if single %}{{ single.name }}{% else %}{{ super() }}{% endif %}{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{% set day_options = [] %}{% for d in range(7) %}{% set _ = day_options.append((d, day_names[d])) %}{% endfor %}
+{% set here_url = here() %}
 {% set export_args = {'teacher': teacher or None, 'q': q or None, 'day': day, 'week': week or None} %}
-{% set here = url_with() %}
-{% set open_all = page.items|length == 1 or day is not none %}
 
-{% call ui.page_header('Расписание преподавателей', 'Неделя и нагрузка каждого преподавателя; пересечения подсвечены', icon='person-workspace') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    <div class="dropdown">
-        <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
-        <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="{{ url_for('schedule_teachers_export', format='xlsx', **export_args) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel с нагрузкой (.xlsx)</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_teachers_export', format='csv', **export_args) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><button type="button" class="dropdown-item" data-print><i class="bi bi-printer" aria-hidden="true"></i>Печать страницы</button></li>
-        </ul>
-    </div>
+{% if single %}
+{# ============================== НЕДЕЛЯ ПРЕПОДАВАТЕЛЯ ============================== #}
+{% set c = single %}
+{% set menu = [
+    {'label': 'Передать занятия другому…', 'href': '#schHandover', 'icon': 'arrow-left-right', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#schHandover'}},
+    {'divider': True},
+    {'header': 'Экспорт'},
+    {'label': 'Excel с нагрузкой (.xlsx)', 'href': url_for('schedule_teachers_export', format='xlsx', teacher=c.key), 'icon': 'file-earmark-excel'},
+    {'label': 'CSV', 'href': url_for('schedule_teachers_export', format='csv', teacher=c.key), 'icon': 'filetype-csv'},
+    {'label': 'Печать страницы', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
+] %}
+{% set by_day_counts = {} %}{% for d, ls in c.by_day.items() %}{% set _ = by_day_counts.update({d: ls|length}) %}{% endfor %}
+{% call ui.page_header(c.name, back={'href': url_for('schedule_teachers'), 'label': 'Все преподаватели'}, meta=ui.week_now(current_week, week_number)) %}
+    {{ ui.header_menu(menu) }}
+    {{ ui.button('Добавить занятие', href=url_for('schedule_builder', teacher=c.uid or None, next=here_url), icon='plus-lg', attrs={'data-cc-hotkey': 'n'}) }}
 {% endcall %}
+{% set summary = [{'value': c.current, 'label': 'пар на этой неделе', 'title': 'Числитель: %d · Знаменатель: %d'|format(c.num, c.den)},
+                  (c.hours, 'ч'), (c.groups|length, c.groups|length|plural('группа', 'группы', 'групп'))] %}
+{% if c.today %}{% set _ = summary.append((c.today, 'сегодня')) %}{% endif %}
+{% if c.conflicts %}{% set _ = summary.append({'value': c.conflicts, 'label': c.conflicts|plural('накладка', 'накладки', 'накладок'), 'tone': 'danger', 'href': url_for('schedule_conflicts', dim='teacher', teacher=c.key) if conflicts_url else None}) %}{% endif %}
+{{ ui.summary_line(summary) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Преподавателей', teachers_count, 'person-badge') }}
-    {{ ui.stat_card('Занятий', total_lessons, 'calendar3', meta=('по фильтру' if (teacher or q or week or day is not none) else 'в неделе')) }}
-    {{ ui.stat_card('Пересечения', total_overlap, 'exclamation-diamond', tone=('danger' if total_overlap else 'success'), href=conflicts_url, meta=('подробно — в «Накладках»' if total_overlap else 'не найдено')) }}
-    {{ ui.stat_card('Без преподавателя', no_teacher, 'person-x', tone=('warning' if no_teacher else 'success'), href=conflicts_url, meta='занятий во всём расписании') }}
-</div>
-
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'ФИО', q, 'Например: Петров') }}
-    {{ ui.filter_select('teacher', 'Преподаватель', teacher_options, teacher, 'Все преподаватели') }}
-    {{ ui.filter_select('day', 'День', day_options, day, 'Все дни') }}
-    {{ ui.filter_select('week', 'Неделя', week_filters, week, 'Все недели') }}
-    <input type="hidden" name="view" value="{{ view }}">
+{% if c.removed %}
+{% call ui.hint(icon='person-x', tone='warning') %}
+    Преподавателя с id <code>{{ c.uid }}</code> нет в справочнике — в приложении эти занятия у него не видны.
+    <a href="#schHandover" data-bs-toggle="modal" data-bs-target="#schHandover">Переназначить {{ c.ids|length }} {{ c.ids|length|plural('занятие', 'занятия', 'занятий') }}</a>
 {% endcall %}
-
-<div class="sch-viewbar cc-no-print">
-    {{ ui.tabs([{'key': 'cards', 'label': 'Карточки', 'href': url_with(view='cards'), 'icon': 'grid-3x2-gap'},
-                {'key': 'table', 'label': 'Таблица', 'href': url_with(view='table'), 'icon': 'table'}], view, pills=True, label='Вид') }}
-    {{ sch.week_legend(current_week) }}
-</div>
-
-{% if not page.items %}
-<section class="cc-card">{{ ui.empty_state('person-x', 'Преподаватели не найдены', 'Измените фильтры. Занятия без преподавателя видны в разделе «Накладки → Качество данных».', {'label': 'Сбросить фильтры', 'href': url_for('schedule_teachers'), 'icon': 'x-lg', 'variant': 'light'}) }}</section>
-{% elif view == 'table' %}
-{% call ui.data_table('schTeachersTable', search=True, placeholder='Быстрый поиск по странице') %}
-<table class="cc-table sch-grid" id="schTeachersTable">
-    <thead><tr>
-        <th class="sch-grid__owner">Преподаватель</th>
-        {% for d in columns %}<th class="{{ 'is-today' if d == today_wd }}">{{ sch.day_title(d) }}</th>{% endfor %}
-    </tr></thead>
-    <tbody>
-    {% for c in page.items %}
-    <tr data-teacher-card="{{ c.key }}">
-        <th scope="row" class="sch-grid__owner">
-            <a class="sch-grid__name" href="{{ url_for('schedule_teachers', teacher=c.key) }}">{{ c.name }}</a>
-            <span class="cc-subtle small">{{ c.num }}/{{ c.den }} пар · {{ c.groups|length }} гр.</span>
-            {% if c.overlap_pairs %}<span class="cc-badge cc-badge--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.overlap_pairs }}</span>{% endif %}
-        </th>
-        {% for d in columns %}
-        <td class="{{ 'is-today' if d == today_wd }}">
-            {% for l in c.by_day.get(d, []) %}{{ sch.lesson_card(l, current_week, 'group', today_wd, now_minutes, l.id in c.overlap_ids, compact=True) }}{% else %}<span class="sch-grid__empty">—</span>{% endfor %}
-        </td>
-        {% endfor %}
-    </tr>
-    {% endfor %}
-    <tr data-table-empty class="is-hidden"><td colspan="{{ columns|length + 1 }}" class="cc-table-empty">На этой странице ничего не найдено</td></tr>
-    </tbody>
-</table>
-{% endcall %}
-{{ ui.pagination(page) }}
-{% else %}
-<div class="sch-teacher-grid{{ ' sch-teacher-grid--single' if page.items|length == 1 }}">
-    {% for c in page.items %}
-    <article class="sch-teacher-card" data-teacher-card="{{ c.key }}">
-        <header class="sch-teacher-card__head">
-            {{ ui.avatar(c.name) }}
-            <div class="min-w-0">
-                <h2 class="sch-teacher-card__name"><a href="{{ url_for('schedule_teachers', teacher=c.key) }}">{{ c.name }}</a></h2>
-                <div class="sch-teacher-card__tags">
-                    {% for h in c.hints %}<span class="cc-badge cc-badge--warning" title="Как преподаватель записан в расписании">{{ h }}</span>{% endfor %}
-                    {% if c.overlap_pairs %}
-                    {% if conflicts_url %}<a class="cc-badge cc-badge--danger" href="{{ url_for('schedule_conflicts', teacher=c.key) }}"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.overlap_pairs }} {{ c.overlap_pairs|plural('пересечение', 'пересечения', 'пересечений') }}</a>
-                    {% else %}<span class="cc-badge cc-badge--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.overlap_pairs }} {{ c.overlap_pairs|plural('пересечение', 'пересечения', 'пересечений') }}</span>{% endif %}
-                    {% endif %}
-                    {% if c.today %}<span class="cc-badge cc-badge--brand">сегодня {{ c.today }}</span>{% endif %}
-                </div>
-            </div>
-        </header>
-        <dl class="sch-teacher-card__stats">
-            <div title="Пар в неделю-числитель (с «каждую неделю»)"><dt>Пар · Ч</dt><dd class="cc-num">{{ c.num }}</dd></div>
-            <div title="Пар в неделю-знаменатель (с «каждую неделю»)"><dt>Пар · З</dt><dd class="cc-num">{{ c.den }}</dd></div>
-            <div title="Академических часов на текущей неделе"><dt>Часов</dt><dd class="cc-num">{{ c.hours }}</dd></div>
-            <div><dt>Групп</dt><dd class="cc-num">{{ c.groups|length }}</dd></div>
-        </dl>
-        <div class="sch-teacher-card__days">
-            {{ sch.mini_days(c.days, today_wd) }}
-            {% if c.overlaps %}
-            <section class="sch-tday sch-tday--danger">
-                <h3 class="sch-tday__name"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Пересечения</h3>
-                <ul class="sch-lines">{% for l in c.overlaps %}{{ sch.lesson_line(l, current_week, 'group', True, edit=True, next_url=here) }}{% endfor %}</ul>
-            </section>
-            {% endif %}
-            {% set today_list = c.by_day.get(today_wd, []) %}
-            {% if today_list and not open_all %}
-            <section class="sch-tday is-today">
-                <h3 class="sch-tday__name">Сегодня · {{ day_names[today_wd]|lower }}</h3>
-                <ul class="sch-lines">{% for l in today_list %}{{ sch.lesson_line(l, current_week, 'group', l.id in c.overlap_ids, edit=True, next_url=here) }}{% endfor %}</ul>
-            </section>
-            {% endif %}
-            <details class="sch-tweek"{{ ' open' if open_all }}>
-                <summary>Вся неделя · {{ c.lessons|length }} {{ c.lessons|length|plural('пара', 'пары', 'пар') }}</summary>
-                <div class="sch-tweek__days">
-                {% for d, ls in c.by_day.items() %}
-                <section class="sch-tday{{ ' is-today' if d == today_wd }}">
-                    <h3 class="sch-tday__name">{{ sch.day_title(d) }}</h3>
-                    <ul class="sch-lines">{% for l in ls %}{{ sch.lesson_line(l, current_week, 'group', l.id in c.overlap_ids, edit=True, next_url=here) }}{% endfor %}</ul>
-                </section>
-                {% endfor %}
-                </div>
-            </details>
-        </div>
-        <footer class="sch-teacher-card__foot">
-            <div class="sch-chips">{% for g in c.groups %}<a class="cc-chip" href="{{ url_for('schedule', group=g) }}">{{ g }}</a>{% endfor %}</div>
-            <a class="btn btn-ghost btn-sm" href="{{ url_for('schedule_teachers_export', format='xlsx', teacher=c.key) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i><span>Excel</span></a>
-        </footer>
-    </article>
-    {% endfor %}
-</div>
-{{ ui.pagination(page) }}
+{% elif c.hints %}
+{{ ui.hint('Как записан в расписании: ' ~ c.hints|join(', ') ~ '. Выберите преподавателя из справочника в занятиях (или «Накладки → Качество данных» → «Заменить ФИО на uid»).', icon='info-circle', tone='warning') }}
 {% endif %}
-<p class="cc-subtle small mt-3">Обновлено {{ update_time }}. «Пересечения» — пары одного преподавателя, которые идут одновременно (потоки — одна аудитория и дисциплина у нескольких групп — не считаются).</p>
+
+<div class="sch-toolbar cc-no-print">
+    {% call ui.filters_bar(inline=True, ignore=('teacher',), id='schTeacherFilters') %}
+        {{ ui.filter_select('day', 'День', day_options, day) }}
+        {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+    {% endcall %}
+    <div class="sch-toolbar__legend">{{ sch.week_legend(current_week) }}</div>
+</div>
+{% if c.groups %}
+<nav class="sch-chipline cc-no-print" aria-label="Группы преподавателя"><span class="sch-chipline__label">Группы:</span>{% for g in c.groups %}<a class="cc-chip" href="{{ url_for('schedule', group=g) }}">{{ g }}</a>{% endfor %}</nav>
+{% endif %}
+
+{% if c.lessons %}
+{% set alert_days = [] %}{% for d in columns %}{% for l in c.by_day.get(d, []) %}{% if (l.id in c.overlap_ids or marks.get(l.id)) and d not in alert_days %}{% set _ = alert_days.append(d) %}{% endif %}{% endfor %}{% endfor %}
+{% if columns|length > 1 %}{{ sch.day_switch(columns, by_day_counts, focus_day, today_wd, alerts=alert_days) }}{% endif %}
+<div class="sch-week sch-week--switch" id="schWeek" style="--sch-cols: {{ columns|length }}">
+    {% for d in columns %}
+    {% set ls = c.by_day.get(d, []) %}
+    <section class="sch-day{{ ' is-today' if d == today_wd }}{{ ' sch-day--none' if d is none }}{{ ' is-active-day' if d == focus_day or columns|length == 1 }}" data-day="{{ '' if d is none else d }}" aria-label="{{ sch.day_title(d) }}">
+        <header class="sch-day__head">
+            <span class="sch-day__name">{{ sch.day_title(d) }}</span>
+            {% if d == today_wd %}<span class="sch-day__today">сегодня</span>{% endif %}
+            <span class="sch-day__count cc-num">{{ ls|length or '' }}</span>
+        </header>
+        <div class="sch-day__body">
+            {% for l in ls %}{{ sch.lesson_card(l, current_week, 'group', today_wd, now_minutes, l.id in c.overlap_ids, edit=True, next_url=here_url, mark=marks.get(l.id)) }}{% else %}<p class="sch-day__empty">Нет пар</p>{% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+</div>
+{% else %}
+<section class="cc-card">{{ ui.empty_filtered(url_for('schedule_teachers', teacher=c.key), 'По выбранному дню и неделе занятий нет.') }}</section>
+{% endif %}
+
+{# Передать занятия другому преподавателю (SCH-11): POST /schedule/bulk, action=teacher, teacher_from — защита от чужих id #}
+{% call ui.modal_form('schHandover', 'Передать занятия', url_for('schedule_bulk'), submit='Передать') %}
+    <input type="hidden" name="action" value="teacher">
+    <input type="hidden" name="teacher_from" value="{{ c.uid or c.key }}">
+    <input type="hidden" name="next" value="{{ here_url }}">
+    {% for i in c.ids %}<input type="hidden" name="ids" value="{{ i }}">{% endfor %}
+    <p class="cc-muted">Все {{ c.ids|length }} {{ c.ids|length|plural('занятие', 'занятия', 'занятий') }} {{ 'этого преподавателя' if c.removed else c.name }} перейдут к выбранному преподавателю. Студенты и преподаватели получат по одному уведомлению.</p>
+    {{ ui.field('teacher', 'Новый преподаватель', 'select', options=teacher_choices|rejectattr(0, 'equalto', c.uid)|list, required=True, placeholder='Выберите преподавателя…') }}
+{% endcall %}
+
+{% else %}
+{# ============================== СПИСОК ПРЕПОДАВАТЕЛЕЙ ============================== #}
+{{ ui.page_header('Расписание преподавателей', meta=ui.week_now(current_week, week_number), actions=[
+    {'menu': [
+        {'header': 'Экспорт с текущими фильтрами'},
+        {'label': 'Excel с нагрузкой (.xlsx)', 'href': url_for('schedule_teachers_export', format='xlsx', **export_args), 'icon': 'file-earmark-excel'},
+        {'label': 'CSV', 'href': url_for('schedule_teachers_export', format='csv', **export_args), 'icon': 'filetype-csv'},
+        {'label': 'Печать страницы', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
+    ], 'label': 'Экспорт'},
+]) }}
+{% set summary = [(teachers_count, teachers_count|plural('преподаватель', 'преподавателя', 'преподавателей')),
+                  (total_lessons, total_lessons|plural('занятие', 'занятия', 'занятий'))] %}
+{% if teachers_with_conflicts %}{% set _ = summary.append({'value': teachers_with_conflicts, 'label': 'с накладками', 'tone': 'danger', 'href': url_for('schedule_conflicts', dim='teacher') if conflicts_url else None}) %}{% endif %}
+{% if no_teacher %}{% set _ = summary.append({'value': no_teacher, 'label': 'занятий без преподавателя', 'tone': 'warning', 'href': url_for('schedule_conflicts', dim='quality', code='no_teacher') if conflicts_url else None}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+
+{% call ui.list_card() %}
+    <div class="sch-listhead">
+        {{ ui.segmented([('table', 'Таблица', url_with(view='table', page=None), 'table'), ('cards', 'Карточки', url_with(view='cards', page=None), 'grid')], view, remember='schedule_teachers') }}
+        {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'ФИО преподавателя', 'label': 'Поиск преподавателя', 'filter': '#schTeachers'}, inline=True, ignore=('view',)) %}
+            {{ ui.filter_select('day', 'День', day_options, day) }}
+            {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+        {% endcall %}
+    </div>
+    {% if not page.items %}
+        {% if q or day is not none or week %}{{ ui.empty_filtered(url_for('schedule_teachers')) }}
+        {% else %}{{ ui.empty_state('person-x', 'Преподавателей в расписании нет', 'Добавьте занятия с преподавателями в конструкторе.') }}{% endif %}
+    {% elif view == 'table' %}
+    <div class="cc-table-wrap">
+    <table class="cc-table cc-table--stack sch-ttable" id="schTeachers" data-sortable>
+        <thead><tr>
+            <th data-sort="text">Преподаватель</th>
+            <th class="cc-num-col" data-sort="num" title="Пар на текущей неделе ({{ current_week_label|lower }})">Пар в неделю</th>
+            <th class="cc-num-col cc-col-md" data-sort="num" title="Академических часов на текущей неделе">Часов</th>
+            <th class="cc-col-lg">Группы</th>
+            <th class="cc-num-col cc-col-md" data-sort="num">Сегодня</th>
+            <th class="cc-num-col" data-sort="num">Накладки</th>
+            <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+        </tr></thead>
+        <tbody>
+        {% for c in page.items %}
+        {% set week_url = url_for('schedule_teachers', teacher=c.key, week=week or None, day=day) %}
+        <tr data-href="{{ week_url }}" data-teacher-card="{{ c.key }}" class="{{ 'is-removed' if c.removed }}">
+            <td class="cc-cell-primary">
+                <a class="cc-row-link cc-cell-main" href="{{ week_url }}">{{ c.name }}</a>
+                {% if c.removed %}<span class="cc-cell-sub d-block">id {{ c.uid }} — нет в справочнике</span>
+                {% elif c.hints %}<span class="cc-cell-sub d-block sch-text-warning">{{ c.hints|join(', ') }}</span>{% endif %}
+            </td>
+            <td class="cc-num-col" data-label="Пар/нед." data-value="{{ c.current }}" title="Числитель: {{ c.num }} · Знаменатель: {{ c.den }}">{{ c.current }}</td>
+            <td class="cc-num-col cc-col-md cc-col-optional" data-label="Часов" data-value="{{ c.hours }}">{{ c.hours }}</td>
+            <td class="cc-col-lg cc-cell-meta sch-ttable__groups">
+                {%- for g in c.groups[:3] %}<a href="{{ url_for('schedule', group=g) }}">{{ g }}</a>{{ ', ' if not loop.last }}{% endfor -%}
+                {%- if c.groups|length > 3 %} <span class="cc-muted" title="{{ c.groups[3:]|join(', ') }}">и ещё {{ c.groups|length - 3 }}</span>{% endif -%}
+            </td>
+            <td class="cc-num-col cc-col-md{{ ' cc-col-optional' if not c.today }}" data-label="Сегодня" data-value="{{ c.today }}">{{ c.today or '—' }}</td>
+            <td class="cc-num-col{{ ' cc-col-optional' if not c.conflicts }}" data-value="{{ c.conflicts }}">{% if c.conflicts %}<a class="cc-badge cc-badge--{{ 'danger' if c.conflicts_critical else 'warning' }}" href="{{ url_for('schedule_conflicts', dim='teacher', teacher=c.key) if conflicts_url else week_url }}" title="Открыть в «Накладках»"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>{{ c.conflicts }}</a>{% else %}<span class="cc-muted">—</span>{% endif %}</td>
+            <td class="cc-actions">{{ ui.row_menu([
+                {'label': 'Неделя преподавателя', 'href': week_url, 'icon': 'calendar-week'},
+                {'label': 'Excel (.xlsx)', 'href': url_for('schedule_teachers_export', format='xlsx', teacher=c.key), 'icon': 'file-earmark-excel'},
+            ] + ([{'divider': True}, {'label': 'Переназначить занятия…', 'href': url_for('schedule_teachers', teacher=c.key), 'icon': 'arrow-left-right'}] if c.removed else [])) }}</td>
+        </tr>
+        {% endfor %}
+        <tr data-table-empty class="is-hidden"><td colspan="7" class="cc-table-empty">На этой странице не найдено — нажмите Enter, чтобы искать везде</td></tr>
+        </tbody>
+    </table>
+    </div>
+    {{ ui.pagination(page) }}
+    {% else %}
+    <div class="sch-teacher-grid" id="schTeachers">
+        {% for c in page.items %}
+        {% set week_url = url_for('schedule_teachers', teacher=c.key, week=week or None, day=day) %}
+        <article class="sch-teacher-card" data-teacher-card="{{ c.key }}" data-search="{{ c.name }}">
+            <header class="sch-teacher-card__head">
+                {{ ui.avatar(c.name) }}
+                <div class="min-w-0">
+                    <h2 class="sch-teacher-card__name"><a href="{{ week_url }}">{{ c.name }}</a></h2>
+                    <div class="sch-teacher-card__sub">
+                        <span title="Числитель: {{ c.num }} · Знаменатель: {{ c.den }}"><b class="cc-num">{{ c.current }}</b> пар в неделю</span> ·
+                        <span><b class="cc-num">{{ c.hours }}</b> ч</span>
+                        {% if c.conflicts %} · <a class="sch-text-danger" href="{{ url_for('schedule_conflicts', dim='teacher', teacher=c.key) if conflicts_url else week_url }}"><b class="cc-num">{{ c.conflicts }}</b> {{ c.conflicts|plural('накладка', 'накладки', 'накладок') }}</a>{% endif %}
+                    </div>
+                    {% if c.removed %}<div class="cc-cell-sub">id {{ c.uid }} — нет в справочнике</div>{% elif c.hints %}<div class="cc-cell-sub sch-text-warning">{{ c.hints|join(', ') }}</div>{% endif %}
+                </div>
+            </header>
+            {{ sch.mini_days(c.days, today_wd) }}
+            {% set today_list = c.by_day.get(today_wd, []) %}
+            {% if today_list %}
+            <section class="sch-tday">
+                <h3 class="sch-tday__name">Сегодня</h3>
+                <ul class="sch-lines">{% for l in today_list %}{{ sch.lesson_line(l, current_week, 'group', l.id in c.overlap_ids, edit=True, next_url=here_url) }}{% endfor %}</ul>
+            </section>
+            {% endif %}
+            <footer class="sch-teacher-card__foot">
+                <span class="sch-teacher-card__groups">{% for g in c.groups[:4] %}<a href="{{ url_for('schedule', group=g) }}">{{ g }}</a>{{ ', ' if not loop.last }}{% endfor %}{% if c.groups|length > 4 %} <span class="cc-muted">и ещё {{ c.groups|length - 4 }}</span>{% endif %}</span>
+                <a class="btn btn-light btn-sm" href="{{ week_url }}"><span>Неделя</span><i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+            </footer>
+        </article>
+        {% endfor %}
+        <div class="sch-teacher-grid__empty" data-cc-filter-empty hidden>{{ ui.empty_filtered(url_for('schedule_teachers'), 'На этой странице таких нет. Нажмите Enter, чтобы искать везде.') }}</div>
+    </div>
+    <div class="cc-list__foot">{{ ui.pagination(page) }}</div>
+    {% endif %}
+{% endcall %}
+<p class="sch-footnote">Пар в неделю — на текущей неделе ({{ current_week_label|lower }}); числитель и знаменатель — в подсказке. Накладки — из раздела «Накладки» (потоки не считаются). Обновлено {{ update_time }}.</p>
+{% endif %}
 {% endblock %}

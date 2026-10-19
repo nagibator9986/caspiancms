@@ -1,160 +1,184 @@
-{# Пользователи (PEOPLE): вкладки ролей, поиск, фильтры, массовые действия. Данные: routes_people.admin_users.
-   Пользовательские данные выводятся только через автоэкранирование Jinja (никаких onclick/innerHTML). #}
+{# Пользователи (PEOPLE): вкладки ролей (абитуриенты — последней, во «Всех» их нет), поиск, пилюли-фильтры,
+   строка → быстрый просмотр карточки, меню ⋯ строки, выбор строк + панель массовых действий.
+   Данные: routes_people.admin_users. Пользовательские данные — только автоэкранирование Jinja (никаких onclick/innerHTML). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Пользователи{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-{% call ui.page_header('Пользователи', 'Аккаунты приложения: студенты, преподаватели, абитуриенты и администрация', icon='people') %}
-    {{ ui.button('Обновить', href=url_with(refresh=1, page=None), icon='arrow-clockwise', variant='ghost', attrs={'title': 'Перечитать список из базы'}) }}
-    {{ ui.button('CSV', href=url_with(format='csv', page=None, refresh=None), icon='download', variant='light', attrs={'title': 'Скачать отфильтрованный список'}) }}
-    {{ ui.button('Новый пользователь', href=url_for('admin_add_user', role=role if role in ('student', 'teacher', 'admin', 'club') else None, group=group if group and group != '__none__' else None), icon='person-plus') }}
-{% endcall %}
+{% set new_role = role if role in ('student', 'teacher', 'admin', 'club') else None %}
+{{ ui.page_header('Пользователи', 'Аккаунты приложения: студенты, преподаватели, администрация и клубы', [
+    {'menu': [
+        {'label': 'Скачать CSV по фильтрам', 'href': url_with(format='csv', page=None), 'icon': 'download'},
+        {'label': 'Перечитать из базы', 'href': url_with(refresh=1), 'icon': 'arrow-clockwise'},
+    ]},
+    {'label': 'Новый пользователь', 'href': url_for('admin_add_user', role=new_role, group=group if group and group != '__none__' else None, next=here()),
+     'icon': 'person-plus', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
+]) }}
 
-{% set tab_items = [{'key': '', 'label': 'Все', 'href': url_with(role=None, page=None, group=None, course=None, sort=None, refresh=None), 'icon': 'people', 'count': total}] %}
+{% set tab_reset = {'page': None, 'group': None, 'course': None, 'sort': None} %}
+{% set tab_items = [{'key': '', 'label': 'Все', 'href': url_with(role=None, **tab_reset), 'count': total}] %}
 {% for key, label, icon in role_tabs %}
-    {% set _ = tab_items.append({'key': key, 'label': label, 'href': url_with(role=key, page=None, group=None, course=None, sort=None, refresh=None), 'icon': icon, 'count': counts.get(key, 0)}) %}
+    {% set _ = tab_items.append({'key': key, 'label': label, 'href': url_with(role=key, **tab_reset), 'count': counts.get(key, 0)}) %}
 {% endfor %}
 {% if counts.get('none') %}
-    {% set _ = tab_items.append({'key': 'none', 'label': 'Без роли', 'href': url_with(role='none', page=None, group=None, course=None, sort=None, refresh=None), 'icon': 'question-circle', 'count': counts.get('none')}) %}
+    {% set _ = tab_items.append({'key': 'none', 'label': 'Без роли', 'href': url_with(role='none', **tab_reset), 'count': counts.get('none')}) %}
 {% endif %}
 {{ ui.tabs(tab_items, role, label='Роли') }}
 
-{% if role == 'applicant' %}
-<div class="pp-hint">
-    <i class="bi bi-mortarboard" aria-hidden="true"></i>
-    <div>Абитуриенты регистрируются сами — по QR-коду на стенде или в приложении. Роль, группу и курс здесь не меняют:
-        статус CRM, коины, заказы и перевод в студенты — в <a href="{{ nav_url('applicants_leads') }}">карточке лида</a>.
-        Сброс пароля ставит <b>abiturient123</b> и просит сменить его при входе.</div>
-</div>
-{% elif role == 'none' %}
-<div class="pp-hint pp-hint--warning">
-    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-    <div>У этих профилей нет известной роли — приложение покажет им безопасный экран «нет доступа». Откройте профиль и назначьте роль.</div>
-</div>
+{% if role == 'none' %}
+    {{ ui.hint('У этих профилей нет известной роли — приложение покажет им экран «нет доступа». Откройте профиль и назначьте роль.', icon='exclamation-triangle', tone='warning') }}
 {% endif %}
 
-{% call ui.filters_bar(reset=url_for('admin_users', role=role or None)) %}
-    {% if role %}<input type="hidden" name="role" value="{{ role }}">{% endif %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Имя, email, логин, телефон') }}
-    {% if role in ('', 'student') %}
-        {% set group_opts = [('__none__', 'Без группы (' ~ no_group ~ ')')] + groups %}
-        {{ ui.filter_select('group', 'Группа', group_opts, group) }}
-        {{ ui.filter_select('course', 'Курс', course_options, course) }}
-    {% endif %}
-    {{ ui.filter_select('sort', 'Сортировка', sorts.items()|list, sort, all_label=None) }}
-{% endcall %}
+<form id="usersBulk" method="post" action="{{ url_for('admin_users_bulk') }}" hidden>
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+</form>
 
-{% if users %}
-<form id="usersBulk" method="post" action="{{ url_for('admin_users_bulk') }}" class="d-none">{{ ui.csrf_field() }}</form>
-<section class="cc-card">
-    <div class="cc-table-toolbar">
-        <h2 class="cc-card__title me-auto">{{ filtered|num }} {{ plural(filtered, 'пользователь', 'пользователя', 'пользователей') }}{% if q or group or course %} <span class="cc-muted fw-normal">по фильтрам</span>{% endif %}</h2>
-        <div class="pp-bulk" data-pp-bulk="usersBulk" hidden>
-            <span class="cc-muted small">Выбрано: <b data-pp-bulk-count>0</b></span>
-            {% if role in ('', 'student') %}
-            <select name="group" form="usersBulk" class="form-select form-select-sm" aria-label="Группа для выбранных студентов">
-                <option value="">— без группы —</option>
-                {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
-            </select>
-            <button type="submit" form="usersBulk" name="action" value="group" class="btn btn-sm btn-light" data-confirm="Перевести выбранных студентов в выбранную группу?" data-confirm-variant="primary" data-confirm-ok="Перевести"><i class="bi bi-arrow-left-right" aria-hidden="true"></i><span>В группу</span></button>
-            <select name="course" form="usersBulk" class="form-select form-select-sm" aria-label="Курс для выбранных студентов">
-                {% for c in courses %}<option value="{{ c }}">{{ c }} курс</option>{% endfor %}
-            </select>
-            <button type="submit" form="usersBulk" name="action" value="course" class="btn btn-sm btn-light" data-confirm="Назначить курс выбранным студентам?" data-confirm-variant="primary" data-confirm-ok="Назначить"><i class="bi bi-mortarboard" aria-hidden="true"></i><span>Курс</span></button>
-            {% endif %}
-            <button type="submit" form="usersBulk" name="action" value="export" class="btn btn-sm btn-light"><i class="bi bi-download" aria-hidden="true"></i><span>CSV</span></button>
-            <button type="submit" form="usersBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger" data-confirm="Удалить выбранных пользователей вместе с аккаунтами входа? Себя и администраторов массово удалить нельзя. Действие необратимо." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
-        </div>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Имя, email или телефон', 'label': 'Поиск пользователей'}, inline=True, ignore=('role',)) %}
+        {% if role in ('', 'student') %}
+            {{ ui.filter_select('group', 'Группа', [('__none__', 'Без группы (' ~ no_group ~ ')')] + groups, group) }}
+            {{ ui.filter_select('course', 'Курс', course_options, course) }}
+        {% endif %}
+        {{ ui.filter_select('sort', 'Порядок', sorts.items()|list, sort, all_label=None) }}
+    {% endcall %}
+    {% if applicant_hits %}
+    <div class="pp-also"><i class="bi bi-mortarboard" aria-hidden="true"></i>
+        <span>По запросу «{{ q }}» есть ещё {{ applicant_hits }} {{ plural(applicant_hits, 'абитуриент', 'абитуриента', 'абитуриентов') }}</span>
+        <a href="{{ url_with(role='applicant', page=None, group=None, course=None, sort=None) }}">Показать</a>
     </div>
-    <div class="cc-table-wrap">
-        <table class="cc-table pp-users">
-            <thead>
-                <tr>
-                    <th class="pp-check"><input class="form-check-input" type="checkbox" data-pp-check-all="usersBulk" aria-label="Выбрать всех на странице"></th>
-                    <th class="pp-col-main">Пользователь</th>
-                    {% if role in ('', 'none') %}<th class="d-none d-md-table-cell">Роль</th>{% endif %}
-                    <th class="d-none d-md-table-cell">{{ 'Источник' if role == 'applicant' else ('Дисциплина' if role == 'teacher' else ('Группа · курс' if role in ('', 'student') else '')) }}</th>
-                    <th class="d-none d-lg-table-cell">Телефон</th>
-                    <th class="d-none d-md-table-cell">Создан</th>
-                    <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
-                </tr>
-            </thead>
+    {% endif %}
+    {% if users %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+        <table class="cc-table cc-table--compact cc-table--stack pp-users" id="usersTable">
+            <thead><tr>
+                <th class="cc-select">{{ ui.select_all('usersBulk', 'Выбрать всех на странице') }}</th>
+                <th>Пользователь</th>
+                {% if role in ('', 'none') %}<th class="cc-col-md">Роль</th>{% endif %}
+                {% if role in ('', 'student') %}<th>Группа · курс</th>
+                {% elif role == 'teacher' %}<th class="cc-col-lg">Дисциплина</th>
+                {% elif role == 'applicant' %}<th class="cc-col-md">Источник</th>{% endif %}
+                <th class="cc-col-lg">Телефон</th>
+                <th class="cc-col-xl">Вход</th>
+                <th class="cc-col-md">Создан</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
             <tbody>
             {% for u in users %}
-                {% set edit_url = url_for('admin_edit_user', user_id=u.id, next=request.full_path) %}
-                {% set lead_url = nav_url('applicant_detail', uid=u.id) if u.role == 'applicant' else '#' %}
-                <tr data-href="{{ lead_url if u.role == 'applicant' and lead_url != '#' else edit_url }}" class="cc-row-link">
-                    <td class="pp-check"><input class="form-check-input" type="checkbox" name="ids" value="{{ u.id }}" form="usersBulk" aria-label="Выбрать {{ u.title }}"></td>
-                    <td class="pp-col-main">
+                {%- set edit_url = url_for('admin_edit_user', user_id=u.id, next=here()) -%}
+                {%- set lead_url = nav_url('applicant_detail', uid=u.id, next=here()) if u.role == 'applicant' else '#' -%}
+                {%- set acc = accounts.get(u.id) if accounts is not none else none -%}
+                {%- set can_reset = acc and u.id != me and u.role != 'admin' and default_passwords.get(u.role) -%}
+                <tr data-href="{{ edit_url }}" data-pp-role="{{ u.role }}">
+                    <td class="cc-select">{{ ui.select_row('usersBulk', u.id, u.title) }}</td>
+                    <td class="cc-cell-primary">
                         <div class="pp-person">
-                            {{ ui.avatar(u.name or (role_labels.get(u.role) if u.role == 'applicant' else u.title), size='sm') }}
+                            {{ ui.avatar(u.name or u.title, size='sm') }}
                             <div class="min-w-0">
-                                <div class="cc-cell-main cc-truncate">{{ u.title }}{% if u.id == me %} <span class="cc-badge cc-badge--outline">вы</span>{% endif %}</div>
+                                <div class="pp-person__name"><a class="cc-row-link cc-cell-main cc-truncate" href="{{ edit_url }}" data-cc-peek>{{ u.title }}</a>{% if u.id == me %}<span class="cc-badge cc-badge--outline">вы</span>{% endif %}</div>
                                 <div class="cc-cell-sub cc-truncate">
-                                    {% if u.role == 'applicant' %}{% if u.name %}Логин: {{ u.login or '—' }}{% else %}профиль не заполнен{% endif %}{% else %}{{ u.email or 'без email' }}{% endif %}
-                                    {% if u.must_change %} · <span class="pp-warn-text">ждёт смены пароля</span>{% endif %}
-                                </div>
-                                <div class="pp-mobile-meta d-md-none">
-                                    {% if role in ('', 'none') %}{{ ui.badge(u.role or 'none', role_labels.get(u.role) or 'Без роли', None if u.role in role_labels else 'neutral') }}{% endif %}
-                                    {% if u.role == 'student' %}<span class="cc-subtle">{{ u.group or 'без группы' }}{% if u.course %} · {{ u.course }} курс{% endif %}</span>{% endif %}
-                                    {% if u.role == 'applicant' and u.source %}<span class="cc-subtle">{{ u.source }}</span>{% endif %}
-                                    <span class="cc-subtle">{{ u.created|dateonly }}</span>
+                                    {%- if u.role == 'applicant' %}{% if u.name %}Логин: {{ u.login or '—' }}{% else %}профиль не заполнен{% endif %}{% else %}{{ u.email or 'без email' }}{% endif %}
+                                    {%- if u.must_change %} · <span class="pp-warn-text">ждёт смены пароля</span>{% endif %}
+                                    {%- if acc and acc.disabled %} · <span class="pp-danger-text">вход заблокирован</span>{% endif -%}
                                 </div>
                             </div>
                         </div>
                     </td>
-                    {% if role in ('', 'none') %}<td class="d-none d-md-table-cell">{{ ui.badge(u.role or 'none', role_labels.get(u.role) or 'Без роли', None if u.role in role_labels else 'neutral') }}</td>{% endif %}
-                    <td class="d-none d-md-table-cell">
-                        {% if u.role == 'student' %}
-                            {% if u.group %}<a class="pp-link" href="{{ url_with(role='student', group=u.group, page=None) }}">{{ u.group }}</a>{% else %}<span class="pp-warn-text">без группы</span>{% endif %}{% if u.course %}<span class="cc-subtle"> · {{ u.course }} курс</span>{% endif %}
-                        {% elif u.role == 'applicant' %}
-                            {% if u.source %}<span class="cc-badge cc-badge--outline">{{ u.source }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}
-                        {% elif u.role == 'teacher' %}
-                            <span class="cc-cell-sub">{{ u.subject or '—' }}</span>
-                        {% else %}
-                            <span class="cc-subtle">—</span>
-                        {% endif %}
+                    {% if role in ('', 'none') %}<td class="cc-cell-meta cc-col-md">{{ ui.role_badge(u.role) }}</td>{% endif %}
+                    {% if role in ('', 'student') %}
+                    <td class="cc-cell-meta pp-group-cell{{ ' pp-empty' if u.role != 'student' and not (u.role == 'teacher' and u.subject) }}">
+                        {%- if u.role == 'student' -%}
+                            {%- if u.group %}<a href="{{ url_with(role='student', group=u.group, page=None) }}" title="Все студенты группы">{{ u.group }}</a>{% else %}<span class="pp-warn-text">без группы</span>{% endif %}{% if u.course %}<span class="cc-subtle"> · {{ u.course }} курс</span>{% endif -%}
+                        {%- elif u.role == 'teacher' and u.subject %}<span class="cc-subtle">{{ u.subject }}</span>
+                        {%- else %}<span class="cc-subtle">—</span>{% endif -%}
                     </td>
-                    <td class="cc-nowrap d-none d-lg-table-cell">{% if u.phone %}<a class="pp-tel" href="tel:{{ u.phone }}">{{ u.phone|phone }}</a>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
-                    <td class="cc-nowrap d-none d-md-table-cell">{% set ago = u.created|ago %}<span class="cc-cell-main">{{ u.created|dateonly }}</span>{% if u.created and ago != u.created|dateonly %}<div class="cc-cell-sub">{{ ago }}</div>{% endif %}</td>
+                    {% elif role == 'teacher' %}
+                    <td class="cc-cell-meta cc-col-lg"><span class="cc-subtle">{{ u.subject or '—' }}</span></td>
+                    {% elif role == 'applicant' %}
+                    <td class="cc-cell-meta cc-col-md">{% if u.source %}<span class="cc-truncate d-inline-block align-bottom pp-source" title="{{ u.source }}">{{ u.source }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    {% endif %}
+                    <td class="cc-nowrap cc-col-lg cc-col-optional">{% if u.phone %}<a href="tel:{{ u.phone }}">{{ u.phone|phone }}</a>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-nowrap cc-col-xl cc-col-optional">
+                        {%- if accounts is none %}<span class="cc-subtle" title="Сервис входа недоступен">?</span>
+                        {%- elif not acc %}<span class="cc-subtle">нет входа</span>
+                        {%- elif acc.disabled %}{{ ui.badge('blocked', 'Заблокирован', 'danger', 'lock') }}
+                        {%- else %}<span class="pp-login-yes"><i class="bi bi-key" aria-hidden="true"></i>есть</span>{% endif -%}
+                    </td>
+                    <td class="cc-nowrap cc-col-md cc-col-optional"><span title="{{ u.created|dt }}">{{ u.created|dateonly }}</span></td>
                     <td class="cc-actions">
-                        <div class="pp-row-actions">
-                            {% if u.role == 'applicant' and lead_url != '#' %}
-                            {{ ui.button('Карточка лида', href=lead_url, icon='person-lines-fill', variant='ghost', size='sm', icon_only=True) }}
-                            {% endif %}
-                            {{ ui.button('Изменить', href=edit_url, icon='pencil', variant='ghost', size='sm', icon_only=True) }}
-                            <span class="pp-desktop-actions">
-                            {% if u.id != me and u.role != 'admin' and default_passwords.get(u.role) %}
-                            {{ ui.confirm_button(url_for('admin_reset_password', user_id=u.id), 'Сбросить пароль',
-                                                 'Пароль «' ~ u.title ~ '» станет ' ~ default_passwords[u.role] ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if u.role == 'applicant' else ' Сообщите его пользователю лично.'),
-                                                 variant='ghost', icon='key', icon_only=True, ok='Сбросить', title='Сброс пароля') }}
-                            {% endif %}
-                            {% if u.id != me %}
-                            {{ ui.confirm_button(url_for('admin_delete_user', user_id=u.id, next=request.full_path), 'Удалить',
-                                                 'Удалить «' ~ u.title ~ '» вместе с аккаунтом входа? Действие необратимо.',
-                                                 variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
-                            {% endif %}
-                            </span>
-                        </div>
+                        {%- set menu = [{'label': 'Открыть профиль', 'href': edit_url, 'icon': 'person-vcard'}] -%}
+                        {%- if u.role == 'applicant' and lead_url != '#' %}{% set _ = menu.append({'label': 'Карточка лида', 'href': lead_url, 'icon': 'person-lines-fill'}) %}{% endif -%}
+                        {%- if u.role == 'teacher' %}{% set _ = menu.append({'label': 'Расписание преподавателя', 'href': nav_url('schedule_teachers', teacher=u.id), 'icon': 'calendar-week'}) %}{% endif -%}
+                        {%- if u.role == 'student' %}{% set _ = menu.append({'label': 'Перевести в группу…', 'href': '#', 'icon': 'arrow-left-right',
+                            'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#usersGroupModal', 'data-pp-user': u.id, 'data-pp-user-name': u.title, 'data-pp-user-group': u.group}}) %}{% endif -%}
+                        {%- if can_reset %}{% set _ = menu.append({'label': 'Сбросить пароль…', 'action': url_for('admin_reset_password', user_id=u.id), 'fields': {'next': here()}, 'icon': 'key', 'ok': 'Сбросить',
+                            'confirm': 'Пароль «' ~ u.title ~ '» станет ' ~ default_passwords[u.role] ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if u.role == 'applicant' else ' Сообщите его пользователю лично.')}) %}{% endif -%}
+                        {%- if acc and u.id != me -%}
+                            {%- if acc.disabled %}{% set _ = menu.append({'label': 'Разблокировать вход', 'action': url_for('admin_user_set_disabled', user_id=u.id), 'fields': {'disabled': '0', 'next': here()}, 'icon': 'unlock'}) %}
+                            {%- else %}{% set _ = menu.append({'label': 'Заблокировать вход…', 'action': url_for('admin_user_set_disabled', user_id=u.id), 'fields': {'disabled': '1', 'next': here()}, 'icon': 'lock', 'ok': 'Заблокировать',
+                                'confirm': '«' ~ u.title ~ '» не сможет войти, пока вы не разблокируете вход. Все сеансы завершатся, данные сохранятся.'}) %}{% endif -%}
+                        {%- endif -%}
+                        {%- if u.id != me -%}
+                            {%- set _ = menu.append({'divider': True}) -%}
+                            {%- set _ = menu.append({'label': 'Удалить…', 'action': url_for('admin_delete_user', user_id=u.id), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                                'confirm': 'Удалить «' ~ u.title ~ '» вместе с аккаунтом входа?' ~ (' CRM, кошелёк и заказы абитуриента подчистит сервер.' if u.role == 'applicant' else '') ~ ' Действие необратимо.'}) -%}
+                        {%- endif -%}
+                        {{ ui.row_menu(menu, label='Действия: ' ~ u.title, quick={'label': 'Открыть профиль', 'href': edit_url, 'icon': 'pencil'}) }}
                     </td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
     </div>
-</section>
-{{ ui.pagination(page) }}
-{% else %}
-    {% call ui.card() %}
-        {% if q or group or course %}
-            {{ ui.empty_state('search', 'Никого не нашли', 'Проверьте запрос или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('admin_users', role=role or None), 'icon': 'x-lg', 'variant': 'light'}) }}
-        {% elif role == 'applicant' %}
-            {{ ui.empty_state('mortarboard', 'Абитуриентов пока нет', 'Распечатайте QR-код для стенда — абитуриенты зарегистрируются сами.', {'label': 'QR-источники', 'href': nav_url('applicant_sources'), 'icon': 'qr-code'}) }}
-        {% else %}
-            {{ ui.empty_state('people', 'Пользователей нет', 'Создайте первого пользователя.', {'label': 'Новый пользователь', 'href': url_for('admin_add_user'), 'icon': 'person-plus'}) }}
-        {% endif %}
+    {{ ui.pagination(page) }}
+    {% elif q or group or course %}
+        {{ ui.empty_filtered(url_for('admin_users', role=role or None)) }}
+    {% elif role == 'applicant' %}
+        {{ ui.empty_state('mortarboard', 'Абитуриентов пока нет', 'Распечатайте QR-код для стенда — абитуриенты зарегистрируются сами.', {'label': 'QR-источники', 'href': nav_url('applicant_sources'), 'icon': 'qr-code'}) }}
+    {% else %}
+        {{ ui.empty_state('people', 'Пользователей нет', 'Создайте первого пользователя кнопкой «Новый пользователь».') }}
+    {% endif %}
+{% endcall %}
+
+{# Подсказки — под списком: сначала данные (UX_SPEC_v2 §1.1, п. 2) #}
+{% if role in ('', 'applicant') %}
+<div class="pp-after-list">
+{% if role == '' %}
+    {{ ui.hint('Абитуриенты — во вкладке «Абитуриенты» и в разделе «Абитуриенты → Лиды».', icon='mortarboard', dismiss='users-applicants') }}
+{% elif role == 'applicant' %}
+    {% call ui.hint(icon='mortarboard', dismiss='users-applicants-tab') %}
+        Абитуриенты регистрируются сами — по QR-коду или в приложении. Статус, коины, заказы и перевод в студенты — в
+        <a href="{{ nav_url('applicants_leads') }}">карточке лида</a>. Сброс пароля ставит <b>abiturient123</b> и просит сменить его при входе.
     {% endcall %}
+{% endif %}
+</div>
+{% endif %}
+
+{% call ui.bulkbar('usersBulk', noun=('пользователь', 'пользователя', 'пользователей')) %}
+    {% if role in ('', 'student') %}
+    <button type="button" class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#usersGroupModal" data-pp-bulk="usersBulk"><i class="bi bi-arrow-left-right" aria-hidden="true"></i><span>В группу…</span></button>
+    <button type="button" class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#usersCourseModal" data-pp-bulk="usersBulk"><i class="bi bi-mortarboard" aria-hidden="true"></i><span>Курс…</span></button>
+    {% endif %}
+    <button type="submit" form="usersBulk" name="action" value="export" class="btn btn-sm btn-light"><i class="bi bi-download" aria-hidden="true"></i><span>CSV</span></button>
+    <button type="submit" form="usersBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger"
+            data-confirm="Удалить {items} вместе с аккаунтами входа? Себя и администраторов массово удалить нельзя. Действие необратимо." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
+{% endcall %}
+
+{% if role in ('', 'student') %}
+{# Перевод в группу: одного студента (меню строки) или выбранных (панель). id подставляет people.js. #}
+{% call ui.modal_form('usersGroupModal', 'Перевести в группу', url_for('admin_users_bulk'), submit='Перевести') %}
+    <input type="hidden" name="action" value="group"><input type="hidden" name="next" value="{{ here() }}">
+    <div data-pp-ids hidden></div>
+    <p class="pp-modal-who" data-pp-who></p>
+    {{ ui.field('group', 'Группа', 'select', options=groups, placeholder='— без группы —', id='ug-group',
+                help='Группы нет в списке? Создайте её в разделе «Группы».', classes='mb-0') }}
+{% endcall %}
+{% call ui.modal_form('usersCourseModal', 'Назначить курс', url_for('admin_users_bulk'), submit='Назначить') %}
+    <input type="hidden" name="action" value="course"><input type="hidden" name="next" value="{{ here() }}">
+    <div data-pp-ids hidden></div>
+    <p class="pp-modal-who" data-pp-who></p>
+    {{ ui.field('course', 'Курс', 'select', options=course_options, required=True, id='uc-course', classes='mb-0') }}
+{% endcall %}
 {% endif %}
 {% endblock %}

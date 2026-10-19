@@ -1,27 +1,32 @@
-# cms/routes_home.py — главная «/» (обзор колледжа) и журнал аудита /audit (владелец — PEOPLE).
+# cms/routes_home.py — главная «/» (обзор колледжа), поиск Ctrl+K /api/search и журнал аудита /audit
+# (маршруты — FOUNDATION, шаблон audit.html — PEOPLE).
 #
-# Главная: KPI на агрегатах count() (студенты, преподаватели, абитуриенты), регистрации абитуриентов
-# за 14 дней (одна выборка select(['createdAt'])), заказы и обращения — те же числа, что в бейджах
-# сайдбара, накладки — cms.conflicts.summary() (None → прочерк), сегодняшнее расписание из общего
-# снапшота, последние события аудита, быстрые действия. Всё кэшируется на 60 с ('home:*'),
-# аудит — 'audit:*' (core.audit() сбрасывает его при каждой записи).
+# Главная (UX_SPEC_v2 §3): приоритет — расписание. KPI: пары сегодня, накладки (cms.conflicts.summary(),
+# None → прочерк), обращения без ответа, идущие опросы, студенты (count()). «Сегодня в колледже» и свободные
+# аудитории — из общего снапшота расписания; «Требует внимания» — накладки → обращения → предупреждения →
+# заказы → лиды; ближайшие опросы и события; последние действия без входов/выходов; приём и Caspian Coin —
+# одна приглушённая строка внизу. Всё кэшируется на 60 с ('home:*'), аудит — 'audit:*'.
+#
+# /api/search: группы, преподаватели, аудитории, люди, новости и опросы — только из кэшей (снапшот расписания,
+# индекс пользователей и контента на 5 минут), до 6 результатов на тип и 30 всего.
 #
 # /audit: последние записи cms_audit (по диапазону дат — только поле at, без составных индексов),
 # фильтры по действию, объекту, администратору и тексту — в памяти, пагинация, CSV.
 
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from firebase_admin import firestore
-from flask import current_app, render_template, request, session
+from flask import current_app, jsonify, render_template, request, session
 
 from . import conflicts
 from . import core as _core  # nav_badges не импортируем по имени: core ищет функцию nav_badges в модулях
 from .core import (ALMATY, Routes, admin_required, cache, count, csv_response, db, doc_dict, fmt_dt, json_safe, log,
                    nav_url, now_almaty, now_utc, paginate_list, plural, to_almaty, to_datetime, today_almaty, where)
-from .schedule_model import (DAY_NAMES_FULL, academic_week_number, call_slots, current_week_type,
-                             load_lessons_snapshot, norm_text)
+from .schedule_model import (DAY_NAMES_FULL, academic_week_number, current_week_type, get_all_groups,
+                             get_all_teachers, load_lessons_snapshot, norm_text, room_key)
 
 routes = Routes()
 
@@ -30,7 +35,7 @@ HOME_TTL = 60
 AUDIT_PAGE_SIZE = 50
 AUDIT_SCAN_LIMIT = 3000      # сколько последних записей журнала просматривается фильтрами
 AUDIT_TTL = 120
-CHART_DAYS = 14
+REG_DAYS = 7
 
 # Подписи действий и объектов журнала (неизвестные показываются как есть).
 ACTION_LABELS = {
@@ -104,7 +109,7 @@ def _people_counts():
         return {k: f.result() for k, f in futures.items()}
 
 
-def _registrations(days=CHART_DAYS):
+def _registrations(days=7):
     """Регистрации абитуриентов по дням (Алматы) за последние days дней — одна выборка с select()."""
     start_day = today_almaty() - timedelta(days=days - 1)
     since = datetime(start_day.year, start_day.month, start_day.day, tzinfo=ALMATY).astimezone(timezone.utc)
@@ -123,17 +128,17 @@ def _registrations(days=CHART_DAYS):
 
 
 def _kpi():
+    """Счётчики людей (count()) и регистрации абитуриентов за 7 дней (для строки «Приём»). Кэш 60 с."""
     def load():
-        data = {'counts': {}, 'chart': []}
+        data = {'counts': {}, 'reg7': None}
         try:
             data['counts'] = _people_counts()
         except Exception:
             log.exception('KPI главной: count() не удался')
         try:
-            data['chart'] = _registrations()
+            data['reg7'] = sum(d['count'] for d in _registrations(REG_DAYS))
         except Exception:
             log.exception('KPI главной: регистрации не загрузились')
-            data['chart'] = None
         return data
     return cache.get_or_set('home:kpi', load, ttl=HOME_TTL)
 
@@ -167,34 +172,41 @@ def _conflicts_summary():
         return None
 
 
+def _hm(minutes):
+    return '%02d:%02d' % (minutes // 60, minutes % 60)
+
+
+def _today_lessons(snap, today):
+    wd = today.weekday()
+    week = current_week_type(today)
+    iso = today.isoformat()
+    return [l for l in snap.by_day.get(wd, [])
+            if (l['kind'] != 'dated' or l['date'] == iso) and l['week'] in ('always', week)]
+
+
 def _today_schedule(now):
-    """Сегодняшние занятия из снапшота: сколько пар, групп, преподавателей, что идёт сейчас."""
+    """Сегодняшние занятия из снапшота: сколько пар, групп, преподавателей, что идёт сейчас,
+    номер текущей пары, свободные аудитории в текущую пару."""
     today = now.date()
     wd = today.weekday()
     week = current_week_type(today)
     info = {'weekday': DAY_NAMES_FULL[wd], 'week': week, 'week_no': academic_week_number(today),
             'lessons': 0, 'groups': 0, 'teachers': 0, 'now': [], 'slot': None, 'next_slot': None,
-            'finished': False, 'error': False, 'timeline': []}
+            'finished': False, 'not_started': False, 'error': False, 'timeline': [], 'free_rooms': None,
+            'rooms_total': 0}
     try:
         snap = load_lessons_snapshot()
     except Exception:
         log.exception('Главная: снапшот расписания недоступен')
         info['error'] = True
         return info
-    iso = today.isoformat()
-    lessons = [l for l in snap.by_day.get(wd, [])
-               if (l['kind'] != 'dated' or l['date'] == iso) and l['week'] in ('always', week)]
+    lessons = _today_lessons(snap, today)
     minute = now.hour * 60 + now.minute
     info['lessons'] = len(lessons)
     info['groups'] = len({l['groupId'] for l in lessons if l['groupId']})
     info['teachers'] = len({l['teacher_key'] for l in lessons if l['teacher_key']})
     info['now'] = [l for l in lessons if l['start'] is not None and l['end'] is not None
                    and l['start'] <= minute < l['end']]
-    slots = [(label, s, e) for label, s, e in call_slots(wd) if s is not None and e is not None]
-    for label, s, e in slots:
-        if s <= minute < e:
-            info['slot'] = {'label': '%02d:%02d–%02d:%02d' % (s // 60, s % 60, e // 60, e % 60)}
-            break
     # загрузка по времени начала: сколько занятий в каждой паре сегодня
     by_time = {}
     for l in lessons:
@@ -203,23 +215,111 @@ def _today_schedule(now):
         key = (l['start'], l['end'] if l['end'] is not None else l['start'])
         by_time[key] = by_time.get(key, 0) + 1
     peak = max(by_time.values()) if by_time else 0
-    info['timeline'] = [{'label': '%02d:%02d–%02d:%02d' % (s // 60, s % 60, e // 60, e % 60), 'count': n,
+    info['timeline'] = [{'label': '%s–%s' % (_hm(s), _hm(e)), 'count': n,
                          'pct': round(n * 100.0 / peak, 1) if peak else 0, 'current': s <= minute < e,
                          'past': e <= minute}
                         for (s, e), n in sorted(by_time.items())]
-    later = [s for _l, s, _e in slots if s > minute]
+    # «идёт N-я пара» — номер по сегодняшним интервалам занятий (сетка звонков содержит служебные слоты)
+    for i, t in enumerate(info['timeline']):
+        if t['current']:
+            info['slot'] = {'label': t['label'], 'number': i + 1}
+            break
+    later = sorted({l['start'] for l in lessons if l['start'] is not None and l['start'] > minute})
     ends = [l['end'] for l in lessons if l['end'] is not None]
-    if later and lessons:
-        nxt = min(later)
-        info['next_slot'] = '%02d:%02d' % (nxt // 60, nxt % 60)
+    if later:
+        info['next_slot'] = _hm(later[0])
+    starts = [l['start'] for l in lessons if l['start'] is not None]
+    info['not_started'] = bool(starts) and minute < min(starts)
     info['finished'] = bool(lessons) and bool(ends) and minute >= max(ends)
+    info['free_rooms'], info['rooms_total'] = _free_rooms_now(snap, lessons, minute)
     return info
 
 
-def _recent_audit(limit=8):
+def _free_rooms_now(snap, lessons, minute):
+    """Свободные сейчас аудитории: все физические аудитории снапшота минус занятые в эту минуту.
+    → (число | None вне учебного времени, всего аудиторий)."""
+    rooms = snap.rooms()
+    busy_now = [l for l in lessons if l['start'] is not None and l['end'] is not None and l['start'] <= minute < l['end']]
+    if not busy_now:
+        return None, len(rooms)
+    busy = {l['room_key'] for l in busy_now if l['room_key']}
+    return len([k for k, _name in rooms if k not in busy]), len(rooms)
+
+
+def _event_day(value):
+    """Дата события (date по Алматы) из Timestamp или строки 'YYYY-MM-DD' (старые записи)."""
+    if value in (None, ''):
+        return None
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value.strip()[:10], '%Y-%m-%d').date()
+        except ValueError:
+            return None
+    dt = to_almaty(value)
+    return dt.date() if dt else None
+
+
+def _content_now():
+    """Активные опросы (до 3) и события на 7 дней вперёд (до 4). Кэш 60 с ('home:content').
+    События: дата хранится Timestamp'ом (новые) или строкой 'YYYY-MM-DD' (старые) — два запроса
+    с одним полем в диапазоне (составной индекс не нужен)."""
     def load():
-        q = db.collection('cms_audit').order_by('at', direction=DESC).limit(limit)
-        return [_audit_row(doc_dict(d)) for d in q.stream()]
+        now = now_utc()
+        data = {'polls': [], 'polls_active': 0, 'polls_next_end': None, 'events': [], 'error': False}
+        try:
+            for d in db.collection('polls').select(['title', 'endTime', 'createdAt']).order_by(
+                    'createdAt', direction=DESC).limit(30).stream():
+                p = d.to_dict() or {}
+                end = to_datetime(p.get('endTime'))
+                if end is not None and end <= now:
+                    continue
+                left = None
+                if end is not None:
+                    days = int((end - now).total_seconds() // 86400)
+                    left = ('ещё %d %s' % (days, plural(days, 'день', 'дня', 'дней')) if days >= 1 else 'меньше суток')
+                data['polls'].append({'id': d.id, 'title': p.get('title') or 'Опрос без названия', 'end': end, 'left': left})
+            data['polls_active'] = len(data['polls'])
+            ends = [p['end'] for p in data['polls'] if p['end']]
+            data['polls_next_end'] = min(ends) if ends else None
+            data['polls'] = data['polls'][:3]
+        except Exception:
+            log.exception('Главная: опросы не загрузились')
+            data['error'] = True
+        try:
+            today = today_almaty()
+            start = datetime(today.year, today.month, today.day, tzinfo=ALMATY)
+            end = start + timedelta(days=8)
+            evs = db.collection('events')
+            found = {}
+            queries = [
+                where(where(evs, 'date', '>=', start.astimezone(timezone.utc)), 'date', '<', end.astimezone(timezone.utc)),
+                where(where(evs, 'date', '>=', today.isoformat()), 'date', '<', (today + timedelta(days=8)).isoformat()),
+            ]
+            for q in queries:
+                for d in q.order_by('date').limit(4).stream():
+                    e = d.to_dict() or {}
+                    day = _event_day(e.get('date'))
+                    if day is None:
+                        continue
+                    found[d.id] = {'id': d.id, 'title': e.get('title') or 'Событие', 'day': day,
+                                   'time': str(e.get('time') or '')[:20], 'location': str(e.get('location') or '')[:60]}
+            data['events'] = sorted(found.values(), key=lambda x: (x['day'], x['time']))[:4]
+        except Exception:
+            log.exception('Главная: события не загрузились')
+            data['error'] = True
+        return data
+    return cache.get_or_set('home:content', load, ttl=HOME_TTL)
+
+
+HIDDEN_FEED_ACTIONS = ('login', 'logout')
+
+
+def _recent_audit(limit=8):
+    """Последние действия админов без входов/выходов: читаем 24 записи, берём limit."""
+    def load():
+        q = db.collection('cms_audit').order_by('at', direction=DESC).limit(24)
+        rows = [_audit_row(doc_dict(d)) for d in q.stream()]
+        return [r for r in rows if r['action'] not in HIDDEN_FEED_ACTIONS][:limit]
     try:
         return cache.get_or_set('audit:recent', load, ttl=HOME_TTL)
     except Exception:
@@ -233,58 +333,230 @@ def _first_name(full):
     return parts[1] if len(parts) >= 2 else (parts[0] if parts else '')
 
 
-def _trend(cur, prev):
-    if not prev:
-        return None
-    return round((cur - prev) * 100.0 / prev)
+def _day_word(d, today):
+    if d == today:
+        return 'сегодня'
+    if d == today + timedelta(days=1):
+        return 'завтра'
+    return '%s, %s' % (d.strftime('%d.%m'), ('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')[d.weekday()])
 
 
 @routes.route('/')
 @admin_required
 def dashboard():
-    """Обзор колледжа: KPI, что требует внимания, сегодня в расписании, регистрации абитуриентов,
-    быстрые действия и последние действия админов."""
+    """Обзор: сегодня в расписании, что требует внимания, ближайшие опросы и события, быстрые действия,
+    последние действия админов; приём и Caspian Coin — одной приглушённой строкой внизу (UX_SPEC_v2 §3)."""
     now = now_almaty()
     kpi = _kpi()
     counts = kpi.get('counts') or {}
-    chart = kpi.get('chart')
-    week_now = week_prev = None
-    if chart:
-        week_now = sum(d['count'] for d in chart[-7:])
-        week_prev = sum(d['count'] for d in chart[:-7])
     orders, feedback = _attention_counts()
     summary = _conflicts_summary()
     today = _today_schedule(now)
+    content = _content_now()
+    critical = (summary or {}).get('critical') or 0
+    warnings = (summary or {}).get('warning') or 0
+    # Требует внимания: накладки → обращения → предупреждения → заказы → лиды (приглушённо, последними)
     attention = []
-    if summary and summary.get('critical'):
-        attention.append({'icon': 'exclamation-octagon', 'tone': 'danger', 'count': summary['critical'],
-                          'label': plural(summary['critical'], 'критичная накладка', 'критичные накладки',
-                                          'критичных накладок') + ' в расписании',
-                          'href': nav_url('schedule_conflicts')})
-    if orders:
-        attention.append({'icon': 'box-seam', 'tone': 'warning', 'count': orders,
-                          'label': plural(orders, 'заказ ждёт', 'заказа ждут', 'заказов ждут') + ' выдачи',
-                          'href': nav_url('coins_orders')})
+    if critical:
+        attention.append({'icon': 'exclamation-octagon', 'tone': 'danger', 'count': critical,
+                          'label': 'Критичные накладки в расписании',
+                          'href': nav_url('schedule_conflicts', severity='critical')})
     if feedback:
-        attention.append({'icon': 'chat-dots', 'tone': 'info', 'count': feedback,
-                          'label': plural(feedback, 'обращение', 'обращения', 'обращений') + ' без ответа',
-                          'href': nav_url('feedback_list')})
+        attention.append({'icon': 'chat-dots', 'tone': 'warning', 'count': feedback,
+                          'label': 'Обращения без ответа',
+                          'href': nav_url('feedback_list', status='new')})
+    if warnings:
+        attention.append({'icon': 'exclamation-triangle', 'tone': 'neutral', 'count': warnings,
+                          'label': 'Предупреждения в расписании',
+                          'href': nav_url('schedule_conflicts', severity='warning')})
+    if orders:
+        attention.append({'icon': 'box-seam', 'tone': 'neutral', 'count': orders,
+                          'label': 'Заказы мерча ждут выдачи',
+                          'href': nav_url('coins_orders')})
     if counts.get('crm_new'):
         n = counts['crm_new']
-        attention.append({'icon': 'person-lines-fill', 'tone': 'violet', 'count': n,
-                          'label': plural(n, 'новый лид', 'новых лида', 'новых лидов') + ' — никто не связался',
+        attention.append({'icon': 'person-lines-fill', 'tone': 'muted', 'count': n,
+                          'label': 'Новые лиды — никто не связался',
                           'href': nav_url('applicants_leads', status='new')})
-    if summary and summary.get('warning'):
-        attention.append({'icon': 'exclamation-triangle', 'tone': 'warning', 'count': summary['warning'],
-                          'label': plural(summary['warning'], 'предупреждение', 'предупреждения',
-                                          'предупреждений') + ' в расписании',
-                          'href': nav_url('schedule_conflicts')})
-    max_day = max([d['count'] for d in chart] or [0]) if chart else 0
+    tday = today_almaty()
+    for e in content['events']:
+        e['when'] = _day_word(e['day'], tday)
+    admissions = {'reg7': kpi.get('reg7'), 'crm_new': counts.get('crm_new') or 0, 'orders': orders or 0}
+    admissions['show'] = any(admissions[k] for k in ('reg7', 'crm_new', 'orders'))
     return render_template(
-        'dashboard.html', now=now, greeting=_greeting(now), counts=counts, chart=chart, max_day=max_day,
-        week_now=week_now, week_prev=week_prev, applicants_trend=_trend(week_now or 0, week_prev),
-        orders=orders, feedback=feedback, summary=summary, today=today, attention=attention,
+        'dashboard.html', now=now, greeting=_greeting(now), counts=counts, orders=orders, feedback=feedback,
+        summary=summary, today=today, attention=attention, content=content, admissions=admissions,
         recent=_recent_audit(), admin_first=_first_name(session.get('admin_name')))
+
+
+# ==================== ПОИСК Ctrl+K (/api/search, UX_SPEC_v2 §2.5) ====================
+
+SEARCH_PER_TYPE = 6
+SEARCH_MAX = 30
+SEARCH_TTL = 300
+ROLE_LABELS = {'student': 'Студент', 'teacher': 'Преподаватель', 'admin': 'Администратор', 'club': 'Клуб',
+               'applicant': 'Абитуриент'}
+
+
+def _compact(s):
+    """Для групп: без пробелов и дефисов ('по241' → 'ПО 24-1')."""
+    return re.sub(r'[\s\-–—_.]+', '', norm_text(s))
+
+
+def _matches(hay, words):
+    return all(w in hay for w in words)
+
+
+def _search_users():
+    """Индекс людей для поиска (кэш 5 мин): name, email, role, group, phone, login."""
+    def load():
+        out = []
+        for d in db.collection('users').select(['name', 'email', 'role', 'group', 'phone', 'login']).limit(5000).stream():
+            u = d.to_dict() or {}
+            role = str(u.get('role') or '')
+            name = str(u.get('name') or '').strip()
+            out.append({'id': d.id, 'name': name, 'email': str(u.get('email') or ''), 'role': role,
+                        'group': str(u.get('group') or ''), 'phone': str(u.get('phone') or ''),
+                        'login': str(u.get('login') or ''),
+                        'hay': norm_text(' '.join([name, str(u.get('email') or ''), str(u.get('group') or ''),
+                                                   str(u.get('phone') or ''), str(u.get('login') or ''), d.id]))})
+        return out
+    return cache.get_or_set('search:users', load, ttl=SEARCH_TTL)
+
+
+def _search_content():
+    """Последние новости и опросы для поиска (кэш 5 мин)."""
+    def load():
+        out = []
+        for coll, kind in (('news', 'news'), ('polls', 'poll')):
+            try:
+                for d in db.collection(coll).select(['title', 'createdAt']).order_by(
+                        'createdAt', direction=DESC).limit(200).stream():
+                    x = d.to_dict() or {}
+                    title = str(x.get('title') or '').strip()
+                    if title:
+                        out.append({'id': d.id, 'kind': kind, 'title': title, 'at': to_datetime(x.get('createdAt')),
+                                    'hay': norm_text(title)})
+            except Exception:
+                log.warning('Поиск: коллекция %s недоступна', coll, exc_info=True)
+        return out
+    return cache.get_or_set('search:content', load, ttl=SEARCH_TTL)
+
+
+def search_entities(q):
+    """Сущности для палитры Ctrl+K: группы, преподаватели, аудитории, люди, новости и опросы."""
+    q = (q or '').strip()
+    if len(q) < 2 or len(q) > 60:
+        return []
+    words = norm_text(q).split()
+    compact = _compact(q)
+    results = []
+    try:
+        snap = load_lessons_snapshot()
+    except Exception:
+        log.exception('Поиск: снапшот расписания недоступен')
+        snap = None
+
+    # группы
+    try:
+        groups = get_all_groups()
+    except Exception:
+        groups = []
+    found = []
+    for g in groups:
+        hay = norm_text(g)
+        if _matches(hay, words) or (compact and compact in _compact(g)):
+            found.append(g)
+    for g in found[:SEARCH_PER_TYPE]:
+        n = len(snap.by_group.get(g, [])) if snap else 0
+        results.append({'type': 'group', 'section': 'Группы', 'label': g,
+                        'sub': '%d %s в расписании' % (n, plural(n, 'занятие', 'занятия', 'занятий')) if n else 'нет занятий',
+                        'url': nav_url('schedule', group=g), 'icon': 'collection',
+                        'actions': [{'label': 'Студенты', 'url': nav_url('admin_users', role='student', group=g)}]})
+
+    # преподаватели
+    try:
+        teachers = get_all_teachers()
+    except Exception:
+        teachers = {}
+    teacher_uids = set()
+    try:
+        teacher_uids = {u['id'] for u in _search_users() if u['role'] == 'teacher'}
+    except Exception:
+        pass
+    found = [(tid, name) for tid, name in teachers.items() if _matches(norm_text(name), words)]
+    for tid, name in found[:SEARCH_PER_TYPE]:
+        n = len(snap.by_teacher.get('uid:%s' % tid, [])) if snap else 0
+        item = {'type': 'teacher', 'section': 'Преподаватели', 'label': name,
+                'sub': '%d %s в неделю' % (n, plural(n, 'пара', 'пары', 'пар')) if n else 'нет занятий',
+                'url': nav_url('schedule_teachers', teacher=tid), 'icon': 'person-badge', 'actions': []}
+        if tid in teacher_uids:
+            item['actions'].append({'label': 'Карточка', 'url': nav_url('teacher_edit', uid=tid)})
+        results.append(item)
+
+    # аудитории
+    if snap:
+        rq = room_key(q) or compact
+        rooms = [(k, name) for k, name in snap.rooms() if rq and (rq in k or _matches(norm_text(name), words))]
+        busy_now = set()
+        try:
+            now = now_almaty()
+            minute = now.hour * 60 + now.minute
+            busy_now = {l['room_key'] for l in _today_lessons(snap, now.date())
+                        if l['start'] is not None and l['end'] is not None and l['start'] <= minute < l['end']}
+        except Exception:
+            pass
+        for k, name in rooms[:SEARCH_PER_TYPE]:
+            n = len(snap.by_room.get(k, []))
+            results.append({'type': 'room', 'section': 'Аудитории', 'label': name,
+                            'sub': ('сейчас занята' if k in busy_now else 'сейчас свободна') + ' · %d %s в неделю' % (
+                                n, plural(n, 'занятие', 'занятия', 'занятий')),
+                            'url': nav_url('schedule_rooms', room=name), 'icon': 'door-open'})
+
+    # люди (абитуриенты — последними)
+    try:
+        users = _search_users()
+    except Exception:
+        log.exception('Поиск: пользователи недоступны')
+        users = []
+    people = [u for u in users if u['role'] != 'teacher' and _matches(u['hay'], words)]
+    people.sort(key=lambda u: (u['role'] == 'applicant', norm_text(u['name'] or u['email'])))
+    for u in people[:SEARCH_PER_TYPE]:
+        role = ROLE_LABELS.get(u['role'], u['role'] or 'Без роли')
+        sub = ' · '.join([x for x in (role, u['group'] or u['email'] or u['login']) if x])
+        url = nav_url('applicant_detail', uid=u['id']) if u['role'] == 'applicant' else nav_url('admin_edit_user', user_id=u['id'])
+        results.append({'type': 'user', 'section': 'Люди', 'label': u['name'] or u['email'] or u['login'] or u['id'],
+                        'sub': sub, 'url': url, 'icon': 'mortarboard' if u['role'] == 'applicant' else 'person'})
+
+    # новости и опросы
+    try:
+        content = _search_content()
+    except Exception:
+        content = []
+    for c in [c for c in content if _matches(c['hay'], words)][:SEARCH_PER_TYPE]:
+        when = fmt_dt(c['at'], '%d.%m.%Y', '') if c['at'] else ''
+        if c['kind'] == 'news':
+            results.append({'type': 'news', 'section': 'Новости и опросы', 'label': c['title'],
+                            'sub': 'Новость' + (' · ' + when if when else ''), 'url': nav_url('news_form', news_id=c['id']),
+                            'icon': 'newspaper'})
+        else:
+            results.append({'type': 'poll', 'section': 'Новости и опросы', 'label': c['title'],
+                            'sub': 'Опрос' + (' · ' + when if when else ''), 'url': nav_url('poll_results', poll_id=c['id']),
+                            'icon': 'ui-checks', 'actions': [{'label': 'Редактировать', 'url': nav_url('poll_form', poll_id=c['id'])}]})
+    return [r for r in results if r.get('url') and r['url'] != '#'][:SEARCH_MAX]
+
+
+@routes.route('/api/search')
+@admin_required
+def api_search():
+    """Поиск сущностей для Ctrl+K: {q, results: [{type, section, label, sub, url, icon, actions}]}."""
+    q = (request.args.get('q') or '').strip()
+    try:
+        results = search_entities(q)
+    except Exception:
+        log.exception('Поиск /api/search упал')
+        results = []
+    return jsonify({'q': q, 'results': results})
 
 
 # ==================== ЖУРНАЛ АУДИТА ====================

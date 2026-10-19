@@ -1,41 +1,67 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# История изменений расписания (владелец — SCHEDULE). #}
+{# История изменений расписания (владелец — SCHEDULE): таблица записей журнала schedule_logs с фильтрами. #}
 {% block title %}История изменений расписания{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{{ ui.page_header('История изменений', 'Кто, что и когда менял в расписании: добавления, правки и удаления занятий', icon='clock-history') }}
-
-{% set tab_items = [{'key': '', 'label': 'Все', 'href': url_with(action=None, page=None), 'icon': 'list-ul', 'count': counts.values()|sum}] %}
-{% for key, meta in action_labels.items() %}{% set _ = tab_items.append({'key': key, 'label': meta[0], 'href': url_with(action=key, page=None), 'icon': meta[2], 'count': counts.get(key, 0)}) %}{% endfor %}
-{{ ui.tabs(tab_items, action, pills=True, label='Тип изменения') }}
-
-{% call ui.filters_bar() %}
-    {{ ui.filter_select('group', 'Группа', log_groups, group, 'Все группы') }}
-    {{ ui.filter_search('q', 'Поиск', q, 'Дисциплина, преподаватель, аудитория, id занятия') }}
-    {% if action %}<input type="hidden" name="action" value="{{ action }}">{% endif %}
-{% endcall %}
+{% set here_url = here() %}
+{{ ui.page_header('История изменений', actions=([{'label': 'Неделя ' ~ group, 'href': url_for('schedule', group=group), 'icon': 'calendar-week'}] if group else [])) }}
 
 {% if load_error %}
-<div class="alert alert-warning" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Журнал сейчас недоступен. Попробуйте обновить страницу через минуту.</div>
+{{ ui.hint('Журнал сейчас недоступен. Попробуйте обновить страницу через минуту.', icon='cloud-slash', tone='warning') }}
 {% endif %}
 
-{% if logs %}
-<section class="cc-card">
-    <div class="cc-card__head">
-        <div><h2 class="cc-card__title">Записи журнала</h2><p class="cc-card__sub">Найдено {{ total }} {{ total|plural('запись', 'записи', 'записей') }}</p></div>
-        {% if group %}{{ ui.button('Расписание ' ~ group, href=url_for('schedule', group=group), icon='calendar-week', variant='light', size='sm') }}{% endif %}
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Дисциплина, преподаватель, аудитория, id', 'label': 'Поиск в журнале'}, inline=True, ignore=('action',)) %}
+        {{ ui.filter_select('group', 'Группа', log_groups, group) }}
+    {% endcall %}
+    <div class="cc-list__chips">
+        {{ ui.filter_chips('action', [('add', 'Добавлено', counts.get('add', 0)), ('update', 'Изменено', counts.get('update', 0)), ('delete', 'Удалено', counts.get('delete', 0))], action, all_count=counts.values()|sum) }}
     </div>
-    <div class="cc-card__body">
-        <ul class="sch-logs">{% for e in logs %}{{ sch.log_item(e) }}{% endfor %}</ul>
-        {{ ui.pagination(page) }}
+    {% if logs %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+    <table class="cc-table cc-table--stack sch-logtable">
+        <thead><tr>
+            <th class="cc-col-md">Когда</th><th>Изменение</th><th class="cc-col-lg">Что поменялось</th><th class="cc-col-md">Кто</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+        </tr></thead>
+        <tbody>
+        {% for e in logs %}
+        <tr>
+            <td class="cc-col-md cc-col-optional cc-nowrap sch-logtable__when" title="{{ e.when }}">{{ e.ago }}<span class="cc-cell-sub d-block">{{ e.when }}</span></td>
+            <td class="cc-cell-primary">
+                <div class="sch-logtable__head">
+                    {{ ui.badge(e.action, e.action_label, e.tone if e.action != 'update' else 'neutral', e.icon) }}
+                    {% if e.group_id %}<a class="sch-logtable__group" href="{{ url_for('schedule', group=e.group_id) }}">{{ e.group_id }}</a>{% endif %}
+                </div>
+                <div class="cc-cell-main sch-logtable__lesson">{{ e.subject or e.lesson_id or '—' }}</div>
+                <div class="cc-cell-sub">{{ [e.day_name, e.time|time_range, e.teacher_name, e.room]|select|join(' · ') }}</div>
+                <div class="cc-cell-sub sch-logtable__mobile-meta">{{ e.ago }} · {{ e.author }}</div>
+            </td>
+            <td class="cc-col-lg{{ ' cc-col-optional' if not e.changes }}" data-label="Изменения">
+                {% if e.changes %}
+                <ul class="sch-log__changes">{% for c in e.changes %}<li><span class="cc-muted">{{ c.label }}:</span> <s>{{ c.old|time_range if c.label == 'Время' else c.old }}</s> <i class="bi bi-arrow-right" aria-hidden="true"></i> <b>{{ c.new|time_range if c.label == 'Время' else c.new }}</b></li>{% endfor %}</ul>
+                {% else %}<span class="cc-muted">—</span>{% endif %}
+            </td>
+            <td class="cc-col-md cc-col-optional sch-logtable__who"><span class="cc-truncate d-block" title="{{ e.author }}">{{ e.author }}</span></td>
+            <td class="cc-actions">{% if e.lesson_exists %}
+                {% set items = [{'label': 'Открыть занятие', 'href': url_for('schedule_edit', schedule_id=e.lesson_id, next=here_url), 'icon': 'pencil', 'attrs': {'data-cc-peek': ''}}] %}
+                {% if e.group_id %}{% set _ = items.append({'label': 'Неделя группы', 'href': url_for('schedule', group=e.group_id), 'icon': 'calendar-week'}) %}{% endif %}
+                {{ ui.row_menu(items, quick={'label': 'Открыть занятие', 'href': url_for('schedule_edit', schedule_id=e.lesson_id, next=here_url), 'icon': 'box-arrow-up-right', 'attrs': {'data-cc-peek': ''}}) }}
+            {% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
     </div>
-</section>
-{% else %}
-<section class="cc-card">{{ ui.empty_state('clock-history', 'Записей нет', 'По выбранным фильтрам изменений не найдено.' if (group or action or q) else 'Изменения расписания появятся здесь после первой правки.', {'label': 'Сбросить фильтры', 'href': url_for('schedule_logs'), 'icon': 'x-lg', 'variant': 'light'} if (group or action or q) else none) }}</section>
-{% endif %}
-<p class="cc-subtle small mt-3"><i class="bi bi-info-circle" aria-hidden="true"></i> Показаны последние {{ fetch_limit }} записей журнала. Сервер автоматически удаляет самые старые записи.</p>
+    {{ ui.pagination(page) }}
+    {% elif group or action or q %}
+    {{ ui.empty_filtered(url_for('schedule_logs')) }}
+    {% else %}
+    {{ ui.empty_state('clock-history', 'Записей пока нет', 'Изменения расписания появятся здесь после первой правки.') }}
+    {% endif %}
+{% endcall %}
+<p class="sch-footnote">Показаны последние {{ fetch_limit }} записей журнала; самые старые сервер удаляет сам.</p>
 {% endblock %}

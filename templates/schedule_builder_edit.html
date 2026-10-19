@@ -2,45 +2,29 @@
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
 {# Редактор всего расписания группы (владелец — SCHEDULE). Показывает ВСЕ занятия группы (в т. ч. записанные
-   приложением только с day_index, воскресные и «без дня»); сохраняет только изменённые; удаляет только отмеченные. #}
-{% block title %}Редактор: {{ group_id }}{% endblock %}
+   приложением только с day_index, воскресные и «без дня»); сохраняет только изменённые; удаляет только отмеченные.
+   Сохранение — JSON (schedule.js перехватывает отправку формы), Ctrl+S — как у обычных форм. #}
+{% block title %}Неделя {{ group_id }}: правка{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{% call ui.page_header('Редактор расписания · ' ~ group_id, lessons_count ~ ' ' ~ lessons_count|plural('занятие', 'занятия', 'занятий') ~ ' · сохраняются только изменения', icon='pencil-square') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    {{ ui.button('Отмена', href=return_url, icon='x-lg', variant='light') }}
-{% endcall %}
+{{ ui.page_header('Правка недели · ' ~ group_id, subtitle=lessons_count ~ ' ' ~ lessons_count|plural('занятие', 'занятия', 'занятий') ~ ' · записываются только изменения',
+                  back={'href': return_url, 'label': group_id}, meta=ui.week_now(current_week, week_number)) }}
 
-<div class="sch-editor" id="schGroupEditor" data-editor="group" data-group="{{ group_id }}"
-     data-save-url="{{ url_for('schedule_update_group') }}" data-check-url="{{ url_for('api_schedule_check') }}"
-     data-return="{{ return_url }}" data-custom-time="{{ f.custom_time }}">
-    <div class="sch-note">
-        <i class="bi bi-info-circle" aria-hidden="true"></i>
-        <div>Изменённые строки подсвечиваются. Удаление происходит только для строк, отмеченных корзиной; занятия, которых
-            вы не трогали, не перезаписываются. После сохранения студенты группы и преподаватели получат <b>одно</b> уведомление.</div>
-    </div>
+<form class="sch-editor" id="schGroupEditor" data-editor="group" data-group="{{ group_id }}"
+      data-save-url="{{ url_for('schedule_update_group') }}" data-check-url="{{ url_for('api_schedule_check') }}"
+      data-return="{{ return_url }}" data-custom-time="{{ f.custom_time }}" data-dirty-guard data-cc-novalidate novalidate>
+    {{ ui.hint('Изменённые строки подсвечиваются. Удаляются только строки, отмеченные «Удалить занятие»; занятия, которых вы не трогали, не перезаписываются. Студенты группы и преподаватели получат одно уведомление.', dismiss='sch-group-editor') }}
     <div class="sch-editor__colhead" aria-hidden="true">
-        <span>День</span><span>Время</span><span>Дисциплина</span><span>Преподаватель</span><span>Ауд.</span><span>Неделя</span><span></span>
+        <span>Время</span><span>Дисциплина</span><span>Преподаватель</span><span>Ауд.</span><span>Неделя</span><span></span>
     </div>
     {{ sch.editor_sections(rows, f) }}
     <div class="sch-editor__more">
-        <button type="button" class="btn btn-light btn-sm" data-show-sunday><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Показать воскресенье</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" data-show-sunday><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Показать воскресенье</span></button>
     </div>
     {{ sch.editor_assets(f) }}
-
-    <div class="sch-savebar" role="region" aria-label="Сохранение">
-        <div class="sch-savebar__stats" aria-live="polite">
-            <span><b data-count-changed>0</b> изменено</span>
-            <span><b data-count-new>0</b> новых</span>
-            <span><b data-count-deleted>0</b> к удалению</span>
-            <span class="sch-savebar__warn" data-count-issues hidden><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><b>0</b> с предупреждениями</span>
-        </div>
-        <div class="sch-savebar__actions">
-            <a class="btn btn-light" href="{{ return_url }}">Отмена</a>
-            <button type="button" class="btn btn-primary" data-editor-save><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить</span></button>
-        </div>
-    </div>
-</div>
+    {% set note %}<span class="sch-counters"><b class="cc-num" data-count-changed>0</b> изменено · <b class="cc-num" data-count-new>0</b> новых · <b class="cc-num" data-count-deleted>0</b> к удалению<span class="sch-counters__warn" data-count-issues hidden> · <i class="bi bi-exclamation-triangle" aria-hidden="true"></i><b class="cc-num">0</b> с предупреждениями</span></span>{% endset %}
+    {{ ui.savebar('Сохранить', cancel_href=return_url, note=note, submit_attrs={'data-editor-save': ''}) }}
+</form>
 {% endblock %}

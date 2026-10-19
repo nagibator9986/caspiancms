@@ -1,90 +1,71 @@
-{# Журнал действий админов (cms_audit). Владелец — PEOPLE. Данные: cms/routes_home.py:audit_log. #}
+{# Журнал действий админов (cms_audit). Шаблон — PEOPLE, данные — cms/routes_home.py:audit_log (контекст не меняется).
+   Список: поиск + пилюли (период, действие, объект, администратор), компактная таблица, на телефоне — карточки. #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% block title %}Аудит{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
 {% block content %}
-{{ ui.page_header('Журнал аудита', 'Кто, когда и что менял в админ-панели',
-                  [{'label': 'Экспорт CSV', 'href': url_with(format='csv', page=None), 'icon': 'download', 'variant': 'light'}],
-                  icon='shield-check') }}
+{{ ui.page_header('Журнал аудита', 'Кто, когда и что менял в админ-панели', [
+    {'menu': [{'label': 'Скачать CSV по фильтрам', 'href': url_with(format='csv', page=None), 'icon': 'download'}]},
+]) }}
 
-<div class="cc-stats">
-    {{ ui.stat_card('Записей', stats.total, 'journal-text', meta='по текущим фильтрам') }}
-    {{ ui.stat_card('Сегодня', stats.today, 'calendar-day', tone='info') }}
-    {{ ui.stat_card('Администраторов', stats.admins, 'people', tone='violet') }}
-    {{ ui.stat_card('Удалений', stats.deletes, 'trash', tone='danger' if stats.deletes else 'success') }}
-</div>
+{% if not error %}
+{% set summary = [(stats.total, plural(stats.total, 'запись', 'записи', 'записей'))] %}
+{% if stats.today and period != 'today' %}{% set _ = summary.append({'value': stats.today, 'label': 'сегодня', 'href': url_with(period='today', page=None, **{'from': None, 'to': None})}) %}{% endif %}
+{% if stats.admins %}{% set _ = summary.append((stats.admins, plural(stats.admins, 'администратор', 'администратора', 'администраторов'))) %}{% endif %}
+{% if stats.deletes %}{% set _ = summary.append({'value': stats.deletes, 'label': plural(stats.deletes, 'удаление', 'удаления', 'удалений')}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+{% endif %}
 
-{% set period_tabs = [] %}
-{% for key, label in periods %}
-    {% set _ = period_tabs.append({'key': key, 'label': label, 'icon': 'calendar-range' if key == 'custom' else None,
-                                   'href': url_with(period=key or None, page=None, **{'from': None, 'to': None})}) %}
-{% endfor %}
-{{ ui.tabs(period_tabs, period, pills=True, label='Период') }}
-
-{% call ui.filters_bar() %}
-    {% if period %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
-    {{ ui.filter_search('q', 'Поиск', q, 'id объекта, email, детали…') }}
-    {{ ui.filter_select('action', 'Действие', facets.actions, action) }}
-    {{ ui.filter_select('entity', 'Объект', facets.entities, entity) }}
-    {{ ui.filter_select('by', 'Администратор', facets.admins, by) }}
-    {% if period == 'custom' %}
-    {{ ui.filter_input('from', 'С даты', date_from, 'date') }}
-    {{ ui.filter_input('to', 'По дату', date_to, 'date') }}
-    {% endif %}
-{% endcall %}
-
-{% if error %}
-    {% call ui.card() %}{{ ui.empty_state('cloud-slash', 'Журнал не загрузился', 'Firestore временно недоступен — обновите страницу через минуту.') }}{% endcall %}
-{% elif rows %}
-<section class="cc-card">
-    <div class="cc-table-wrap">
-        <table class="cc-table pp-audit">
-            <thead>
-                <tr><th class="pp-audit__time">Время</th><th>Действие</th><th>Объект</th><th class="d-none d-md-table-cell">Детали</th><th class="d-none d-lg-table-cell">Кто</th></tr>
-            </thead>
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'id объекта, email, детали…', 'label': 'Поиск по журналу'}, inline=True) %}
+        {{ ui.filter_select('period', 'Период', periods[1:], period, all_label='Всё время') }}
+        {% if period == 'custom' %}
+        {{ ui.filter_input('from', 'С', date_from, 'date') }}
+        {{ ui.filter_input('to', 'По', date_to, 'date') }}
+        {% endif %}
+        {{ ui.filter_select('action', 'Действие', facets.actions, action) }}
+        {{ ui.filter_select('entity', 'Объект', facets.entities, entity) }}
+        {{ ui.filter_select('by', 'Кто', facets.admins, by) }}
+    {% endcall %}
+    {% if error %}
+        {{ ui.empty_state('cloud-slash', 'Журнал не загрузился', 'Firestore временно недоступен — обновите страницу через минуту.') }}
+    {% elif rows %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+        <table class="cc-table cc-table--compact cc-table--stack pp-audit">
+            <thead><tr><th class="pp-audit__time">Время</th><th>Действие</th><th>Объект</th><th class="cc-col-md">Детали</th><th class="cc-col-lg">Кто</th></tr></thead>
             <tbody>
             {% for e in rows %}
                 {% if e.day is defined %}
                 <tr class="pp-day-row"><th colspan="5" scope="rowgroup">{{ e.day }}</th></tr>
                 {% else %}
                 <tr>
-                    <td class="cc-nowrap pp-audit__time"><span class="cc-cell-main cc-num" title="{{ e.at|dt }}">{{ e.at|timeonly }}</span></td>
-                    <td>{{ ui.badge(e.action, e.action_label, e.tone) }}</td>
-                    <td class="pp-audit__entity">
+                    <td class="cc-cell-meta cc-nowrap pp-audit__time"><span class="cc-num" title="{{ e.at|dt }}">{{ e.at|timeonly }}</span></td>
+                    <td class="cc-cell-meta pp-audit__action">{{ ui.badge(e.action, e.action_label, e.tone if e.tone == 'danger' or e.action in ('create', 'enable') else 'neutral') }}</td>
+                    <td class="cc-cell-primary pp-audit__entity">
                         <span class="cc-cell-main">{{ e.entity_label }}</span>
-                        {% if e.entity_id %}
-                        <div class="cc-cell-sub cc-truncate">{% if e.link %}<a href="{{ e.link }}">{{ e.entity_id }}</a>{% else %}{{ e.entity_id }}{% endif %}</div>
-                        {% endif %}
-                        <div class="pp-mobile-meta d-lg-none">
-                            <span class="cc-subtle cc-truncate">{{ e.by or 'система' }}</span>
-                            {% if e.details %}<span class="cc-subtle d-md-none pp-audit__brief">{% for k, v in e.details[:2] %}{% if k %}{{ k }}: {% endif %}{{ v }}{{ '; ' if not loop.last }}{% endfor %}</span>{% endif %}
-                        </div>
+                        {% if e.entity_id %}<span class="cc-cell-sub pp-audit__id">{% if e.link %}<a href="{{ e.link }}">{{ e.entity_id }}</a>{% else %}{{ e.entity_id }}{% endif %}</span>{% endif %}
                     </td>
-                    <td class="pp-audit__details d-none d-md-table-cell">
+                    <td class="pp-audit__details cc-col-md{{ ' pp-empty' if not e.details }}">
                         {% if e.details %}
                         <ul class="pp-details">
                             {% for k, v in e.details %}<li>{% if k %}<span>{{ k }}:</span> {% endif %}{{ v }}</li>{% endfor %}
                         </ul>
                         {% else %}<span class="cc-subtle">—</span>{% endif %}
                     </td>
-                    <td class="pp-audit__who d-none d-lg-table-cell"><span class="cc-truncate d-block" title="{{ e.by }}">{{ e.by or 'система' }}</span></td>
+                    <td class="pp-audit__who cc-col-lg"><span class="pp-clip" title="{{ e.by }}">{{ e.by or 'система' }}</span></td>
                 </tr>
                 {% endif %}
             {% endfor %}
             </tbody>
         </table>
     </div>
-</section>
-{{ ui.pagination(page) }}
-{% if stats.limit_hit %}<p class="cc-muted small mt-2"><i class="bi bi-info-circle" aria-hidden="true"></i> Просмотрены последние {{ scan_limit|num }} записей. Для более старых выберите «Свои даты».</p>{% endif %}
-{% else %}
-    {% call ui.card() %}
-        {% if q or action or entity or by or period or date_from or date_to %}
-            {{ ui.empty_state('funnel', 'Ничего не найдено', 'Измените фильтры или период.', {'label': 'Сбросить фильтры', 'href': url_for('audit_log'), 'icon': 'x-lg', 'variant': 'light'}) }}
-        {% else %}
-            {{ ui.empty_state('shield-check', 'Журнал пуст', 'Здесь появятся входы админов, правки, сбросы паролей и другие действия.') }}
-        {% endif %}
-    {% endcall %}
-{% endif %}
+    {{ ui.pagination(page) }}
+    {% if stats.limit_hit %}<div class="cc-list__foot cc-subtle small"><i class="bi bi-info-circle" aria-hidden="true"></i> Просмотрены последние {{ scan_limit|num }} записей. Для более старых выберите период «Свои даты».</div>{% endif %}
+    {% elif q or action or entity or by or period or date_from or date_to %}
+        {{ ui.empty_filtered(url_for('audit_log'), 'Ничего не найдено. Измените фильтры или период.') }}
+    {% else %}
+        {{ ui.empty_state('shield-check', 'Журнал пуст', 'Здесь появятся входы админов, правки, сбросы паролей и другие действия.') }}
+    {% endif %}
+{% endcall %}
 {% endblock %}

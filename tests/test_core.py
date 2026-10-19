@@ -327,3 +327,247 @@ class CredentialsGuardTest(CmsTestCase):
         from google.auth.exceptions import RefreshError
         with mock.patch.object(self.core, '_probe_credentials', side_effect=RefreshError('invalid_grant')):
             self.assertEqual(self.client.get('/static/css/app.css').status_code, 200)
+
+
+class NavigationV2Test(CmsTestCase):
+    """UX_SPEC_v2 §2: порядок сайдбара, свёрнутые второстепенные группы, NAV_PARENT, крошки-ссылки."""
+
+    def test_sidebar_order_secondary_last(self):
+        from cms.core import NAV_COLLAPSED, NAV_SECTIONS
+        titles = [t for t, _i, _items in NAV_SECTIONS]
+        self.assertEqual(titles[:5], ['Главная', 'Расписание', 'Контент', 'Люди', 'Сервис'])
+        self.assertEqual(titles[-2:], ['Абитуриенты', 'Caspian Coin'])
+        self.assertEqual(NAV_COLLAPSED, frozenset({'Абитуриенты', 'Caspian Coin'}))
+        html = self.get_ok('/')
+        pos = [html.index('data-nav-group="%s"' % t) for t in titles[1:]]
+        self.assertEqual(pos, sorted(pos))
+        self.assertIn('cc-nav-sep', html)   # разделитель перед второстепенными группами
+
+    def test_collapsed_group_renders_items_and_badges(self):
+        html = self.get_ok('/')
+        self.assertRegex(html, r'class="cc-nav-group cc-nav-group--secondary" data-nav-group="Абитуриенты"')
+        self.assertRegex(html, r'class="cc-nav-group is-open" data-nav-group="Расписание"')
+        self.assertIn('Лиды', html)   # пункты свёрнутой группы в HTML (Ctrl+K, бейджи)
+        self.assertRegex(html, r'Заказы</span>\s*<span class="cc-nav-badge cc-nav-badge--muted">3<')
+        self.assertRegex(html, r'Обратная связь</span>\s*<span class="cc-nav-badge cc-nav-badge--brand">3<')
+        self.assertIn('cc-nav-group__count cc-nav-group__count--muted', html)   # сумма бейджей свёрнутой группы
+
+    def test_child_page_highlights_parent_and_crumbs(self):
+        html = self.get_ok('/applicants/ap_001')
+        self.assertRegex(html, r'class="cc-nav-group is-open cc-nav-group--secondary" data-nav-group="Абитуриенты" data-nav-active')
+        self.assertRegex(html, r'class="cc-nav-link active" href="/applicants/leads" aria-current="page"')
+        self.assertNotRegex(html, r'class="cc-nav-link active" href="/applicants"[ >]')
+        self.assertIn('<a href="/applicants/leads" data-cc-back>Лиды</a>', html)   # крошка — ссылка на список
+        self.assertIn('<span>Абитуриенты</span>', html)
+        self.assertIn('cc-topbar__back', html)   # на телефоне — «‹ Лиды»
+
+    def test_sidebar_items_and_extra_search(self):
+        html = self.get_ok('/schedule/rooms')
+        self.assertIn('>Аудитории</span>', html)
+        self.assertNotIn('>Конструктор</span>', html)   # конструктор — действие, а не раздел
+        import json
+        import re
+        data = json.loads(re.search(r'<script type="application/json" id="cc-nav-data">(.*?)</script>', html, re.S).group(1))
+        labels = {d['label'] for d in data}
+        self.assertIn('Добавить занятие (конструктор)', labels)
+        self.assertIn('Журнал коинов', labels)
+        self.assertIn('command', {d.get('kind') for d in data})
+
+    def test_set_nav_active_and_parent_rules(self):
+        from cms import core
+        self.assertEqual(core.NAV_PARENT['coins_journal'], 'coins_shop')
+        with self.app.test_request_context('/coins/journal'):
+            core.set_nav_active('applicants_leads')
+            self.assertEqual(core._active_endpoint(), 'applicants_leads')
+        html = self.get_ok('/coins/journal')   # дочерняя страница Coin → «Магазин мерча», группа раскрыта
+        self.assertRegex(html, r'class="cc-nav-link active" href="/coins/shop" aria-current="page"')
+
+
+class UiHelpersTest(CmsTestCase):
+    """UX_SPEC_v2 §4.15: back_url, here, flash_action/pop_toasts, view_param, filter_state, time_range, частичный рендер."""
+
+    def test_back_url_only_local(self):
+        from cms.core import back_url
+        for bad in ('//evil.example/x', 'http://evil.example/', 'https://x', 'javascript:alert(1)', '/\\evil'):
+            with self.app.test_request_context('/news/add?next=' + bad):
+                self.assertEqual(back_url('news'), '/news', bad)
+        with self.app.test_request_context('/news/add?next=/news%3Fcategory%3Devents%26page%3D2'):
+            self.assertEqual(back_url('news'), '/news?category=events&page=2')
+        with self.app.test_request_context('/x', method='POST', data={'next': '/polls?status=active'}):
+            self.assertEqual(back_url('news'), '/polls?status=active')
+
+    def test_here_callable_and_str(self):
+        from cms.core import here
+        with self.app.test_request_context('/news?category=events'):
+            self.assertEqual(here(), '/news?category=events')
+            self.assertEqual(str(here), '/news?category=events')
+        with self.app.test_request_context('/news'):
+            self.assertEqual(here(), '/news')
+
+    def test_flash_action_and_pop_toasts(self):
+        r = self.post('/ui-kit', data={'demo': 'toast'})
+        self.assertRedirectsTo(r, '/ui-kit')
+        fl = self.flashes()
+        self.assertIn(('success', 'Готово: статус изменён'), fl)   # обычный flash не ломает старые проверки
+        self.assertEqual(fl[-1][0], 'cc-action')
+        html = self.get_ok('/ui-kit')
+        self.assertIn('data-has-action', html)
+        self.assertRegex(html, r'<form method="post" action="/ui-kit" class="cc-toast__form">\s*<input type="hidden" name="csrf_token"')
+        self.assertIn('class="cc-toast__action">Отменить</button>', html)
+        self.assertNotIn('cc-action', html.split('id="ccToasts"')[1][:2000].replace('cc-toast__action', ''))
+        # отмена — POST с CSRF
+        r = self.post('/ui-kit', data={'demo': 'undo'})
+        self.assertIn(('info', 'Действие отменено'), self.flashes())
+
+    def test_pop_toasts_merges_and_rejects_unsafe(self):
+        from flask import flash
+        from cms.core import flash_action, pop_toasts
+        with self.app.test_request_context('/'):
+            flash_action('Новость опубликована', 'Открыть', href='/news/edit/x')
+            flash_action('Опасно', 'Открыть', href='https://evil.example/')
+            flash('Просто сообщение', 'error')
+            toasts = pop_toasts()
+        self.assertEqual([t['message'] for t in toasts], ['Новость опубликована', 'Опасно', 'Просто сообщение'])
+        self.assertEqual(toasts[0]['action'], {'label': 'Открыть', 'href': '/news/edit/x'})
+        self.assertIsNone(toasts[1]['action'])
+        self.assertEqual(toasts[2]['category'], 'danger')
+
+    def test_view_param(self):
+        from cms.core import view_param
+        with self.app.test_request_context('/x?view=cards'):
+            self.assertEqual(view_param('t', ('table', 'cards'), 'table'), 'cards')
+        with self.app.test_request_context('/x?view=evil', headers={'Cookie': 'cc_view_t=cards'}):
+            self.assertEqual(view_param('t', ('table', 'cards'), 'table'), 'cards')
+        with self.app.test_request_context('/x', headers={'Cookie': 'cc_view_t=bad'}):
+            self.assertEqual(view_param('t', ('table', 'cards'), 'table'), 'table')
+
+    def test_filter_state(self):
+        from cms.core import filter_state
+        with self.app.test_request_context('/news?q=день&category=events&page=2&status=new&photo='):
+            st = filter_state(ignore=('status',), search_name='q')
+        self.assertEqual(st['count'], 2)
+        self.assertEqual(st['sheet_count'], 1)
+        self.assertEqual(st['reset'], '/news?status=new')
+        self.assertEqual(st['keep'], [('status', 'new')])
+
+    def test_time_range_filter(self):
+        from cms.core import fmt_time_range
+        self.assertEqual(fmt_time_range('13.00-13.50'), '13:00–13:50')
+        self.assertEqual(fmt_time_range('8.30 – 9.50'), '08:30–09:50')
+        self.assertEqual(fmt_time_range('13:00-13:50'), '13:00–13:50')
+        self.assertEqual(fmt_time_range('09.20'), '09:20')
+        self.assertEqual(fmt_time_range('после обеда'), 'после обеда')
+        self.assertEqual(fmt_time_range('25.00-26.00'), '25.00-26.00')
+        self.assertEqual(fmt_time_range(None), '')
+        with self.app.test_request_context('/'):
+            from flask import render_template_string
+            self.assertEqual(render_template_string("{{ '14.05-14.55'|time_range }}"), '14:05–14:55')
+
+    def test_partial_render(self):
+        html = self.client.get('/ui-kit', headers={'X-CC-Partial': '1'}).get_data(as_text=True)
+        self.assertNotIn('cc-sidebar', html)
+        self.assertNotIn('<!DOCTYPE', html)
+        self.assertIn('cc-peek-fragment', html)
+        self.assertIn('peek_status', html)          # {% block peek %} страницы
+        full = self.get_ok('/news/edit/news_open_day')
+        part = self.client.get('/news/edit/news_open_day', headers={'X-CC-Partial': '1'})
+        self.assertEqual(part.status_code, 200)
+        self.assertIn('X-CC-Partial', part.headers.get('Vary', ''))
+        body = part.get_data(as_text=True)
+        self.assertIn('<form', body)
+        self.assertNotIn('cc-sidebar', body)
+        self.assertIn('cc-sidebar', full)
+
+    def test_partial_does_not_consume_flashes(self):
+        self.post('/ui-kit', data={'demo': 'delete'})
+        self.client.get('/ui-kit', headers={'X-CC-Partial': '1'})
+        self.assertTrue(any(m.startswith('Демо: запись') for _c, m in self.flashes()))
+
+    def test_ui_kit_contract_markers(self):
+        html = self.get_ok('/ui-kit')
+        for marker in ('cc-summary', 'cc-stat-strip', 'cc-filters--inline', 'cc-fsel', 'offcanvas-md', 'data-cc-search',
+                       'data-cc-filter="#kitRows"', 'cc-table--stack', 'data-cc-select-all="kitBulk"', 'data-cc-select="kitBulk"',
+                       'data-cc-bulkbar="kitBulk"', 'cc-row-menu', '"strategy":"fixed"', 'cc-segmented', 'data-cc-view="ui_kit"',
+                       'cc-chips', 'cc-hint', 'data-cc-hint="kit-hint-demo"', 'cc-legend', 'cc-week-chip', 'cc-badge--role',
+                       'cc-details', 'data-cc-collapse-key', 'cc-savebar', 'data-cc-save', 'formaction="/ui-kit?demo=delete"',
+                       'cc-form-errors', 'cc-form-layout', 'data-cc-peek', 'cc-modal-form', 'data-cc-hotkey="n"',
+                       'cc-kbd', 'cc-skel', 'Ничего не найдено по фильтрам', 'data-cc-back', 'cc-page-header__back',
+                       'cc-page-header__meta', 'cc-header-menu', 'ccPeek', 'ccHotkeys', 'ccProgress', 'cc-create-btn'):
+            self.assertIn(marker, html)
+        self.assertNotIn('<h1><i class="bi', html)   # в h1 нет иконки
+
+    def test_bulk_demo(self):
+        r = self.post('/ui-kit', data={'demo': 'bulk', 'action': 'delete', 'ids': ['a', 'b']})
+        self.assertRedirectsTo(r, '/ui-kit')
+        self.assertIn(('success', 'Демо: действие «delete» для 2 записей'), self.flashes())
+
+
+class DashboardV2Test(CmsTestCase):
+    """UX_SPEC_v2 §3: приоритет расписания, абитуриенты — одной строкой внизу."""
+
+    def test_dashboard_blocks_and_priorities(self):
+        from unittest import mock
+        from cms.core import cache
+        cache.invalidate_prefix('home:')
+        with mock.patch('cms.conflicts.summary', return_value={'critical': 8, 'warning': 3, 'teachers': 6}):
+            html = self.get_ok('/')
+        for text in ('Пары сегодня', 'Сегодня в колледже', 'Требует внимания', 'Ближайшее: опросы и события',
+                     'Быстрые действия', 'Последние действия', 'Приём и Caspian Coin'):
+            self.assertIn(text, html)
+        self.assertNotIn('Регистрации абитуриентов', html)   # график с главной убран
+        self.assertNotIn('cc-trend', html)                   # и тренд «−58%»
+        self.assertNotIn('pp-attention', html)               # стили дашборда — в home.css
+        self.assertIn('css/home.css', html)
+        # порядок «Требует внимания»: накладки → обращения → предупреждения → заказы → лиды
+        order = [html.index(t) for t in ('Критичные накладки в расписании', 'Обращения без ответа',
+                                          'Предупреждения в расписании', 'Заказы мерча ждут выдачи', 'Новые лиды')]
+        self.assertEqual(order, sorted(order))
+        self.assertLess(html.index('Требует внимания'), html.index('Приём и Caspian Coin'))
+        # KPI «Абитуриенты» нет — только приглушённая строка
+        self.assertNotIn('cc-stat__label" title="Абитуриенты"', html)
+        self.assertIn('Опрос', html)
+        self.assertIn('Оцените работу столовой', html)       # активный опрос из сида
+        self.assertIn('День открытых дверей', html)          # событие через 6 дней
+        self.assertNotIn('Спартакиада колледжа', html)       # прошедшее событие
+        self.assertIn('data-cc-hotkey="n"', html)
+
+    def test_recent_feed_hides_logins(self):
+        from cms.core import cache
+        cache.invalidate_prefix('audit:')
+        html = self.get_ok('/')
+        feed = html.split('Последние действия', 1)[1]
+        self.assertNotIn('>Вход<', feed)
+
+
+class SearchApiTest(CmsTestCase):
+    """UX_SPEC_v2 §2.5: /api/search — группы, преподаватели, аудитории, люди."""
+
+    def _search(self, q):
+        r = self.client.get('/api/search', query_string={'q': q})
+        self.assertEqual(r.status_code, 200)
+        return r.get_json()['results']
+
+    def test_groups_teachers_rooms_people(self):
+        res = self._search('ПО 24')
+        labels = [r['label'] for r in res if r['type'] == 'group']
+        self.assertIn('ПО 24-1', labels)
+        self.assertIn('ПО 24-2', labels)
+        self.assertTrue(all(r['section'] == 'Группы' for r in res if r['type'] == 'group'))
+        self.assertIn('ПО 24-1', [r['label'] for r in self._search('по241') if r['type'] == 'group'])
+        t = [r for r in self._search('петров') if r['type'] == 'teacher']
+        self.assertEqual(t[0]['label'], 'Петров Дмитрий Игоревич')
+        self.assertIn('/schedule/teachers?teacher=t_petrov', t[0]['url'])
+        self.assertIn('/teachers/edit/t_petrov', t[0]['actions'][0]['url'])
+        rooms = [r for r in self._search('204') if r['type'] == 'room']
+        self.assertTrue(rooms and rooms[0]['label'] == '204', rooms)
+        people = [r for r in self._search('мухамбетов') if r['type'] == 'user']
+        self.assertEqual(people[0]['label'], 'Мухамбетов Ербол Кайратович')
+        self.assertIn('/admin/users/edit/admin_2', people[0]['url'])
+
+    def test_short_and_long_queries(self):
+        self.assertEqual(self._search('п'), [])
+        self.assertEqual(self._search('x' * 61), [])
+
+    def test_anonymous_401(self):
+        r = self.app.test_client().get('/api/search?q=ПО')
+        self.assertEqual(r.status_code, 401)

@@ -7,6 +7,7 @@
 #   tests/run_tests.sh 18600 tests.test_conflicts
 
 import io
+import json
 import os
 import random
 import time
@@ -489,8 +490,10 @@ if os.environ.get('FIRESTORE_EMULATOR_HOST'):
             html = self.get_ok('/schedule/rooms')
             self.assertIn('Аудиторный фонд', html)
             self.assertIn('Свободные аудитории', html)   # вкладки
-            self.assertIn('rm-card', html)
+            self.assertIn('rm-matrix', html)              # по умолчанию — шахматка дня (SCH-13)
+            self.assertIn('rm-card', self.get_ok('/schedule/rooms?view=cards'))
             self.get_ok('/schedule/rooms?view=table')
+            self.get_ok('/schedule/rooms?view=matrix&day=2&week=numerator')
             single = self.get_ok('/schedule/rooms?room=%D0%9A%D0%B0%D0%B1.%20204')   # «Каб. 204» → та же «204»
             self.assertIn('rm-grid--single', single)
             self.assertIn('ВТ 24-1', single)
@@ -635,6 +638,48 @@ if os.environ.get('FIRESTORE_EMULATOR_HOST'):
             self.assertRedirectsTo(r, '/schedule/conflicts?dim=room')
             r = self.post('/schedule/conflicts/refresh', {'next': 'https://evil.example/'})
             self.assertRedirectsTo(r, '/schedule/conflicts')
+
+    class UxV2Test(CmsTestCase):
+        """UX v2: «Принять» без подтверждения с «Отменить» в тосте, период, подписи пар, шахматка."""
+
+        def test_accept_offers_undo_and_undo_returns(self):
+            from cms import conflicts
+            c = _find(_analysis(), 'teacher', 'cf_petrov_a', 'cf_petrov_b')
+            r = self.post('/schedule/conflicts/ack', {'hash': c['hash'], 'next': '/schedule/conflicts?dim=teacher'})
+            self.assertRedirectsTo(r, '/schedule/conflicts')
+            flashes = self.flashes()
+            self.assertIn('Накладка принята', ' '.join(t for cat, t in flashes if cat == 'success'))
+            action = json.loads([t for cat, t in flashes if cat == 'cc-action'][0])
+            self.assertEqual(action['label'], 'Отменить')
+            self.assertEqual(action['post'], '/schedule/conflicts/unack')
+            self.assertEqual(action['fields']['hashes'], c['hash'])
+            self.assertIsNotNone(self.doc('schedule_conflict_acks', c['hash']))
+            r = self.post(action['post'], action['fields'])          # «Отменить» из тоста
+            self.assertRedirectsTo(r, '/schedule/conflicts')
+            self.assertIsNone(self.doc('schedule_conflict_acks', c['hash']))
+            self.assertGreaterEqual(conflicts.summary()['critical'], 5)
+
+        def test_period_filter_and_tabs(self):
+            html = self.get_ok('/schedule/conflicts?period=week')
+            self.assertIn('cc-tab__count', html)                     # счётчики — во вкладках измерений
+            self.assertNotIn('Аудиторный фонд</span>', html)         # у «Накладок» свой пункт — без вкладок фонда
+            self.get_ok('/schedule/conflicts?period=today&dim=room')
+            only = self.get_ok('/schedule/conflicts?period=numerator&teacher=t_seitkali')
+            self.assertIn('id="ent-1">Сейтқали', only)              # накладка только по числителю
+            none = self.get_ok('/schedule/conflicts?period=denominator&teacher=t_seitkali')
+            self.assertNotIn('id="ent-1"', none)
+
+        def test_free_rooms_slot_labels_and_room_matrix(self):
+            html = self.get_ok('/schedule/free-rooms?day=0')
+            self.assertIn('1 пара', html)
+            self.assertIn('Перемены, кураторский час', html)         # служебные слоты — отдельно
+            self.assertIn('fr-slot-select', html)                    # на телефоне — select вместо чипов
+            # ссылка из правки занятия: «с — по» совпадает с парой сетки → выбрана эта пара
+            sel = self.get_ok('/schedule/free-rooms?day=2&from=13:00&to=13:50')
+            self.assertRegex(sel, r'class="cc-chip cc-num active[^"]*"[^>]*><span><b>\d+ пара</b> · 13:00–13:50')
+            matrix = self.get_ok('/schedule/rooms?view=matrix&day=2')
+            self.assertIn('/schedule/builder?day=2', matrix)         # свободная клетка → «добавить занятие здесь»
+            self.assertIn('data-cc-peek', matrix)                    # занятая → быстрый просмотр занятия
 
     class FixTest(CmsTestCase):
 

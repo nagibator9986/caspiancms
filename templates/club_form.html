@@ -1,42 +1,63 @@
-{# Клуб: создание/правка (поля как в club_service.dart) (CONTENT). #}
+{# Клуб: создание/правка (поля как в club_service.dart). Слева — поля, справа — превью «как в приложении» (CONTENT). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% set is_edit = club is not none %}
 {% block title %}{{ 'Редактирование клуба' if is_edit else 'Новый клуб' }}{% endblock %}
-{% block page_title %}{{ 'Редактирование клуба' if is_edit else 'Новый клуб' }}{% endblock %}
 {% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
 {% call ui.page_header('Редактирование клуба' if is_edit else 'Новый клуб',
                        ('Участников: ' ~ (club.registrationsCount or 0)) if is_edit else 'Студенты вступают в клуб в приложении',
-                       icon='stars') %}
-    {% if is_edit %}{{ ui.button('Участники', href=url_for('club_registrations', club_id=club.id), icon='people', variant='light') }}{% endif %}
-    {{ ui.button('К списку', href=url_for('clubs'), icon='arrow-left', variant='light') }}
+                       back={'href': back_url('clubs'), 'label': 'Клубы'}) %}
+    {% if is_edit %}
+    {{ ui.button('Участники', href=url_for('club_registrations', club_id=club.id), icon='people', variant='light') }}
+    {{ ui.header_menu([
+        {'label': 'Удалить клуб', 'action': url_for('club_delete', club_id=club.id), 'fields': {'next': back_url('clubs')}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+         'confirm': 'Удалить клуб «' ~ (values.title or '') ~ '» вместе со списком участников? Из приложения он тоже пропадёт.'},
+    ]) }}
+    {% endif %}
 {% endcall %}
 
-<form method="post" enctype="multipart/form-data" class="ct-editor ct-editor--single" data-dirty-guard novalidate>
-    {{ ui.csrf_field() }}
-    <div class="ct-editor__main">
-        {% call ui.card('О клубе', icon='card-text') %}
-            {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
-            {{ ui.field('description', 'Описание', 'textarea', value=values.description, rows=5, error=errors.description, attrs={'maxlength': 5000}) }}
-            {{ ui.image_uploader('image', [{'url': club.imageUrl}] if (is_edit and club.imageUrl) else [], max=1, label='Обложка',
-                                 help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ.') }}
-            {% if errors.image %}<div class="invalid-feedback d-block mb-2">{{ errors.image }}</div>{% endif %}
-        {% endcall %}
-    </div>
-    <aside class="ct-editor__side">
-        {% call ui.card('Детали', icon='info-circle') %}
-            {{ ui.field('category', 'Категория', 'select', value=values.category, options=categories, required=True, error=errors.category,
-                        help='«Физкультура» — вкладка спортивных секций в приложении') }}
-            {{ ui.field('meetingTime', 'Когда встречается', value=values.meetingTime, error=errors.meetingTime, placeholder='Пн, Ср 16:00', attrs={'maxlength': 100}) }}
-            {{ ui.field('location', 'Где', value=values.location, error=errors.location, placeholder='Кабинет 204', attrs={'maxlength': 200}) }}
-            {{ ui.field('curator', 'Куратор', value=values.curator, error=errors.curator, placeholder='ФИО руководителя', attrs={'maxlength': 200}) }}
-        {% endcall %}
-        <div class="ct-editor__actions">
-            {{ ui.button('Отмена', href=url_for('clubs'), variant='light') }}
-            {{ ui.button('Сохранить' if is_edit else 'Создать клуб', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+<form method="post" enctype="multipart/form-data" id="clubForm" data-dirty-guard data-ct-preview-form novalidate>
+    {{ ui.csrf_field() }}{{ ui.next_field() }}
+    <div class="cc-form-layout">
+        <div class="cc-stack">
+            {{ ui.form_errors(errors) }}
+            {% call ui.card() %}
+                <div class="row g-3">
+                    <div class="col-sm-7">{{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, placeholder='Например: Шахматный клуб', attrs={'maxlength': 200, 'autocomplete': 'off'}, classes='') }}</div>
+                    <div class="col-sm-5">{{ ui.field('category', 'Категория', 'select', value=values.category, options=categories, required=True, error=errors.category,
+                                                      help='«Физкультура» — вкладка секций в приложении', classes='') }}</div>
+                </div>
+                {{ ui.field('description', 'Описание', 'textarea', value=values.description, rows=4, error=errors.description, attrs={'maxlength': 5000}, classes='mb-3 mt-3') }}
+                {{ ui.image_uploader('image', [{'url': club.imageUrl}] if (is_edit and club.imageUrl) else [], max=1, label='Обложка', id='f-image',
+                                     help='Необязательно. Одна картинка JPG, PNG, WEBP или GIF до 10 МБ. Можно перетащить или вставить (Ctrl+V).') }}
+                {% if errors.image %}<div class="invalid-feedback d-block mb-3">{{ errors.image }}</div>{% endif %}
+                <div class="row g-3">
+                    <div class="col-sm-4">{{ ui.field('meetingTime', 'Когда встречается', value=values.meetingTime, error=errors.meetingTime, placeholder='Пн, Ср 16:00', attrs={'maxlength': 100}, classes='') }}</div>
+                    <div class="col-sm-4">{{ ui.field('location', 'Где', value=values.location, error=errors.location, placeholder='Кабинет 204', attrs={'maxlength': 200}, classes='') }}</div>
+                    <div class="col-sm-4">{{ ui.field('curator', 'Куратор', value=values.curator, error=errors.curator, placeholder='ФИО руководителя', attrs={'maxlength': 200}, classes='') }}</div>
+                </div>
+            {% endcall %}
         </div>
-    </aside>
+        <aside class="cc-form-aside" aria-label="Превью">
+            {% call ui.card('Как увидят в приложении', classes='ct-preview-card') %}
+                <article class="ct-phone" data-ct-preview-card>
+                    <div class="ct-phone__media" data-ct-preview-media>
+                        <img alt="" data-ct-preview-img hidden>
+                        <div class="ct-phone__placeholder" data-ct-preview-empty><i class="bi bi-stars" aria-hidden="true"></i><span>Без обложки</span></div>
+                    </div>
+                    <div class="ct-phone__body">
+                        <span class="ct-phone__chip" data-ct-out="category" data-ct-map="category">Категория</span>
+                        <h3 class="ct-phone__title" data-ct-out="title" data-ct-empty="Название клуба">Название клуба</h3>
+                        <p class="ct-phone__text" data-ct-out="description" data-ct-clip="160"></p>
+                        <div class="ct-phone__meta"><i class="bi bi-clock" aria-hidden="true"></i><span class="ct-clamp-1" data-ct-out="meetingTime" data-ct-empty="время не указано">время не указано</span></div>
+                    </div>
+                </article>
+            {% endcall %}
+        </aside>
+    </div>
+    {{ ui.savebar('Сохранить' if is_edit else 'Создать клуб', cancel_href=back_url('clubs'), submit_attrs={'data-loading': 'Сохраняем…'}) }}
 </form>
+{{ ui.json_data('ctPreviewLabels', {'category': dict(categories)}) }}
 {% endblock %}
 {% block scripts %}{{ ui.js('content') }}{% endblock %}

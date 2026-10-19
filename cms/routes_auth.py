@@ -8,8 +8,8 @@ import time
 
 from flask import flash, jsonify, redirect, render_template, request, session, url_for
 
-from .core import (LoginError, RateLimiter, Routes, admin_required, audit, client_ip, db, log, safe_next_url,
-                   sign_in_with_password, wants_json)
+from .core import (LoginError, RateLimiter, Routes, admin_required, audit, back_url, client_ip, db, flash_action, log,
+                   safe_next_url, sign_in_with_password, view_param, wants_json)
 
 routes = Routes()
 
@@ -145,6 +145,20 @@ def ui_kit():
         {'url': url_for('static', filename='img/apple-touch-icon.png'), 'path': 'demo/icon.png', 'w': 180, 'h': 180},
     ]
     if rq.method == 'POST':
+        demo = rq.values.get('demo')
+        if demo == 'toast':   # тост с действием (flash_action): «Готово · Отменить» — POST-форма с CSRF
+            flash_action('Готово: статус изменён', 'Отменить', post=url_for('ui_kit'), fields={'demo': 'undo'})
+            return redirect(back_url('ui_kit'))
+        if demo == 'undo':
+            flash('Действие отменено', 'info')
+            return redirect(back_url('ui_kit'))
+        if demo == 'delete':
+            flash('Демо: запись «удалена» (ничего не изменилось)', 'success')
+            return redirect(back_url('ui_kit'))
+        if demo == 'bulk':
+            ids = rq.form.getlist('ids')
+            flash('Демо: действие «%s» для %d записей' % (rq.form.get('action') or '—', len(ids)), 'success')
+            return redirect(back_url('ui_kit'))
         import json as _json
         state = rq.form.get('images__state') or '[]'
         try:
@@ -164,4 +178,5 @@ def ui_kit():
     ]
     from .core import paginate_list
     kit_page = paginate_list(list(range(160)), 3, 25)
-    return render_template('_ui_kit.html', demo_images=demo_images, rows=rows, kit_page=kit_page)
+    return render_template('_ui_kit.html', demo_images=demo_images, rows=rows, kit_page=kit_page,
+                           kit_view=view_param('ui_kit', ('week', 'list'), 'week'))

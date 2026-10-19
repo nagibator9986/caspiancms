@@ -1,82 +1,73 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# Единая таблица «группа × день» (владелец — SCHEDULE). #}
+{# Единая таблица «группа × день» (владелец — SCHEDULE). Шапка дней и колонка «Группа» закреплены;
+   на телефоне — переключатель дня (одна колонка). Один поиск: мгновенно по странице, Enter — по всему расписанию. #}
 {% block title %}Единая таблица расписания{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 
 {% block content %}
-{% set day_options = [] %}{% for d in range(7) %}{% set _ = day_options.append((d, day_names[d])) %}{% endfor %}
+{% set here_url = here() %}
 {% set export_args = {'course': course or None, 'major': major or None, 'week': week or None, 'day': day, 'q': q or None} %}
+{{ ui.page_header('Единая таблица', meta=ui.week_now(current_week, week_number), actions=[
+    {'menu': [
+        {'header': 'Экспорт с текущими фильтрами'},
+        {'label': 'Excel (.xlsx)', 'href': url_for('schedule_all_export', format='xlsx', **export_args), 'icon': 'file-earmark-excel'},
+        {'label': 'CSV', 'href': url_for('schedule_all_export', format='csv', **export_args), 'icon': 'filetype-csv'},
+        {'label': 'Бланки для печати / PDF', 'href': url_for('schedule_print', course=course or None, major=major or None, week='current' if week == 'current' else None), 'icon': 'printer'},
+    ], 'label': 'Экспорт'},
+]) }}
+{{ ui.summary_line([(groups_count, groups_count|plural('группа', 'группы', 'групп')),
+                    (total_lessons, total_lessons|plural('занятие', 'занятия', 'занятий') ~ (' по фильтру' if (course or major or week or q or day is not none) else ''))]) }}
 
-{% call ui.page_header('Единая таблица', 'Все группы по дням недели — фильтры, поиск и экспорт с теми же условиями', icon='table') %}
-    {{ sch.week_now(current_week, week_number, today_label) }}
-    <div class="dropdown">
-        <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i><span>Экспорт</span></button>
-        <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='xlsx', **export_args) }}"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i>Excel (.xlsx)</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_all_export', format='csv', **export_args) }}"><i class="bi bi-filetype-csv" aria-hidden="true"></i>CSV</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="{{ url_for('schedule_print', course=course or None, major=major or None, week='current' if week == 'current' else None) }}"><i class="bi bi-printer" aria-hidden="true"></i>Бланки для печати / PDF</a></li>
-        </ul>
+{% call ui.list_card(classes='sch-all') %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Группа, дисциплина, преподаватель, аудитория', 'label': 'Поиск по таблице', 'filter': '#schAllTable'}, inline=True) %}
+        {{ ui.filter_select('course', 'Курс', course_options, course) }}
+        {{ ui.filter_select('major', 'Направление', majors, major) }}
+        {{ ui.filter_select('day', 'День', day_options, day) }}
+        {{ ui.filter_select('week', 'Неделя', week_filters, week) }}
+        {{ ui.filter_switch('hide_empty', 'Скрыть пустые дни', hide_empty) }}
+    {% endcall %}
+    {% if page.items %}
+    <div class="sch-all__bar">
+        {{ sch.week_legend(current_week) }}
+        <span class="sch-all__meta">
+            {% if page.pages > 1 or per == 'all' %}{% if per == 'all' %}<a href="{{ url_with(per=None, page=None) }}">Постранично</a>{% else %}<a href="{{ url_with(per='all', page=None) }}">Показать все группы</a>{% endif %} · {% endif %}обновлено {{ update_time }}
+        </span>
     </div>
-{% endcall %}
-
-<div class="cc-stats">
-    {{ ui.stat_card('Групп', groups_count, 'collection', href=url_for('schedule')) }}
-    {{ ui.stat_card('Занятий', total_lessons, 'calendar3', meta=('по фильтру' if (course or major or week or q or day is not none) else 'всего в неделе')) }}
-    {{ ui.stat_card('Сейчас', current_week_label, 'calendar-week', tone=('info' if current_week == 'numerator' else 'warning'), meta=today_label) }}
-</div>
-
-{% call ui.filters_bar() %}
-    {{ ui.filter_search('q', 'Поиск', q, 'Группа, дисциплина, преподаватель, аудитория') }}
-    <div class="cc-filters__field">
-        <label class="form-label" for="flt-course">Курс</label>
-        <select class="form-select" id="flt-course" name="course" data-autosubmit>
-            <option value="">Все курсы</option>
-            {% for c in courses %}<option value="{{ c }}" {{ 'selected' if course == c|string }}>{{ c }} курс</option>{% endfor %}
-        </select>
-    </div>
-    {{ ui.filter_select('major', 'Направление', majors, major) }}
-    {{ ui.filter_select('day', 'День', day_options, day, 'Все дни') }}
-    {{ ui.filter_select('week', 'Неделя', week_filters, week, 'Все недели') }}
-{% endcall %}
-
-{% if page.items %}
-<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-    {{ sch.week_legend(current_week) }}
-    <span class="cc-subtle small">Обновлено {{ update_time }} ·
-        {% if per == 'all' %}<a href="{{ url_with(per=None, page=None) }}">показывать постранично</a>{% else %}<a href="{{ url_with(per='all', page=None) }}">показать все группы</a>{% endif %}
-    </span>
-</div>
-{% call ui.data_table('schAllTable', search=True, placeholder='Быстрый поиск по странице') %}
-<table class="cc-table sch-grid" id="schAllTable">
-    <thead><tr>
-        <th class="sch-grid__owner">Группа</th>
-        {% for d in columns %}<th class="{{ 'is-today' if d == today_wd }}">{{ sch.day_title(d) }}{% if d == today_wd %} <span class="cc-badge cc-badge--brand">сегодня</span>{% endif %}</th>{% endfor %}
-    </tr></thead>
-    <tbody>
-    {% for g in page.items %}
-    {% set days = grid[g] %}
-    <tr>
-        <th scope="row" class="sch-grid__owner">
-            <a class="sch-grid__name" href="{{ url_for('schedule', group=g) }}">{{ g }}</a>
-            <span class="cc-subtle small cc-num">{{ days|sum_lessons }} {{ (days|sum_lessons)|plural('пара', 'пары', 'пар') }}</span>
-        </th>
-        {% for d in columns %}
-        <td class="{{ 'is-today' if d == today_wd }}">
-            {% for l in days.get(d, []) %}{{ sch.lesson_card(l, current_week, 'teacher', today_wd, None, False, compact=True) }}{% else %}<span class="sch-grid__empty" aria-label="нет пар">—</span>{% endfor %}
-        </td>
+    {% set alert_days = [] %}{% for g in page.items %}{% for d, ls in grid[g].items() %}{% if d not in alert_days and ls|selectattr('id', 'in', marks)|list %}{% set _ = alert_days.append(d) %}{% endif %}{% endfor %}{% endfor %}
+    {% if columns|length > 1 %}<div class="sch-all__switch">{{ sch.day_switch(columns, day_counts, focus_day, today_wd, '#schAllTable', alerts=alert_days) }}</div>{% endif %}
+    <div class="cc-table-wrap cc-table-wrap--sticky">
+    <table class="cc-table sch-grid sch-grid--switch" id="schAllTable" style="--sch-cols: {{ columns|length }}">
+        <thead><tr>
+            <th class="sch-grid__owner cc-sticky-col" scope="col">Группа</th>
+            {% for d in columns %}<th scope="col" class="{{ 'is-today' if d == today_wd }}{{ ' is-active-day' if d == focus_day or columns|length == 1 }}" data-day="{{ '' if d is none else d }}">{{ sch.day_title(d) }}{% if d == today_wd %} <span class="sch-day__today">сегодня</span>{% endif %}</th>{% endfor %}
+        </tr></thead>
+        <tbody>
+        {% for g in page.items %}
+        {% set days = grid[g] %}
+        <tr>
+            <th scope="row" class="sch-grid__owner cc-sticky-col">
+                <a class="sch-grid__name" href="{{ url_for('schedule', group=g) }}">{{ g }}</a>
+                <span class="sch-grid__sub cc-num">{{ days|sum_lessons }} {{ (days|sum_lessons)|plural('пара', 'пары', 'пар') }}</span>
+            </th>
+            {% for d in columns %}
+            <td class="{{ 'is-today' if d == today_wd }}{{ ' is-active-day' if d == focus_day or columns|length == 1 }}" data-day="{{ '' if d is none else d }}">
+                {% for l in days.get(d, []) %}{{ sch.lesson_card(l, current_week, 'teacher', today_wd, None, False, edit=True, next_url=here_url, compact=True, mark=marks.get(l.id)) }}{% else %}<span class="sch-grid__empty" aria-label="нет пар">—</span>{% endfor %}
+            </td>
+            {% endfor %}
+        </tr>
         {% endfor %}
-    </tr>
-    {% endfor %}
-    <tr data-table-empty class="is-hidden"><td colspan="{{ columns|length + 1 }}" class="cc-table-empty">На этой странице ничего не найдено</td></tr>
-    </tbody>
-</table>
+        <tr data-table-empty class="is-hidden"><td colspan="{{ columns|length + 1 }}" class="cc-table-empty">На этой странице ничего не найдено — нажмите Enter, чтобы искать по всем группам</td></tr>
+        </tbody>
+    </table>
+    </div>
+    {{ ui.pagination(page) }}
+    {% elif course or major or week or q or day is not none %}
+    {{ ui.empty_filtered(url_for('schedule_all')) }}
+    {% else %}
+    {{ ui.empty_state('calendar-x', 'Занятий пока нет', 'Составьте расписание в конструкторе.', {'label': 'Добавить занятия', 'href': url_for('schedule_builder'), 'icon': 'plus-lg', 'variant': 'primary'}) }}
+    {% endif %}
 {% endcall %}
-{{ ui.pagination(page) }}
-{% else %}
-<section class="cc-card">{{ ui.empty_state('calendar-x', 'Занятий не найдено', 'Измените фильтры или составьте расписание в конструкторе.', {'label': 'Открыть конструктор', 'href': url_for('schedule_builder'), 'icon': 'plus-lg'}) }}</section>
-{% endif %}
 {% endblock %}

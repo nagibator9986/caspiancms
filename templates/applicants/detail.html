@@ -1,52 +1,173 @@
-{# Карточка абитуриента: профиль, CRM (статус, контакты, заметки, история), коины, заказы, приглашения,
-   сброс пароля до abiturient123, перевод в студенты, удаление (APPLICANTS). #}
+{# Карточка абитуриента (CRM): работа с лидом (статус, следующий шаг, контакт, заметка), лента активности, профиль,
+   коины, заказы, приглашения, аккаунт (сброс пароля до abiturient123), зачисление, удаление.
+   {% block peek %} — компактная версия для быстрого просмотра из списка лидов (формы возвращают в список). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'applicants/_macros.html' as ap with context %}
-{% block title %}{{ lead.title }} · Абитуриент{% endblock %}
+{% block title %}{{ lead.title }}{% endblock %}
 {% block page_title %}{{ lead.title }}{% endblock %}
 {% block styles %}{{ ui.css('applicants') }}{% endblock %}
-{% block content %}
-{% set back = request.full_path %}
-<div class="ap-hero">
-    {{ ui.avatar(lead.title, size='lg') }}
-    <div class="ap-hero__text min-w-0">
-        <h1 class="cc-truncate">{{ lead.title }}</h1>
-        <div class="ap-hero__meta">
-            {{ ui.badge(lead.status) }}
-            {% if lead.converted %}{{ ui.badge('student', 'Студент' ~ (' · ' ~ lead.group if lead.group else '')) }}{% else %}{{ ui.badge('applicant') }}{% endif %}
-            {{ ap.source_label(src.title, src.icon, src.code) }}
-            <span class="cc-muted small"><i class="bi bi-clock" aria-hidden="true"></i> {{ lead.created|dt }}{% if lead.created %} · {{ lead.created|ago }}{% endif %}</span>
+
+{# ----------------------------- Блоки, общие для карточки и быстрого просмотра ----------------------------- #}
+{% macro status_picker() -%}
+<form method="post" action="{{ url_for('applicant_set_status', uid=lead.uid) }}" class="ap-picker">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+    <div class="ap-picker__list" role="group" aria-label="Статус лида">
+    {% for k, lbl in statuses %}
+        <button type="submit" name="status" value="{{ k }}" class="ap-picker__btn{{ ' is-active' if k == lead.status }}" aria-pressed="{{ 'true' if k == lead.status else 'false' }}"><span class="ap-status-dot ap-status-dot--{{ k }}" aria-hidden="true"></span>{{ lbl }}</button>
+    {% endfor %}
+    </div>
+</form>
+{%- endmacro %}
+
+{% macro next_step_form(p) -%}
+{%- set st = lead.step -%}
+<form method="post" action="{{ url_for('applicant_next_step', uid=lead.uid) }}" class="ap-next">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+    {% if st.state != 'none' %}
+    <div class="ap-next__current ap-step ap-step--{{ st.state }}">
+        <i class="bi bi-{{ 'exclamation-circle' if st.state == 'overdue' else 'signpost' }}" aria-hidden="true"></i>
+        <span class="ap-step__text">{{ st.text or 'Шаг без описания' }}</span>
+        {% if st.date %}<span class="ap-step__date">{{ ap_step_label(st.state, st.date) }}</span>{% endif %}
+        <span class="ap-next__done">
+            <button type="submit" name="action" value="done" class="btn btn-light btn-sm"><i class="bi bi-check2" aria-hidden="true"></i><span>Выполнено</span></button>
+            <button type="submit" name="action" value="clear" class="btn btn-ghost btn-sm cc-btn-icon" aria-label="Снять шаг" title="Снять шаг"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </span>
+    </div>
+    {% endif %}
+    <div class="ap-next__row">
+        <label class="visually-hidden" for="{{ p }}Step">Что сделать</label>
+        <input class="form-control" type="text" id="{{ p }}Step" name="next_step" maxlength="200" value="{{ st.text }}" placeholder="{{ 'Изменить шаг' if st.state != 'none' else 'Что дальше: «перезвонить после ДОД»' }}" list="apStepIdeas">
+        <label class="visually-hidden" for="{{ p }}StepAt">Когда</label>
+        <input class="form-control ap-next__date" type="date" id="{{ p }}StepAt" name="next_step_at" value="{{ st.date.isoformat() if st.date else '' }}">
+        <button type="submit" name="action" value="save" class="btn btn-light"><i class="bi bi-calendar-check" aria-hidden="true"></i><span>{{ 'Обновить' if st.state != 'none' else 'Назначить' }}</span></button>
+    </div>
+    <div class="ap-next__quick" aria-label="Быстрый выбор даты">
+        {% for d, l in [(0, 'Сегодня'), (1, 'Завтра'), (3, 'Через 3 дня'), (7, 'Через неделю')] %}<button type="button" class="ap-quick-date" data-ap-date="{{ d }}" data-ap-date-target="#{{ p }}StepAt">{{ l }}</button>{% endfor %}
+    </div>
+    <datalist id="apStepIdeas"><option value="Перезвонить"><option value="Пригласить на день открытых дверей"><option value="Напомнить про документы"><option value="Отправить каталог специальностей в WhatsApp"></datalist>
+</form>
+{%- endmacro %}
+
+{% macro contact_form(p) -%}
+<form method="post" action="{{ url_for('applicant_log_contact', uid=lead.uid) }}" class="ap-contact">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+    <fieldset>
+        <legend class="form-label">Записать контакт</legend>
+        <div class="cc-chips ap-chips" role="radiogroup" aria-label="Способ связи">
+            {% for k, lbl in contact_channels %}
+            <input type="radio" class="btn-check" name="channel" id="{{ p }}Ch{{ k }}" value="{{ k }}" {{ 'checked' if loop.first }}>
+            <label class="cc-chip" for="{{ p }}Ch{{ k }}">{{ lbl }}</label>
+            {% endfor %}
         </div>
+    </fieldset>
+    <label class="visually-hidden" for="{{ p }}Comment">Итог разговора</label>
+    <textarea class="form-control mt-2" id="{{ p }}Comment" name="comment" rows="2" maxlength="300" placeholder="Итог: например, «придёт на ДОД 25.10»" data-cc-ctrl-enter></textarea>
+    <div class="ap-form-foot">
+        <button type="submit" class="btn btn-primary" data-loading><i class="bi bi-telephone-plus" aria-hidden="true"></i><span>Записать контакт</span></button>
+        <span class="cc-subtle small">{{ ui.kbd('Ctrl', 'Enter') }}{% if lead.status == 'new' %} · статус станет «Связались»{% endif %}</span>
     </div>
-    <div class="ap-hero__actions">
-        {% if lead.tel %}{{ ui.button('Позвонить', href='tel:' ~ lead.tel, icon='telephone', variant='light') }}{% endif %}
-        {% if lead.wa %}{{ ui.button('WhatsApp', href=lead.wa, icon='whatsapp', variant='light', attrs={'target': '_blank', 'rel': 'noopener'}) }}{% endif %}
-        {{ ui.button('К списку', href=url_for('applicants_leads'), icon='arrow-left', variant='ghost') }}
+</form>
+{%- endmacro %}
+
+{% macro note_form(p) -%}
+<form method="post" action="{{ url_for('applicant_save_notes', uid=lead.uid) }}" class="ap-note">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+    <label class="form-label" for="{{ p }}Notes">Заметка <span class="cc-subtle fw-normal">— видна только администраторам</span></label>
+    <textarea class="form-control" id="{{ p }}Notes" name="notes" rows="3" maxlength="2000" data-cc-ctrl-enter placeholder="Что важно помнить об этом абитуриенте">{{ lead.notes }}</textarea>
+    <div class="ap-form-foot"><button type="submit" class="btn btn-light btn-sm"><i class="bi bi-check2" aria-hidden="true"></i><span>Сохранить заметку</span></button></div>
+</form>
+{%- endmacro %}
+
+{% macro feed_list(items, limit=None, extra_from=None) -%}
+{% if items %}
+<ol class="ap-feed" data-ap-feed>
+    {% for e in (items[:limit] if limit else items) %}
+    <li class="ap-feed__item{{ ' ap-feed__item--' ~ e.tone if e.tone }}{{ ' is-extra' if extra_from and loop.index > extra_from }}" data-kind="{{ e.kind }}">
+        <span class="ap-feed__icon" aria-hidden="true"><i class="bi bi-{{ e.icon }}"></i></span>
+        <div class="ap-feed__body">
+            <div class="ap-feed__text"><b>{{ e.title }}</b>{% if e.details %} — {{ e.details }}{% endif %}</div>
+            <div class="ap-feed__meta">{% if e.at %}<time datetime="{{ e.at.isoformat() }}" title="{{ e.at|dt }}">{{ e.at|ago }}</time>{% else %}—{% endif %}{% if e.by %} · {{ e.by }}{% endif %}</div>
+        </div>
+    </li>
+    {% endfor %}
+</ol>
+{% else %}
+<p class="cc-muted small mb-0">Событий пока нет.</p>
+{% endif %}
+{%- endmacro %}
+
+{# ----------------------------- Полная карточка ----------------------------- #}
+{% block content %}
+{%- set meta -%}
+{{ ui.badge(lead.status) }}{% if lead.converted %}{{ ui.badge('student', 'Студент' ~ (' · ' ~ lead.group if lead.group else ''), 'outline', 'mortarboard') }}{% endif %}
+{%- endset -%}
+{%- set menu = [] -%}
+{%- set _ = menu.append({'label': 'Заказы мерча', 'href': nav_url('coins_orders', uid=lead.uid, status='all'), 'icon': 'box-seam'}) -%}
+{%- set _ = menu.append({'label': 'Журнал коинов', 'href': nav_url('coins_journal', uid=lead.uid), 'icon': 'journal-text'}) -%}
+{%- if lead.converted %}{% set _ = menu.append({'label': 'Профиль студента', 'href': nav_url('admin_users', q=lead.login), 'icon': 'person-badge'}) %}{% endif -%}
+{%- if not lead.converted -%}
+{%- set _ = menu.append({'divider': True}) -%}
+{%- set _ = menu.append({'label': 'Удалить аккаунт', 'action': url_for('applicant_delete_account', uid=lead.uid), 'fields': {'confirm': 'удалить'}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить навсегда',
+    'confirm': 'Удалить аккаунт «' ~ lead.title ~ '» без возможности восстановления? Кошелёк, журнал коинов, заказы и CRM-карточка удалятся автоматически.'}) -%}
+{%- endif -%}
+{% call ui.page_header(lead.title, src.title ~ ' · регистрация ' ~ (lead.created|dateonly if lead.created else '—'), back={'href': back_url('applicants_leads'), 'label': 'Лиды'}, meta=meta) %}
+    {% if nav %}
+    <div class="ap-pager" aria-label="Соседние лиды по фильтру">
+        <a class="btn btn-light cc-btn-icon{{ ' disabled' if not nav.prev }}" href="{{ nav.prev or '#' }}" aria-label="Предыдущий лид" title="Предыдущий ([)" data-ap-prev{% if not nav.prev %} aria-disabled="true" tabindex="-1"{% endif %}><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
+        <span class="ap-pager__pos cc-num">{{ nav.pos }} из {{ nav.total }}</span>
+        <a class="btn btn-light cc-btn-icon{{ ' disabled' if not nav.next }}" href="{{ nav.next or '#' }}" aria-label="Следующий лид" title="Следующий (])" data-ap-next{% if not nav.next %} aria-disabled="true" tabindex="-1"{% endif %}><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
     </div>
-</div>
+    {% endif %}
+    {% if lead.tel %}{{ ui.button('Позвонить', href='tel:' ~ lead.tel, icon='telephone', variant='light') }}{% endif %}
+    {% if lead.wa %}{{ ui.button('WhatsApp', href=lead.wa, icon='whatsapp', variant='light', attrs={'target': '_blank', 'rel': 'noopener'}) }}{% endif %}
+    {{ ui.header_menu(menu) }}
+{% endcall %}
 
 {% if lead.must_change %}
-<div class="ap-alert ap-alert--warning" role="status"><i class="bi bi-key" aria-hidden="true"></i>
-    <div>Пароль сброшен {{ lead.reset_at|dt if lead.reset_at else '' }} до <b>{{ reset_password }}</b>. При входе приложение попросит абитуриента придумать новый.</div>
-</div>
+{% call ui.hint(icon='key', tone='warning') %}Пароль сброшен {{ lead.reset_at|dt if lead.reset_at else '' }} до <b>{{ reset_password }}</b>. При входе приложение попросит абитуриента придумать новый.{% endcall %}
 {% endif %}
 {% if lead.converted %}
-<div class="ap-alert ap-alert--success" role="status"><i class="bi bi-mortarboard" aria-hidden="true"></i>
-    <div>Переведён в студенты{% if lead.group %}: группа <b>{{ lead.group }}</b>{% endif %}{% if lead.course %}, {{ lead.course }} курс{% endif %}. Профиль студента — в разделе <a href="{{ nav_url('admin_users', q=lead.login) }}">«Пользователи»</a>.</div>
-</div>
+{% call ui.hint(icon='mortarboard', tone='success') %}Переведён в студенты{% if lead.group %}: группа <b>{{ lead.group }}</b>{% endif %}{% if lead.course %}, {{ lead.course }} курс{% endif %}. Профиль студента — в разделе <a href="{{ nav_url('admin_users', q=lead.login) }}">«Пользователи»</a>.{% endcall %}
 {% endif %}
 
 <div class="ap-detail">
 <div class="ap-detail__main">
+    {% call ui.card('Работа с лидом', id='work', classes='ap-area-work') %}
+        <div class="ap-work__row">
+            <span class="ap-work__label">Статус</span>
+            {{ status_picker() }}
+        </div>
+        <div class="ap-work__row">
+            <span class="ap-work__label">Следующий шаг</span>
+            <div class="min-w-0">{{ next_step_form('apd') }}</div>
+        </div>
+        <div class="ap-work__split">
+            {{ contact_form('apd') }}
+            {{ note_form('apd') }}
+        </div>
+        <p class="ap-work__last cc-subtle small mb-0"><i class="bi bi-clock-history" aria-hidden="true"></i>Последний контакт: {{ (lead.last_contact|dt ~ ', ' ~ lead.last_contact|ago) if lead.last_contact else 'не было' }}</p>
+    {% endcall %}
 
-    {% call ui.card('Профиль', icon='person-vcard', subtitle='Заполнено ' ~ lead.filled ~ ' из 6 полей' ~ (' — профиль полный' if lead.complete else '')) %}
-        {{ ui.progress_bar(lead.filled, 6, 'success' if lead.complete else None, 'Заполненность профиля') }}
-        <div class="mt-3">
+    {% call ui.card('Лента активности', subtitle='Статусы, контакты, заметки, коины и заказы — новые сверху', id='feed', classes='ap-area-feed') %}
+        {% if feed %}
+        <nav class="cc-chips ap-feed-filter" aria-label="Что показывать">
+            <button type="button" class="cc-chip active" data-ap-feed-filter="" aria-pressed="true">Все <span class="cc-chip__count">{{ feed|length }}</span></button>
+            {% for k, lbl in feed_kinds %}{% set n = feed|selectattr('kind', 'equalto', k)|list|length %}{% if n %}
+            <button type="button" class="cc-chip" data-ap-feed-filter="{{ k }}" aria-pressed="false">{{ lbl }} <span class="cc-chip__count">{{ n }}</span></button>
+            {% endif %}{% endfor %}
+        </nav>
+        {% endif %}
+        {{ feed_list(feed, extra_from=25) }}
+        {% if feed|length > 25 %}<button type="button" class="btn btn-ghost btn-sm mt-2" data-ap-feed-more><i class="bi bi-chevron-down" aria-hidden="true"></i><span>Показать все события ({{ feed|length }})</span></button>{% endif %}
+    {% endcall %}
+</div>
+
+<aside class="ap-detail__side">
+    {% call ui.card('Профиль', subtitle='Заполнено ' ~ lead.filled ~ ' из 6 полей' ~ (' — профиль полный' if lead.complete else ''), classes='ap-area-profile') %}
         {{ ui.kv([
-            ('Логин', lead.login or '—'),
-            ('ФИО', lead.name or '—'),
             ('Телефон', lead.phone_fmt or '—'),
+            ('Логин', lead.login or '—'),
             ('Email', lead.email if lead.email and not lead.synthetic else ('нет — вход по логину' if lead.synthetic else '—')),
             ('Город', lead.city or '—'),
             ('Школа', lead.school or '—'),
@@ -54,210 +175,128 @@
             ('Специальности', lead.specialties|join(', ') or '—'),
             ('Звонки и WhatsApp', 'согласен' if lead.marketing else 'нет согласия'),
             ('Согласие на ПДн', ('версия ' ~ (lead.consents.version or 1) ~ ((' · ' ~ (lead.consents.acceptedAt|dt)) if lead.consents.acceptedAt else '')) if lead.consents.pd else '—'),
-            ('Профиль обновлён', lead.updated|dt if lead.updated else '—'),
         ]) }}
-        </div>
         {% if not lead.converted %}
-        <details class="ap-edit mt-3">
-            <summary><i class="bi bi-pencil" aria-hidden="true"></i>Заполнить или исправить анкету</summary>
-            <form method="post" action="{{ url_for('applicant_save_profile', uid=lead.uid) }}" class="ap-edit__form" data-dirty-guard>
-                {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
-                <div class="row g-3">
-                    <div class="col-md-6">{{ ui.field('name', 'ФИО', value=lead.name, attrs={'maxlength': 120, 'autocomplete': 'off'}, classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=lead.phone_fmt, placeholder='+7 7XX XXX XX XX', attrs={'maxlength': 20}, classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('city', 'Город', value=lead.city, attrs={'maxlength': 80}, classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('school', 'Школа или колледж', value=lead.school, attrs={'maxlength': 120}, classes='') }}</div>
-                    <div class="col-md-6">{{ ui.field('grade', 'Класс', 'select', value=lead.grade, options=grades, placeholder='Не указан', classes='') }}</div>
-                    <div class="col-md-6 d-flex align-items-end">{{ ui.field('marketingConsent', 'Согласен на звонки и WhatsApp', 'switch', value=lead.marketing, classes='') }}</div>
-                    {% if spec_options %}
-                    <div class="col-12">
-                        <fieldset>
-                            <legend class="form-label">Интересующие специальности</legend>
-                            <div class="ap-spec-picks">
-                                {% for sp in spec_options %}
-                                <label class="ap-spec-pick"><input class="form-check-input" type="checkbox" name="specialties" value="{{ sp }}" {{ 'checked' if sp in lead.specialties }}><span>{{ sp }}</span></label>
-                                {% endfor %}
-                            </div>
-                        </fieldset>
-                    </div>
-                    {% endif %}
+        {% call ui.details('Заполнить или исправить анкету', classes='ap-edit ap-fold') %}
+            <form method="post" action="{{ url_for('applicant_save_profile', uid=lead.uid) }}" data-dirty-guard>
+                {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+                {{ ui.field('name', 'ФИО', value=lead.name, attrs={'maxlength': 120, 'autocomplete': 'off'}, classes='mb-2') }}
+                {{ ui.field('phone', 'Телефон', 'tel', value=lead.phone_fmt, placeholder='+7 7XX XXX XX XX', attrs={'maxlength': 20}, classes='mb-2') }}
+                <div class="row g-2">
+                    <div class="col-6">{{ ui.field('city', 'Город', value=lead.city, attrs={'maxlength': 80}, classes='mb-2') }}</div>
+                    <div class="col-6">{{ ui.field('grade', 'Класс', 'select', value=lead.grade, options=grades, placeholder='Не указан', classes='mb-2') }}</div>
                 </div>
-                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-                    {{ ui.button('Сохранить анкету', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
-                    <span class="cc-subtle small">Если анкета станет полной, абитуриент получит коины за квест.</span>
+                {{ ui.field('school', 'Школа или колледж', value=lead.school, attrs={'maxlength': 120}, classes='mb-2') }}
+                {% if spec_options %}
+                <fieldset class="mb-2">
+                    <legend class="form-label">Интересующие специальности</legend>
+                    <div class="ap-spec-picks">
+                        {% for sp in spec_options %}
+                        <label class="ap-spec-pick"><input class="form-check-input" type="checkbox" name="specialties" value="{{ sp }}" {{ 'checked' if sp in lead.specialties }}><span>{{ sp }}</span></label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+                {% endif %}
+                {{ ui.field('marketingConsent', 'Согласен на звонки и WhatsApp', 'switch', value=lead.marketing, classes='mb-3') }}
+                <div class="ap-form-foot">
+                    {{ ui.button('Сохранить анкету', type='submit', icon='check2', variant='light', attrs={'data-loading': 'Сохраняем…'}) }}
+                    <span class="cc-subtle small">Полная анкета приносит абитуриенту коины за квест.</span>
                 </div>
             </form>
-        </details>
+        {% endcall %}
         {% endif %}
     {% endcall %}
 
-    {% call ui.card('Caspian Coin', icon='coin', subtitle='Кошелёк пересчитывает Cloud Function по журналу операций') %}
-        <div class="ap-coins">
-            <div><span>Баланс</span><b>{{ wallet.balance|num }}</b></div>
-            <div><span>Заработано</span><b>{{ wallet.earned|num }}</b></div>
-            <div><span>Потрачено</span><b>{{ wallet.spent|num }}</b></div>
-        </div>
+    {% call ui.card('Caspian Coin', actions=[{'label': 'Журнал', 'href': nav_url('coins_journal', uid=lead.uid), 'icon': 'journal-text'}], classes='ap-area-coins') %}
+        <dl class="ap-wallet">
+            <div><dt>Баланс</dt><dd class="cc-num">{{ wallet.balance|num }}</dd></div>
+            <div><dt>Заработано</dt><dd class="cc-num">{{ wallet.earned|num }}</dd></div>
+            <div><dt>Потрачено</dt><dd class="cc-num">{{ wallet.spent|num }}</dd></div>
+        </dl>
+        {% call ui.details('Начислить или списать', classes='ap-award-box ap-fold') %}
         <form method="post" action="{{ url_for('applicant_award_coins', uid=lead.uid) }}" class="ap-award">
-            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
-            <div class="ap-award__dir" role="group" aria-label="Операция">
+            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
+            <div class="cc-segmented ap-award__dir" role="radiogroup" aria-label="Операция">
                 <input type="radio" class="btn-check" name="direction" id="apDirPlus" value="plus" checked>
-                <label class="btn btn-sm btn-outline-primary" for="apDirPlus"><i class="bi bi-plus-lg" aria-hidden="true"></i>Начислить</label>
+                <label class="cc-segmented__item" for="apDirPlus"><i class="bi bi-plus-lg" aria-hidden="true"></i>Начислить</label>
                 <input type="radio" class="btn-check" name="direction" id="apDirMinus" value="minus">
-                <label class="btn btn-sm btn-outline-primary" for="apDirMinus"><i class="bi bi-dash-lg" aria-hidden="true"></i>Списать</label>
+                <label class="cc-segmented__item" for="apDirMinus"><i class="bi bi-dash-lg" aria-hidden="true"></i>Списать</label>
             </div>
-            <label class="visually-hidden" for="apAmount">Количество коинов</label>
-            <input class="form-control form-control-sm ap-award__amount" type="number" id="apAmount" name="amount" min="1" max="100000" step="1" required placeholder="Сколько">
-            <label class="visually-hidden" for="apReason">Причина</label>
-            <input class="form-control form-control-sm ap-award__reason" type="text" id="apReason" name="reason" maxlength="200" required placeholder="Причина — её увидит абитуриент">
-            {{ ui.button('Провести', type='submit', icon='check2', size='sm', attrs={'data-loading': 'Проводим…'}) }}
+            <div class="ap-award__row">
+                <label class="visually-hidden" for="apAmount">Количество коинов</label>
+                <input class="form-control ap-award__amount" type="number" id="apAmount" name="amount" min="1" max="100000" step="1" inputmode="numeric" required placeholder="Сколько">
+                <label class="visually-hidden" for="apReason">Причина</label>
+                <input class="form-control" type="text" id="apReason" name="reason" maxlength="200" required placeholder="Причина — её увидит абитуриент">
+            </div>
+            {{ ui.button('Провести', type='submit', icon='check2', variant='light', attrs={'data-loading': 'Проводим…'}) }}
         </form>
-        {% if txs %}
-        <div class="cc-table-wrap ap-scroll mt-3">
-            <table class="cc-table cc-table--compact">
-                <thead><tr><th class="d-none d-sm-table-cell">Дата</th><th>Операция</th><th class="text-end">Сумма</th><th class="d-none d-sm-table-cell">Статус</th></tr></thead>
-                <tbody>
-                {% for t in txs %}
-                    {% set amt = t.amount if t.amount is number else 0 %}
-                    <tr>
-                        <td class="cc-nowrap d-none d-sm-table-cell"><div>{{ t.createdAt|dateonly }}</div><div class="cc-cell-sub">{{ t.createdAt|timeonly }}</div></td>
-                        <td><div class="d-flex flex-wrap align-items-center gap-2">{{ ui.badge(t.type or 'manual') }}<span class="ap-tx-reason" title="{{ t.reason or '' }}">{{ t.reason or '—' }}</span></div><div class="cc-cell-sub d-sm-none">{{ t.createdAt|dt }}</div></td>
-                        <td class="text-end cc-num"><b class="{{ 'ap-plus' if amt > 0 else 'ap-minus' }}">{{ '%+d'|format(amt) }}</b></td>
-                        <td class="d-none d-sm-table-cell">{% if t.applied is sameas true %}<span class="ap-tag ap-tag--success">проведено</span>{% elif t.error %}<span class="ap-tag ap-tag--danger" title="{{ t.error }}">ошибка</span>{% else %}<span class="ap-tag">в обработке</span>{% endif %}</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-            <p class="cc-muted small mt-3 mb-0">Операций с коинами ещё не было.</p>
-        {% endif %}
+        {% endcall %}
     {% endcall %}
 
-    {% call ui.card('Заказы мерча', icon='bag', subtitle='Обмен коинов на товары', flush=True, actions=[{'label': 'Все заказы', 'href': nav_url('coins_orders'), 'icon': 'box-seam'}]) %}
+    {% call ui.card('Заказы мерча', subtitle=((reserved ~ ' ' ~ reserved|plural('ждёт', 'ждут', 'ждут') ~ ' выдачи') if reserved else None), flush=True, actions=[{'label': 'Все', 'href': nav_url('coins_orders', uid=lead.uid, status='all'), 'icon': 'box-seam'}] if orders else None, classes='ap-area-orders') %}
         {% if orders %}
-        <div class="cc-table-wrap">
-            <table class="cc-table cc-table--compact">
-                <thead><tr><th>Товар</th><th class="text-end">Цена</th><th>Статус</th><th>Дата</th></tr></thead>
-                <tbody>
-                {% for o in orders %}
-                    <tr>
-                        <td><div class="d-flex align-items-center gap-2 min-w-0">{% if o.imageUrl %}<img class="cc-thumb" src="{{ o.imageUrl|safe_url }}" alt="" width="44" height="44" loading="lazy">{% endif %}<div class="min-w-0"><div class="cc-cell-main cc-truncate">{{ o.title or o.productId }}</div>{% if o.variant %}<div class="cc-cell-sub">{{ o.variant }}</div>{% endif %}</div></div></td>
-                        <td class="text-end cc-num">{{ o.price|num }}</td>
-                        <td>{{ ui.badge(o.status or 'pending') }}</td>
-                        <td class="cc-nowrap">{{ o.createdAt|dateonly }}</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
+        <ul class="ap-orders">
+            {% for o in orders[:5] %}
+            <li>
+                {% if o.imageUrl %}<img class="cc-thumb" src="{{ o.imageUrl|safe_url }}" alt="" width="36" height="36" loading="lazy">{% else %}<span class="ap-orders__ph" aria-hidden="true"><i class="bi bi-bag"></i></span>{% endif %}
+                <div class="min-w-0 flex-grow-1">
+                    <div class="cc-truncate fw-semibold">{{ o.title or o.productId }}{% if o.variant %} <span class="cc-subtle fw-normal">· {{ o.variant }}</span>{% endif %}</div>
+                    <div class="cc-cell-sub">{{ o.price|num }} коинов · {{ o.createdAt|dateonly }}</div>
+                </div>
+                {{ ui.badge(o.status or 'pending') }}
+            </li>
+            {% endfor %}
+        </ul>
+        {% if orders|length > 5 %}<p class="cc-subtle small px-3 pb-2 mb-0">Ещё {{ orders|length - 5 }} — во «Все»</p>{% endif %}
         {% else %}
-            <p class="cc-muted small m-3">Заказов нет.</p>
+        <p class="cc-muted small m-3">Заказов нет.</p>
         {% endif %}
     {% endcall %}
 
-    {% call ui.card('Приглашения', icon='people', subtitle='Реферальная программа: награда — когда друг заполнит профиль') %}
-        <div class="ap-ref">
-            <div>
-                <span class="ap-ref__label">Пригласил</span>
-                {% if referrer %}<a href="{{ url_for('applicant_detail', uid=referrer.uid) }}">{{ referrer.title }}</a>{% if referrer.login and referrer.login != referrer.title %} <span class="cc-subtle small">{{ referrer.login }}</span>{% endif %}{% else %}<span class="cc-subtle">никто</span>{% endif %}
-            </div>
-            <div>
-                <span class="ap-ref__label">Реферальный код</span>
-                {% if lead.ref_code %}<code>{{ lead.ref_code }}</code>
-                    {% if ref_link %}<button type="button" class="btn btn-sm btn-ghost" data-copy="{{ ref_link }}" data-copy-message="Ссылка скопирована"><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Ссылка</span></button>{% endif %}
-                {% else %}<span class="cc-subtle">ещё не выдан</span>{% endif %}
-            </div>
-            <div><span class="ap-ref__label">Наград за друзей</span><b>{{ lead.rewarded }}</b></div>
-        </div>
+    {% call ui.card('Приглашения', subtitle='Награда — когда друг заполнит профиль', classes='ap-area-invites') %}
+        <dl class="cc-kv ap-ref">
+            <dt>Пригласил</dt>
+            <dd>{% if referrer %}<a class="cc-link-quiet" href="{{ url_for('applicant_detail', uid=referrer.uid) }}">{{ referrer.title }}</a>{% if referrer.login and referrer.login != referrer.title %} <span class="cc-subtle small">{{ referrer.login }}</span>{% endif %}{% else %}<span class="cc-subtle">никто</span>{% endif %}</dd>
+            <dt>Реферальный код</dt>
+            <dd>{% if lead.ref_code %}<code class="ap-ref__code">{{ lead.ref_code }}</code>{% if ref_link %} <button type="button" class="btn btn-ghost btn-sm" data-copy="{{ ref_link }}" data-copy-message="Ссылка скопирована"><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Ссылка</span></button>{% endif %}{% else %}<span class="cc-subtle">ещё не выдан</span>{% endif %}</dd>
+            <dt>Наград за друзей</dt>
+            <dd class="cc-num">{{ lead.rewarded }}</dd>
+        </dl>
         {% if invited %}
         <ul class="ap-invited">
             {% for i in invited %}
             <li>
-                <a href="{{ url_for('applicant_detail', uid=i.uid) }}">{{ i.title }}</a>
+                <a class="cc-link-quiet" href="{{ url_for('applicant_detail', uid=i.uid) }}">{{ i.title }}</a>
                 <span class="cc-subtle small">{{ i.created|dateonly }}</span>
                 {% if ('referral_' ~ i.uid) in tx_ids %}<span class="ap-tag ap-tag--success">награда выдана</span>{% elif i.complete %}<span class="ap-tag">профиль полный</span>{% else %}<span class="ap-tag">профиль не заполнен</span>{% endif %}
             </li>
             {% endfor %}
         </ul>
         {% else %}
-            <p class="cc-muted small mt-3 mb-0">Пока никого не пригласил.</p>
-        {% endif %}
-    {% endcall %}
-</div>
-
-<aside class="ap-detail__side">
-    {% call ui.card('Работа с лидом', icon='kanban') %}
-        <form method="post" action="{{ url_for('applicant_set_status', uid=lead.uid) }}" class="ap-status-form">
-            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
-            <label class="form-label" for="apStatus">Статус</label>
-            <div class="d-flex gap-2">
-                <select class="form-select" id="apStatus" name="status">
-                    {% for k, lbl in statuses %}<option value="{{ k }}" {{ 'selected' if k == lead.status }}>{{ lbl }}</option>{% endfor %}
-                </select>
-                {{ ui.button('Сохранить', type='submit', variant='primary') }}
-            </div>
-        </form>
-        <div class="cc-subtle small mt-2">Последний контакт: {{ lead.last_contact|dt if lead.last_contact else 'не было' }}</div>
-
-        <form method="post" action="{{ url_for('applicant_log_contact', uid=lead.uid) }}" class="ap-contact-form mt-3">
-            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
-            <fieldset>
-                <legend class="form-label">Записать контакт</legend>
-                <div class="ap-chips" role="radiogroup" aria-label="Способ связи">
-                    {% for k, lbl in contact_channels %}
-                    <input type="radio" class="btn-check" name="channel" id="apCh{{ k }}" value="{{ k }}" {{ 'checked' if loop.first }}>
-                    <label class="cc-chip" for="apCh{{ k }}">{{ lbl }}</label>
-                    {% endfor %}
-                </div>
-            </fieldset>
-            <label class="visually-hidden" for="apContactComment">Итог разговора</label>
-            <input class="form-control mt-2" type="text" id="apContactComment" name="comment" maxlength="300" placeholder="Итог: например, «придёт на ДОД 25.10»">
-            {{ ui.button('Записать', type='submit', icon='telephone-plus', variant='light', size='sm', classes='mt-2') }}
-        </form>
-
-        <form method="post" action="{{ url_for('applicant_save_notes', uid=lead.uid) }}" class="mt-3">
-            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
-            {{ ui.field('notes', 'Заметка', 'textarea', value=lead.notes, rows=3, attrs={'maxlength': 2000}, help='Видна только администраторам', classes='mb-2') }}
-            {{ ui.button('Сохранить заметку', type='submit', icon='check2', variant='light', size='sm') }}
-        </form>
-
-        <h3 class="cc-section-title mt-4">История</h3>
-        {% if history %}
-        <ul class="cc-timeline ap-history">
-            {% for h in history[:30] %}
-            <li>
-                <div><b>{{ h.label }}</b>{% if h.details %} — {{ h.details }}{% endif %}</div>
-                <div class="cc-timeline__meta">{{ h.at|dt }}{% if h.by and h.by != 'system' %} · {{ h.by }}{% endif %}</div>
-            </li>
-            {% endfor %}
-        </ul>
-        {% if history|length > 30 %}<p class="cc-subtle small mb-0">Показаны последние 30 событий из {{ history|length }}.</p>{% endif %}
-        {% else %}
-            <p class="cc-muted small mb-0">Событий пока нет.</p>
+        <p class="cc-muted small mt-2 mb-0">Пока никого не пригласил.</p>
         {% endif %}
     {% endcall %}
 
-    {% call ui.card('Аккаунт', icon='shield-lock') %}
+    {% call ui.card('Аккаунт', classes='ap-area-account') %}
         {{ ui.kv([
-            ('Логин', lead.login or '—'),
             ('Вход', 'аккаунт отключён' if auth.disabled else ('нет аккаунта входа' if auth.exists is sameas false else ('не удалось проверить' if auth.exists is none else 'активен'))),
             ('Последний вход', auth.last_sign_in|dt if auth.last_sign_in else 'не входил'),
             ('Пароль сменён', lead.changed_at|dt if lead.changed_at else '—'),
         ]) }}
         {% if not lead.converted %}
         <div class="mt-3">
-            {{ ui.confirm_button(url_for('applicant_reset_password', uid=lead.uid), 'Сбросить пароль до ' ~ reset_password,
-                'Пароль станет «' ~ reset_password ~ '», все сессии абитуриента завершатся, а при входе приложение попросит придумать новый пароль. Сообщите абитуриенту новый пароль лично.',
-                variant='outline-primary', icon='key', size=None, title='Сбросить пароль?', ok='Сбросить', fields={'next': back}, classes='w-100') }}
-            <p class="cc-subtle small mt-2 mb-0">Восстановить пароль по почте нельзя: абитуриент входит по {{ 'логину' if lead.synthetic else 'email' }}. Сброс — единственный способ.</p>
+            {{ ui.confirm_button(url_for('applicant_reset_password', uid=lead.uid), 'Сбросить пароль',
+                'Пароль станет «' ~ reset_password ~ '», все сессии абитуриента завершатся, а при входе приложение попросит придумать новый пароль. Сообщите новый пароль абитуриенту лично.',
+                variant='light', icon='key', size=None, title='Сбросить пароль?', ok='Сбросить', fields={'next': form_next}) }}
+            <p class="cc-subtle small mt-2 mb-0">Восстановить пароль по почте нельзя: абитуриент входит по {{ 'логину' if lead.synthetic else 'email' }}.</p>
         </div>
         {% endif %}
     {% endcall %}
 
     {% if not lead.converted %}
-    {% call ui.card('Зачислить в студенты', icon='mortarboard') %}
-        <form method="post" action="{{ url_for('applicant_convert', uid=lead.uid) }}" data-confirm="Перевести абитуриента в студенты? Он войдёт в приложение с тем же логином уже как студент." data-confirm-variant="primary" data-confirm-ok="Зачислить" data-confirm-title="Зачисление">
-            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ back }}">
+    {% call ui.card('Зачислить в студенты', classes='ap-area-enroll') %}
+        <form method="post" action="{{ url_for('applicant_convert', uid=lead.uid) }}" data-confirm="Перевести «{{ lead.title }}» в студенты? Он войдёт в приложение с тем же логином уже как студент." data-confirm-variant="primary" data-confirm-ok="Зачислить" data-confirm-title="Зачисление">
+            {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ form_next }}">
             <div class="row g-2">
                 <div class="col-8">
                     <label class="form-label cc-required" for="apGroup">Группа</label>
@@ -269,23 +308,39 @@
                     <select class="form-select" id="apCourse" name="course">{% for c in ['1', '2', '3', '4'] %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
                 </div>
             </div>
-            {{ ui.button('Зачислить', type='submit', icon='mortarboard', classes='mt-3 w-100') }}
-            <p class="cc-subtle small mt-2 mb-0">Статус CRM станет «Поступил», коины и история сохранятся.</p>
-        </form>
-    {% endcall %}
-
-    {% call ui.card('Удаление', icon='trash', classes='ap-danger') %}
-        <form method="post" action="{{ url_for('applicant_delete_account', uid=lead.uid) }}" data-confirm="Удалить аккаунт абитуриента без возможности восстановления? Кошелёк, журнал коинов, заказы и CRM-карточка удалятся автоматически." data-confirm-ok="Удалить навсегда" data-confirm-title="Удалить аккаунт?">
-            {{ ui.csrf_field() }}
-            <label class="form-label" for="apDelConfirm">Для подтверждения введите «удалить»</label>
-            <div class="d-flex gap-2">
-                <input class="form-control" id="apDelConfirm" name="confirm" autocomplete="off" required pattern="[Уу][Дд][Аа][Лл][Ии][Тт][Ьь]">
-                {{ ui.button('Удалить', type='submit', icon='trash', variant='outline-danger') }}
-            </div>
+            {{ ui.button('Зачислить', type='submit', icon='mortarboard', variant='light', classes='mt-3') }}
+            <p class="cc-subtle small mt-2 mb-0">Статус станет «Поступил», коины и история сохранятся.</p>
         </form>
     {% endcall %}
     {% endif %}
 </aside>
+</div>
+{% endblock %}
+
+{# ----------------------------- Быстрый просмотр (боковая панель списка лидов) ----------------------------- #}
+{% block peek %}
+<div class="ap-peek">
+    <h1 class="ap-peek__title">{{ lead.title }}</h1>
+    <div class="ap-peek__meta">
+        {{ ui.badge(lead.status) }}
+        {{ ap.source_label(src.title, src.icon, src.code) }}
+        {% if lead.created %}<span class="cc-subtle small">{{ lead.created|ago }}</span>{% endif %}
+    </div>
+    <div class="ap-peek__contacts">
+        {% if lead.tel %}<a class="btn btn-light btn-sm" href="tel:{{ lead.tel }}"><i class="bi bi-telephone" aria-hidden="true"></i><span>{{ lead.phone_fmt }}</span></a>{% endif %}
+        {% if lead.wa %}<a class="btn btn-light btn-sm" href="{{ lead.wa }}" target="_blank" rel="noopener"><i class="bi bi-whatsapp" aria-hidden="true"></i><span>WhatsApp</span></a>{% endif %}
+        {% if not lead.tel %}<span class="cc-subtle small">{{ lead.login or 'Телефона нет' }}</span>{% endif %}
+    </div>
+    {% if lead.must_change %}{{ ui.hint('Пароль сброшен до ' ~ reset_password ~ ' — ждём, пока абитуриент придумает новый.', icon='key', tone='warning') }}{% endif %}
+    <h2 class="cc-section-title">Статус</h2>
+    {{ status_picker() }}
+    <h2 class="cc-section-title">Следующий шаг</h2>
+    {{ next_step_form('app') }}
+    <div class="ap-peek__block">{{ contact_form('app') }}</div>
+    <div class="ap-peek__block">{{ note_form('app') }}</div>
+    <h2 class="cc-section-title">Последние события</h2>
+    {{ feed_list(feed, 5) }}
+    <a class="btn btn-light w-100 mt-3" href="{{ url_for('applicant_detail', uid=lead.uid, next=form_next) }}"><i class="bi bi-person-vcard" aria-hidden="true"></i><span>Открыть карточку</span></a>
 </div>
 {% endblock %}
 {% block scripts %}{{ ui.js('applicants') }}{% endblock %}

@@ -7,7 +7,8 @@
 #                             marketingConsent, createdAt, refCode, referredBy, referralsRewarded,
 #                             mustChangePassword, passwordResetAt
 #   applicant_crm/{uid}       status (new|contacted|applied|enrolled|declined), notes, updatedAt, updatedBy,
-#                             createdAt, source, login, history[{at, by, action, details}], lastContactAt
+#                             createdAt, source, login, history[{at, by, action, details}], lastContactAt,
+#                             nextStep (≤ 200), nextStepAt (дата следующего шага, 00:00 Алматы) — пишет только CMS
 #   applicant_sources/{CODE}  title, channel, note, welcomeCoins, active, scans, registrations, createdAt…
 #   coin_wallets/{uid}        balance, earnedTotal, spentTotal (пишет только Cloud Function)
 #   coin_transactions         ручная операция: {uid, amount, type:'manual', reason, createdBy, createdAt}
@@ -27,13 +28,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from firebase_admin import firestore
-from flask import abort, flash, redirect, render_template, request, url_for
+from flask import abort, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.datastructures import MultiDict
+from urllib.parse import parse_qs, urlsplit
 
 from .applicant_login import (RESET_PASSWORD, display_login, is_synthetic_email, normalize_phone,
                               to_auth_email)
-from .core import (ArrayUnion, IS_EMULATOR, SERVER_TIMESTAMP, Routes, admin_required, audit, cache, chunked,
-                   count, csv_response, current_admin, db, fb_auth, flash_error, fmt_dt, fmt_phone, get_docs, log,
-                   now_utc, paginate_list, safe_next_url, to_almaty, to_datetime, today_almaty, where)
+from .core import (ALMATY, DELETE_FIELD, ArrayUnion, IS_EMULATOR, SERVER_TIMESTAMP, Routes, admin_required, audit,
+                   back_url, cache, chunked, count, csv_response, current_admin, db, fb_auth, flash_action,
+                   flash_error, fmt_dt, fmt_phone, get_docs, here, is_partial, log, next_target,
+                   now_utc, paginate_list, safe_next_url, to_almaty, to_datetime, today_almaty, view_param,
+                   wants_json, where)
 
 routes = Routes()
 
@@ -69,7 +74,21 @@ HISTORY_LABELS = {
     'created': ('Регистрация', 'person-plus'), 'status': ('Статус', 'flag'), 'notes': ('Заметка', 'sticky'),
     'contact': ('Контакт', 'telephone'), 'coins': ('Коины', 'coin'), 'password_reset': ('Сброс пароля', 'key'),
     'converted': ('Перевод в студенты', 'mortarboard'), 'profile': ('Профиль', 'person-gear'),
+    'next_step': ('Следующий шаг', 'signpost'),
 }
+# Вид записи в ленте активности (фильтр-чипы карточки): работа с лидом, коины, заказы, система
+HISTORY_KINDS = {'status': 'work', 'notes': 'work', 'contact': 'work', 'next_step': 'work', 'coins': 'coins',
+                 'password_reset': 'account', 'converted': 'work', 'profile': 'account', 'created': 'account'}
+FEED_KINDS = [('work', 'Работа с лидом'), ('coins', 'Коины'), ('orders', 'Заказы'), ('account', 'Аккаунт')]
+TX_LABELS = {'campaign': ('Код кампании', 'ticket-perforated'), 'welcome': ('Приветственные коины', 'gift'),
+             'quest': ('Квест', 'trophy'), 'referral': ('Реферал', 'people'), 'manual': ('Коины', 'coin')}
+ORDER_LABELS = {'reserved': 'ждёт выдачи', 'issued': 'выдан', 'cancelled': 'отменён', 'rejected': 'отклонён',
+                'pending': 'обрабатывается'}
+NEXT_STEP_MAX = 200
+STEP_FILTERS = [('overdue', 'Просрочен'), ('today', 'На сегодня'), ('planned', 'Запланирован'),
+                ('none', 'Не назначен')]
+BOARD_LIMIT = 40            # карточек в колонке канбана (остальные — в таблице)
+VIEWS = ('table', 'board')
 
 PERIODS = [('today', 'Сегодня'), ('7', '7 дней'), ('30', '30 дней'), ('90', '90 дней')]
 SORTS = [('new', 'Сначала новые'), ('old', 'Сначала старые'), ('name', 'По имени'),
@@ -80,7 +99,8 @@ DASH_DAYS = (30, 90, 180)
 # Поля снапшота (select — только нужное для списков и аналитики).
 USER_FIELDS = ['login', 'email', 'name', 'phone', 'city', 'school', 'grade', 'specialties', 'source', 'createdAt',
                'refCode', 'referredBy', 'referralsRewarded', 'marketingConsent', 'mustChangePassword']
-CRM_FIELDS = ['status', 'notes', 'updatedAt', 'lastContactAt', 'createdAt', 'source', 'login']
+CRM_FIELDS = ['status', 'notes', 'updatedAt', 'lastContactAt', 'createdAt', 'source', 'login', 'nextStep',
+              'nextStepAt']
 WALLET_FIELDS = ['balance', 'earnedTotal', 'spentTotal']
 
 SOURCE_CODE_RE = re.compile(r'^[A-Z0-9]{3,24}$')
@@ -179,6 +199,37 @@ def _pct(part, total):
     return round(100.0 * part / total, 1) if total else 0.0
 
 
+def next_step_info(crm, today=None):
+    """Следующий шаг лида: {text, at (datetime), date (дата Алматы), state: none|planned|today|overdue}."""
+    text = _str((crm or {}).get('nextStep'), NEXT_STEP_MAX)
+    at = to_datetime((crm or {}).get('nextStepAt'))
+    day = _local_date(at) if at else None
+    if not text and not day:
+        state = 'none'
+    else:
+        today = today or today_almaty()
+        state = 'planned' if day is None or day > today else ('today' if day == today else 'overdue')
+    return {'text': text, 'at': at, 'date': day, 'state': state}
+
+
+@routes.template_global('ap_step_label')
+def step_label(state, day, today=None):
+    """«сегодня», «завтра», «просрочен на 2 дня», «до 25.10» — подпись даты шага."""
+    if not day:
+        return ''
+    today = today or today_almaty()
+    delta = (day - today).days
+    if delta == 0:
+        return 'сегодня'
+    if delta == 1:
+        return 'завтра'
+    if delta < 0:
+        n = -delta
+        return 'просрочен на %d %s' % (n, 'день' if n % 10 == 1 and n % 100 != 11 else
+                                        ('дня' if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else 'дней'))
+    return day.strftime('%d.%m')
+
+
 # ==================== СПРАВОЧНИКИ (кэш) ====================
 
 def load_sources():
@@ -270,6 +321,7 @@ def _make_lead(uid, u, crm, wallet, sources, campaigns, converted=False):
     city = _str(u.get('city'))
     school = _str(u.get('school'))
     notes = _str(crm.get('notes'))
+    step = next_step_info(crm)
     return {
         'uid': uid,
         'name': name if len(name) >= 2 else '',
@@ -280,6 +332,8 @@ def _make_lead(uid, u, crm, wallet, sources, campaigns, converted=False):
         'synthetic': is_synthetic_email(email),
         'phone': phone,
         'phone_fmt': fmt_phone(phone) if phone else '',
+        'wa': wa_link(phone),
+        'tel': normalize_phone(phone) if phone else None,
         'city': city,
         'school': school,
         'grade': grade,
@@ -294,6 +348,7 @@ def _make_lead(uid, u, crm, wallet, sources, campaigns, converted=False):
         'notes': notes,
         'last_contact': to_datetime(crm.get('lastContactAt')),
         'crm_updated': to_datetime(crm.get('updatedAt')),
+        'next_step': step['text'], 'next_at': step['at'], 'next_date': step['date'], 'next_state': step['state'],
         'ref_code': _str(u.get('refCode')),
         'referred_by': _str(u.get('referredBy')),
         'referrals': 0,
@@ -586,9 +641,14 @@ def parse_filters(args):
         'to': _parse_date(args.get('to')),
         'profile': args.get('profile') if args.get('profile') in ('complete', 'incomplete') else '',
         'kind': args.get('kind') if args.get('kind') in ('applicant', 'converted') else '',
+        'step': args.get('step') if args.get('step') in dict(STEP_FILTERS) else '',
         'sort': args.get('sort') if args.get('sort') in dict(SORTS) else 'new',
         'per': per if per in PER_PAGE_OPTIONS else PER_PAGE_OPTIONS[0],
     }
+
+
+# Фильтры, которые прячутся в «Ещё фильтры» (на телефоне — вся шторка)
+MORE_FILTER_KEYS = ('specialty', 'city', 'grade', 'from', 'to', 'profile', 'kind')
 
 
 def _date_range(f, today=None):
@@ -637,6 +697,12 @@ def filter_leads(leads, f, skip=(), today=None):
             continue
         if (f['kind'] == 'converted' and not x['converted']) or (f['kind'] == 'applicant' and x['converted']):
             continue
+        if f.get('step'):
+            st = x['next_state']
+            if f['step'] == 'planned':
+                st = 'planned' if st in ('planned', 'today') else st
+            if st != f['step'] or (f['step'] != 'none' and x['status'] in ('enrolled', 'declined')):
+                continue
         out.append(x)
     sort = f['sort']
     if sort == 'old':
@@ -677,12 +743,25 @@ def _filter_options(snap):
             'grades': list(GRADES) + [('none', 'Не указан')]}
 
 
+def leads_summary(leads, today=None):
+    """Сводка над списком: сколько ждут звонка, просроченных шагов, новых за 7 дней."""
+    today = today or today_almaty()
+    week = today - timedelta(days=6)
+    active = [x for x in leads if x['status'] not in ('enrolled', 'declined')]
+    return {'total': len(leads), 'new': sum(1 for x in leads if x['status'] == 'new'),
+            'overdue': sum(1 for x in active if x['next_state'] == 'overdue'),
+            'today': sum(1 for x in active if x['next_state'] == 'today'),
+            'week': sum(1 for x in leads if (_local_date(x['created']) or EPOCH.date()) >= week)}
+
+
 @routes.route('/applicants/leads')
 @admin_required
 def applicants_leads():
     f = parse_filters(request.args)
+    view = view_param('applicants_leads', VIEWS, 'table')
     ctx = dict(f=f, statuses=STATUSES, periods=PERIODS, sorts=SORTS, per_options=PER_PAGE_OPTIONS,
-               contact_channels=CONTACT_CHANNELS)
+               contact_channels=CONTACT_CHANNELS, step_filters=STEP_FILTERS, view=view,
+               more_n=sum(1 for k in MORE_FILTER_KEYS if f[k]), board=None, summary=None)
     try:
         snap = load_snapshot()
     except Exception as e:
@@ -696,7 +775,15 @@ def applicants_leads():
     tabs = [{'key': '', 'label': 'Все', 'count': len(base)}]
     tabs += [{'key': k, 'label': lbl, 'count': status_counts.get(k, 0)} for k, lbl in STATUSES]
     has_filters = any(f[k] for k in ('q', 'source', 'specialty', 'city', 'grade', 'period', 'from', 'to',
-                                     'profile', 'kind'))
+                                     'profile', 'kind', 'step'))
+    if view == 'board':
+        # канбан: все статусы колонками (вкладка статуса не применяется), в колонке — первые BOARD_LIMIT
+        cols = {k: [] for k in STATUS_KEYS}
+        for x in base:
+            cols[x['status']].append(x)
+        ctx['board'] = [{'key': k, 'label': lbl, 'count': len(cols[k]), 'items': cols[k][:BOARD_LIMIT],
+                         'more': max(len(cols[k]) - BOARD_LIMIT, 0)} for k, lbl in STATUSES]
+    ctx['summary'] = leads_summary(snap['leads'])
     return render_template('applicants/leads.html', page=page, opts=_filter_options(snap), status_tabs=tabs,
                            total=len(snap['leads']), loaded_at=snap['loaded_at'], has_filters=has_filters, **ctx)
 
@@ -716,6 +803,29 @@ def csv_cell(v):
     return "'" + s if s.startswith(_CSV_DANGER) else s
 
 
+LEADS_CSV_HEADER = ['UID', 'Логин', 'ФИО', 'Телефон', 'Email', 'Город', 'Школа', 'Класс', 'Специальности',
+                    'Код источника', 'Источник', 'Статус', 'Заметки', 'Профиль заполнен', 'Полей профиля',
+                    'Согласие на звонки', 'Коины (баланс)', 'Пригласил (UID)', 'Приглашено друзей',
+                    'Студент (группа)', 'Дата регистрации', 'Последний контакт', 'Следующий шаг',
+                    'Дата шага']
+
+
+def _leads_csv(leads, what='filter'):
+    rows = []
+    for x in leads:
+        rows.append([csv_cell(v) for v in [
+            x['uid'], x['login'], x['name'], x['phone_fmt'] or x['phone'], '' if x['synthetic'] else x['email'],
+            x['city'], x['school'], x['grade_label'], ', '.join(x['specialties']), x['source'],
+            x['source_title'], STATUS_LABELS.get(x['status'], x['status']), x['notes'], x['complete'],
+            '%d из 6' % x['filled'], x['marketing'], x['balance'], x['referred_by'], x['referrals'],
+            x['group'] if x['converted'] else '', fmt_dt(x['created'], default=''),
+            fmt_dt(x['last_contact'], default=''), x['next_step'],
+            x['next_date'].strftime('%d.%m.%Y') if x['next_date'] else '']])
+    audit('export', 'applicants', None, {'count': len(rows), 'what': what})
+    stamp = to_almaty(now_utc()).strftime('%Y-%m-%d')
+    return csv_response('абитуриенты_%s.csv' % stamp, LEADS_CSV_HEADER, rows)
+
+
 @routes.route('/applicants/leads.csv')
 @admin_required
 def applicants_leads_export():
@@ -725,29 +835,15 @@ def applicants_leads_export():
     except Exception as e:
         flash_error('Не удалось выгрузить абитуриентов', e)
         return redirect(url_for('applicants_leads'))
-    header = ['UID', 'Логин', 'ФИО', 'Телефон', 'Email', 'Город', 'Школа', 'Класс', 'Специальности',
-              'Код источника', 'Источник', 'Статус', 'Заметки', 'Профиль заполнен', 'Полей профиля',
-              'Согласие на звонки', 'Коины (баланс)', 'Пригласил (UID)', 'Приглашено друзей',
-              'Студент (группа)', 'Дата регистрации', 'Последний контакт']
-    rows = []
-    for x in leads:
-        rows.append([csv_cell(v) for v in [
-            x['uid'], x['login'], x['name'], x['phone_fmt'] or x['phone'], '' if x['synthetic'] else x['email'],
-            x['city'], x['school'], x['grade_label'], ', '.join(x['specialties']), x['source'],
-            x['source_title'], STATUS_LABELS.get(x['status'], x['status']), x['notes'], x['complete'],
-            '%d из 6' % x['filled'], x['marketing'], x['balance'], x['referred_by'], x['referrals'],
-            x['group'] if x['converted'] else '', fmt_dt(x['created'], default=''),
-            fmt_dt(x['last_contact'], default='')]])
-    audit('export', 'applicants', None, {'count': len(rows)})
-    stamp = to_almaty(now_utc()).strftime('%Y-%m-%d')
-    return csv_response('абитуриенты_%s.csv' % stamp, header, rows)
+    return _leads_csv(leads)
 
 
 @routes.route('/applicants/leads/bulk', methods=['POST'])
 @admin_required
 def applicants_bulk():
     action = request.form.get('action')
-    uids = [u for u in dict.fromkeys(request.form.getlist('uids')) if u]
+    # чекбоксы панели выбора (ui.select_row) — name="ids"; старые формы — uids
+    uids = [u for u in dict.fromkeys(request.form.getlist('uids') + request.form.getlist('ids')) if u]
     if not uids:
         flash('Отметьте хотя бы одного абитуриента', 'warning')
         return _back('applicants_leads')
@@ -765,6 +861,8 @@ def applicants_bulk():
         return _back('applicants_leads')
 
     adm = _admin()
+    if action == 'export':
+        return _leads_csv([known[u] for u in uids], what='selected')
     if action == 'status':
         status = request.form.get('status')
         if status not in STATUS_KEYS:
@@ -879,6 +977,75 @@ def _doc_or(coll, uid, default):
     return (snap.to_dict() or {}) if snap.exists else default
 
 
+def build_feed(history, txs, orders, created=None):
+    """Лента активности карточки (новые сверху): CRM-история + автоматические начисления (квесты, коды,
+    рефералы, приветственные) + заказы. Ручные операции и покупки не дублируются — они уже есть в истории
+    (запись «Коины») и в заказах. → [{at, kind, icon, title, details, by, tone}]"""
+    feed = []
+    has_created = False
+    for h in history or []:
+        if not isinstance(h, dict):
+            continue
+        action = _str(h.get('action'))
+        label, icon = HISTORY_LABELS.get(action, (action or 'Событие', 'dot'))
+        has_created = has_created or action == 'created'
+        by = _str(h.get('by'))
+        feed.append({'at': to_datetime(h.get('at')), 'kind': HISTORY_KINDS.get(action, 'work'), 'icon': icon,
+                     'title': label, 'details': _str(h.get('details')), 'by': '' if by == 'system' else by,
+                     'tone': ''})
+    for t in txs or []:
+        typ = _str(t.get('type')) or 'manual'
+        if typ in ('manual', 'purchase', 'refund'):
+            continue
+        label, icon = TX_LABELS.get(typ, ('Коины', 'coin'))
+        amount = t.get('amount') if isinstance(t.get('amount'), int) and not isinstance(t.get('amount'), bool) else 0
+        err = t.get('applied') is False or bool(t.get('error'))
+        feed.append({'at': to_datetime(t.get('createdAt')), 'kind': 'coins', 'icon': icon,
+                     'title': '%s %+d' % (label, amount), 'details': _str(t.get('reason')) + (
+                         ' — ошибка: %s' % _str(t.get('error')) if err else ''),
+                     'by': '', 'tone': 'danger' if err else ''})
+    for o in orders or []:
+        st = _str(o.get('status')) or 'pending'
+        price = o.get('price') if isinstance(o.get('price'), int) and not isinstance(o.get('price'), bool) else 0
+        title = _str(o.get('title')) or _str(o.get('productId')) or 'Товар'
+        variant = _str(o.get('variant'))
+        feed.append({'at': to_datetime(o.get('createdAt')), 'kind': 'orders', 'icon': 'bag',
+                     'title': 'Заказ: %s%s' % (title, ' (%s)' % variant if variant else ''),
+                     'details': '%d %s · %s' % (price, 'коинов', ORDER_LABELS.get(st, st)), 'by': '',
+                     'tone': 'warning' if st == 'reserved' else ''})
+    if created and not has_created:
+        feed.append({'at': created, 'kind': 'account', 'icon': 'person-plus', 'title': 'Регистрация',
+                     'details': '', 'by': '', 'tone': ''})
+    feed.sort(key=lambda e: e['at'] or EPOCH, reverse=True)
+    return feed
+
+
+def lead_neighbors(uid):
+    """«‹ Предыдущий / Следующий ›» по фильтру списка, из которого открыли карточку (?next=/applicants/leads?…).
+    → {'prev', 'next', 'pos', 'total', 'list_url'} или None."""
+    nxt = next_target()
+    if not nxt:
+        return None
+    parts = urlsplit(nxt)
+    if parts.path != url_for('applicants_leads'):
+        return None
+    args = MultiDict([(k, v) for k, vals in parse_qs(parts.query).items() for v in vals])
+    try:
+        leads = filter_leads(load_snapshot()['leads'], parse_filters(args))
+    except Exception:
+        log.warning('Соседи лида %s не посчитаны', uid, exc_info=True)
+        return None
+    ids = [x['uid'] for x in leads]
+    if uid not in ids:
+        return None
+    i = ids.index(uid)
+
+    def link(j):
+        return url_for('applicant_detail', uid=ids[j], next=nxt) if 0 <= j < len(ids) else None
+
+    return {'prev': link(i - 1), 'next': link(i + 1), 'pos': i + 1, 'total': len(ids), 'list_url': nxt}
+
+
 @routes.route('/applicants/<uid>')
 @admin_required
 def applicant_detail(uid):
@@ -935,13 +1102,8 @@ def applicant_detail(uid):
                         'complete': full, 'role': d.get('role')})
     invited.sort(key=lambda i: i['created'] or EPOCH, reverse=True)
     tx_ids = {t['id'] for t in data['txs']}
-    history = []
-    for h in crm.get('history') or []:
-        if isinstance(h, dict):
-            label, icon = HISTORY_LABELS.get(h.get('action'), (_str(h.get('action')) or 'Событие', 'dot'))
-            history.append({'at': to_datetime(h.get('at')), 'by': _str(h.get('by')), 'label': label, 'icon': icon,
-                            'details': _str(h.get('details'))})
-    history.sort(key=lambda h: h['at'] or EPOCH, reverse=True)
+    feed = build_feed(crm.get('history'), data['txs'], data['orders'],
+                      to_datetime(u.get('createdAt')) or to_datetime(crm.get('createdAt')))
     email = _str(u.get('email'))
     phone = _str(u.get('phone')) or (_str(u.get('login')) if _str(u.get('login')).startswith('+') else '')
     specs = [_str(s) for s in u.get('specialties') if _str(s)] if isinstance(u.get('specialties'), list) else []
@@ -971,16 +1133,23 @@ def applicant_detail(uid):
         'filled': filled, 'complete': complete, 'converted': converted, 'group': _str(u.get('group')),
         'course': _str(u.get('course')), 'status': crm.get('status') if crm.get('status') in STATUS_KEYS else 'new',
         'notes': _str(crm.get('notes')), 'last_contact': to_datetime(crm.get('lastContactAt')),
-        'crm_updated': to_datetime(crm.get('updatedAt')),
+        'crm_updated': to_datetime(crm.get('updatedAt')), 'step': next_step_info(crm),
     }
     wallet = {'balance': _int(data['wallet'].get('balance')), 'earned': _int(data['wallet'].get('earnedTotal')),
               'spent': _int(data['wallet'].get('spentTotal'))}
-    register_url = _str(adm_cfg.get('registerUrl')) or join_base_url()
+    register_url = _str(adm_cfg.get('registerUrl'))
+    if not register_url.lower().startswith(('http://', 'https://')):   # контракт приложения: только http(s)
+        register_url = join_base_url()
+    reserved = sum(1 for o in data['orders'] if o.get('status') == 'reserved')
+    # формы карточки возвращают на карточку (с её ?next — ссылка «‹ Лиды» помнит фильтры), в быстром просмотре —
+    # на список, из которого его открыли
+    form_next = (next_target() or url_for('applicants_leads')) if is_partial() else here()
     return render_template(
         'applicants/detail.html', lead=lead, src=src, referrer=referrer, invited=invited, tx_ids=tx_ids,
-        history=history, wallet=wallet, txs=data['txs'], orders=data['orders'], auth=data['auth'],
+        feed=feed, feed_kinds=FEED_KINDS, wallet=wallet, txs=data['txs'], orders=data['orders'], auth=data['auth'],
         statuses=STATUSES, grades=GRADES, spec_options=spec_options, groups=groups,
         contact_channels=CONTACT_CHANNELS, reset_password=RESET_PASSWORD, profile_fields=PROFILE_FIELDS,
+        reserved=reserved, nav=None if is_partial() else lead_neighbors(uid), form_next=form_next,
         ref_link=(register_url + ('&' if '?' in register_url else '?') + 'ref=' + lead['ref_code'])
         if lead['ref_code'] else None)
 
@@ -992,17 +1161,32 @@ def _crm_ref(uid):
 @routes.route('/applicants/<uid>/status', methods=['POST'])
 @admin_required
 def applicant_set_status(uid):
+    """Смена статуса лида: из карточки, из ячейки таблицы, из быстрого просмотра и перетаскиванием в канбане
+    (fetch с Accept: application/json → JSON). Без подтверждения — тост «Отменить» (UX_SPEC_v2 §4.11)."""
+    as_json = wants_json()
     status = request.form.get('status')
-    if status not in STATUS_KEYS:
-        flash('Выберите статус из списка', 'error')
+    if as_json and status is None:
+        status = (request.get_json(silent=True) or {}).get('status')
+
+    def fail(msg, code=400):
+        if as_json:
+            return jsonify({'ok': False, 'error': msg}), code
+        flash(msg, 'error')
         return _back('applicant_detail', uid=uid)
+
+    if status not in STATUS_KEYS:
+        return fail('Выберите статус из списка')
     if _require_applicant(uid, allow_converted=True) is None:
+        if as_json:
+            return jsonify({'ok': False, 'error': 'Абитуриент не найден — обновите страницу'}), 404
         return redirect(url_for('applicants_leads'))
     try:
         snap = _crm_ref(uid).get()
         old = (snap.to_dict() or {}).get('status') if snap.exists else None
         old = old if old in STATUS_KEYS else 'new'
         if old == status:
+            if as_json:
+                return jsonify({'ok': True, 'changed': False, 'status': status, 'label': STATUS_LABELS[status]})
             flash('Статус уже «%s»' % STATUS_LABELS[status], 'info')
             return _back('applicant_detail', uid=uid)
         data = {'status': status, 'updatedAt': SERVER_TIMESTAMP, 'updatedBy': _admin().get('uid'),
@@ -1012,12 +1196,21 @@ def applicant_set_status(uid):
             data['lastContactAt'] = SERVER_TIMESTAMP
         _crm_ref(uid).set(data, merge=True)
     except Exception as e:
+        log.warning('Статус %s не сменён', uid, exc_info=True)
+        if as_json:
+            return jsonify({'ok': False, 'error': 'Не удалось сменить статус. Попробуйте ещё раз'}), 500
         flash_error('Не удалось сменить статус. Попробуйте ещё раз', e)
         return _back('applicant_detail', uid=uid)
     audit('status', 'applicant', uid, {'from': old, 'to': status})
     invalidate_applicants_cache()
-    flash('Статус: %s' % STATUS_LABELS[status], 'success')
-    return _back('applicant_detail', uid=uid)
+    undo = {'post': url_for('applicant_set_status', uid=uid), 'fields': {'status': old}}
+    if as_json:
+        return jsonify({'ok': True, 'changed': True, 'status': status, 'label': STATUS_LABELS[status],
+                        'old': old, 'message': 'Статус: %s' % STATUS_LABELS[status], 'undo': undo})
+    target = back_url('applicant_detail', uid=uid)
+    flash_action('Статус: %s' % STATUS_LABELS[status], 'Отменить', post=undo['post'],
+                 fields=dict(undo['fields'], next=target))
+    return redirect(target)
 
 
 @routes.route('/applicants/<uid>/notes', methods=['POST'])
@@ -1037,6 +1230,61 @@ def applicant_save_notes(uid):
     invalidate_applicants_cache()
     flash('Заметка сохранена', 'success')
     return _back('applicant_detail', uid=uid)
+
+
+@routes.route('/applicants/<uid>/next-step', methods=['POST'])
+@admin_required
+def applicant_next_step(uid):
+    """Следующий шаг лида: action=save (текст ≤ 200 и/или дата), done (выполнен — в историю), clear (снять)."""
+    action = request.form.get('action') or 'save'
+    if action not in ('save', 'done', 'clear'):
+        action = 'save'
+    if _require_applicant(uid, allow_converted=True) is None:
+        return redirect(url_for('applicants_leads'))
+    text = _field('next_step', NEXT_STEP_MAX)
+    raw = _field('next_step_at')
+    day = _parse_date(raw) if raw else None
+    if action == 'save':
+        if raw and day is None:
+            flash('Проверьте дату следующего шага', 'error')
+            return _back('applicant_detail', uid=uid)
+        if not text and not day:
+            flash('Опишите следующий шаг или укажите дату', 'error')
+            return _back('applicant_detail', uid=uid)
+    try:
+        snap = _crm_ref(uid).get()
+        old = next_step_info(snap.to_dict() if snap.exists else {})
+        if action == 'save':
+            at = datetime(day.year, day.month, day.day, tzinfo=ALMATY) if day else None
+            details = (text or 'без описания') + (' · до %s' % day.strftime('%d.%m.%Y') if day else '')
+            data = {'nextStep': text or DELETE_FIELD, 'nextStepAt': at or DELETE_FIELD,
+                    'history': ArrayUnion([_history_entry('next_step', 'Назначен: ' + details)])}
+        else:
+            if old['state'] == 'none':
+                flash('Следующий шаг не назначен', 'info')
+                return _back('applicant_detail', uid=uid)
+            details = old['text'] or 'шаг на %s' % old['date'].strftime('%d.%m.%Y')
+            data = {'nextStep': DELETE_FIELD, 'nextStepAt': DELETE_FIELD,
+                    'history': ArrayUnion([_history_entry('next_step', ('Выполнен: ' if action == 'done'
+                                                                         else 'Снят: ') + details)])}
+            if action == 'done':
+                data['lastContactAt'] = SERVER_TIMESTAMP
+        data.update({'updatedAt': SERVER_TIMESTAMP, 'updatedBy': _admin().get('uid')})
+        _crm_ref(uid).set(data, merge=True)
+    except Exception as e:
+        flash_error('Не удалось сохранить следующий шаг', e)
+        return _back('applicant_detail', uid=uid)
+    audit('next_step', 'applicant', uid, {'action': action, 'text': text or old['text'] or None})
+    invalidate_applicants_cache()
+    target = back_url('applicant_detail', uid=uid)
+    if action == 'save':
+        flash('Следующий шаг сохранён', 'success')
+    else:
+        flash_action('Шаг выполнен' if action == 'done' else 'Шаг снят', 'Вернуть',
+                     post=url_for('applicant_next_step', uid=uid),
+                     fields={'action': 'save', 'next_step': old['text'],
+                             'next_step_at': old['date'].isoformat() if old['date'] else '', 'next': target})
+    return redirect(target)
 
 
 @routes.route('/applicants/<uid>/contact', methods=['POST'])
@@ -1339,9 +1587,8 @@ def source_rows(snap, base_url):
     return rows
 
 
-@routes.route('/applicants/sources')
-@admin_required
-def applicant_sources():
+def _sources_page(new_values=None, new_errors=None, status=200):
+    """Страница QR-источников; new_values/new_errors — форма «Новый источник» после ошибки (модалка откроется)."""
     base = join_base_url()
     try:
         snap = load_snapshot()
@@ -1350,10 +1597,25 @@ def applicant_sources():
         flash_error('Не удалось загрузить QR-источники', e)
         snap, rows = {'sources': {}}, []
     totals = {'scans': sum(r['scans'] for r in rows), 'registrations': sum(r['registrations'] for r in rows),
-              'active': sum(1 for r in rows if r['active']), 'enrolled': sum(r['enrolled'] for r in rows)}
+              'active': sum(1 for r in rows if r['active']), 'enrolled': sum(r['enrolled'] for r in rows),
+              'count': len(rows)}
     totals['conv'] = _pct(totals['registrations'], totals['scans']) if totals['scans'] else None
-    return render_template('applicants/sources.html', rows=rows, totals=totals, channels=CHANNELS,
-                           suggested=suggest_code(snap['sources']), join_base=base, max_welcome=MAX_WELCOME)
+    q = _str(request.args.get('q'), 80)
+    words = _norm(q).split()
+    if words:
+        rows = [r for r in rows if all(w in _norm(' '.join([r['title'], r['code'], r['note'], r['channel_label']]))
+                                       for w in words)]
+    values = new_values or {'code': suggest_code(snap['sources']), 'title': '', 'channel': 'stand',
+                            'welcomeCoins': 0, 'active': True, 'note': ''}
+    return render_template('applicants/sources.html', rows=rows, totals=totals, channels=CHANNELS, q=q,
+                           suggested=suggest_code(snap['sources']), join_base=base, max_welcome=MAX_WELCOME,
+                           new_values=values, new_errors=new_errors or {}), status
+
+
+@routes.route('/applicants/sources')
+@admin_required
+def applicant_sources():
+    return _sources_page()
 
 
 @routes.route('/applicants/sources/new', methods=['POST'])
@@ -1365,23 +1627,24 @@ def applicant_source_create():
         errors['code'] = 'Код — 3–24 латинские заглавные буквы и цифры (например, STAND1)'
     elif code in RESERVED_SOURCES:
         errors['code'] = 'Коды APP и WEB зарезервированы — выберите другой'
+    values = dict(data, code=code, title=_field('title'), note=_field('note'), welcomeCoins=_field('welcomeCoins'))
     if errors:
-        for msg in errors.values():
-            flash(msg, 'error')
-        return redirect(url_for('applicant_sources', _anchor='new-source'))
+        flash('Проверьте поля формы', 'error')
+        return _sources_page(values, errors, 400)
     doc = dict(data, scans=0, registrations=0, createdAt=SERVER_TIMESTAMP, createdBy=_admin().get('email'),
                updatedAt=SERVER_TIMESTAMP)
     try:
         db.collection('applicant_sources').document(code).create(doc)
     except Exception as e:
         if e.__class__.__name__ in ('AlreadyExists', 'Conflict'):
-            flash('Источник с кодом %s уже есть — выберите другой код' % code, 'error')
-        else:
-            flash_error('Не удалось создать источник', e)
-        return redirect(url_for('applicant_sources', _anchor='new-source'))
+            flash('Проверьте поля формы', 'error')
+            return _sources_page(values, {'code': 'Источник с кодом %s уже есть — выберите другой код' % code}, 400)
+        flash_error('Не удалось создать источник', e)
+        return _sources_page(values, {}, 500)
     audit('create', 'applicant_sources', code, data)
     invalidate_applicants_cache()
-    flash('Источник %s создан — QR-код готов к печати' % code, 'success')
+    flash_action('Источник %s создан — QR-код готов к печати' % code, 'Плакат',
+                 href=url_for('applicant_source_poster', code=code))
     return redirect(url_for('applicant_sources', _anchor='src-' + code))
 
 
@@ -1413,7 +1676,7 @@ def applicant_source_edit(code):
             audit('update', 'applicant_sources', code, form)
             invalidate_applicants_cache()
             flash('Источник %s сохранён' % code, 'success')
-            return redirect(url_for('applicant_sources', _anchor='src-' + code))
+            return redirect((next_target() or url_for('applicant_sources')) + '#src-' + code)
     base = join_base_url()
     stats = None
     try:
@@ -1443,8 +1706,11 @@ def applicant_source_toggle(code):
         return redirect(url_for('applicant_sources'))
     audit('enable' if active else 'disable', 'applicant_sources', code)
     invalidate_applicants_cache()
-    flash('Источник %s включён' % code if active else
-          'Источник %s выключен: регистрация по QR работает, но без приветственных коинов' % code, 'success')
+    # обратимое — без подтверждения, «Отменить» в тосте (UX_SPEC_v2 §4.11)
+    flash_action('Источник %s включён' % code if active else
+                 'Источник %s выключен: регистрация по QR работает, но без приветственных коинов' % code,
+                 'Отменить', post=url_for('applicant_source_toggle', code=code),
+                 fields={'next': back_url('applicant_sources')})
     return _back('applicant_sources')
 
 
