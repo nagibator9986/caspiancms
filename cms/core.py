@@ -127,6 +127,64 @@ class _Lazy:
         return '<lazy %r>' % (target,) if target is not None else '<lazy (не инициализирован)>'
 
 
+# ==================== ПРОВЕРКА КЛЮЧА СЕРВИС-АККАУНТА ====================
+# Если Google отклонил ключ (удалён или отключён — например, после публикации в открытом
+# репозитории), каждый запрос к Firestore повторяется до 300 с, и единственный воркер
+# PythonAnywhere «висит» на нём, блокируя весь сайт. Поэтому раз в минуту проверяем ключ
+# одним быстрым запросом токена и при отказе сразу отдаём 503 с понятным текстом.
+
+CREDENTIAL_CHECK_TTL = 60
+_cred_state = {'checked': 0.0, 'ok': True}
+_cred_lock = threading.Lock()
+
+
+def _probe_credentials():
+    """Получить токен сервис-аккаунта (без повторов). Бросает исключение, если ключ отклонён."""
+    if IS_EMULATOR:
+        return
+    from google.auth.transport.requests import Request
+    gcred = _init_firebase().credential.get_credential()
+    if not gcred.valid:
+        gcred.refresh(Request())
+
+
+def credentials_ok(force=False):
+    """True, если ключ рабочий. Проверка не чаще раза в CREDENTIAL_CHECK_TTL секунд на процесс;
+    сетевой сбой ключ плохим не делает (Firestore сам повторит запрос)."""
+    with _cred_lock:
+        if not force and time.time() - _cred_state['checked'] < CREDENTIAL_CHECK_TTL:
+            return _cred_state['ok']
+        _cred_state['checked'] = time.time()  # параллельные запросы не дублируют проверку
+    ok = True
+    try:
+        _probe_credentials()
+    except Exception as e:  # noqa: BLE001 — классифицируем ниже
+        from google.auth.exceptions import RefreshError
+        if isinstance(e, (RefreshError, OSError, ValueError)):
+            # ключ отклонён Google, файла ключа нет или JSON битый
+            ok = False
+            log.error('Ключ сервис-аккаунта Firebase не работает: %s', e)
+        else:
+            log.warning('Проверка ключа Firebase не удалась (сеть?): %s', e)
+    with _cred_lock:
+        _cred_state.update(ok=ok, checked=time.time())
+    return ok
+
+
+def reset_credentials_check():
+    """Сбросить кэш проверки ключа (тесты)."""
+    with _cred_lock:
+        _cred_state.update(ok=True, checked=0.0)
+
+
+def _credentials_guard():
+    if request.endpoint == 'static':
+        return None
+    if not credentials_ok():
+        abort(503, description='credentials')
+    return None
+
+
 def _make_db():
     _init_firebase()
     return firestore.client()
@@ -1480,7 +1538,12 @@ def init_app(app):
     """Конфиг, CSRF, cookies, Jinja-фильтры/глобалы, context_processor. Вызывает cms.register_all."""
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    _init_firebase()  # auth.* требует инициализированного приложения Firebase
+    try:
+        _init_firebase()  # auth.* требует инициализированного приложения Firebase
+    except Exception:
+        # Нет файла ключа или он битый: сайт всё равно стартует и показывает понятную 503
+        # (_credentials_guard), а не падает на импорте WSGI.
+        log.exception('Firebase не инициализирован: проверьте FIREBASE_CREDENTIALS (DEPLOY.md)')
     app.secret_key = load_secret_key()
     insecure = IS_EMULATOR or app.debug or os.environ.get('CMS_INSECURE_COOKIES') == '1'
     app.config.update(
@@ -1495,6 +1558,7 @@ def init_app(app):
     )
     app.json.ensure_ascii = False
 
+    app.before_request(_credentials_guard)
     app.before_request(_csrf_protect)
 
     @app.after_request

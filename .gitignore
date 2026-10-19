@@ -11,10 +11,11 @@ instance/
 .env.*
 tests/.env.local
 
-# ВНИМАНИЕ: firebase-service-account.json пока отслеживается git (см. DEPLOY.md → «Ротация ключа»).
-# После ротации ключа и переноса его вне репозитория: git rm --cached firebase-service-account.json
-# и раскомментировать строку ниже.
-# firebase-service-account.json
+# Ключ сервис-аккаунта — НИКОГДА не коммитить (см. DEPLOY.md → «Ключ сервис-аккаунта»).
+# 19.10.2026 ключ попал в публичный репозиторий, и Google его отключил.
+firebase-service-account.json
+*-sa.json
+*service-account*.json
 
 # Тесты и инструменты
 firebase-debug.log

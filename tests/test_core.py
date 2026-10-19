@@ -279,3 +279,51 @@ class PushAndCsvTest(CmsTestCase):
         self.assertTrue(body.startswith('﻿Имя;Логин\r\n'))
         self.assertIn('"Тимур; ""К"""', body)
         self.assertIn("filename*=UTF-8''%D0%BB%D0%B8%D0%B4%D1%8B.csv", r.headers['Content-Disposition'])
+
+
+class CredentialsGuardTest(CmsTestCase):
+    """Отклонённый Google ключ сервис-аккаунта → сразу 503 с понятным текстом,
+    а не зависание каждого запроса на 300 с (так было 19.10 на проде)."""
+
+    def setUp(self):
+        super().setUp()
+        from cms import core
+        self.core = core
+        core.reset_credentials_check()
+
+    def tearDown(self):
+        self.core.reset_credentials_check()
+        super().tearDown()
+
+    def test_rejected_key_gives_fast_503_and_is_cached(self):
+        from unittest import mock
+        from google.auth.exceptions import RefreshError
+        err = RefreshError('invalid_grant: Invalid JWT Signature.')
+        with mock.patch.object(self.core, '_probe_credentials', side_effect=err) as probe:
+            started = time.time()
+            r = self.client.get('/')
+            self.assertEqual(r.status_code, 503)
+            self.assertIn('ключ сервис-аккаунта', r.get_data(as_text=True))
+            self.assertLess(time.time() - started, 5)
+            # Результат кэшируется: следующий запрос не обращается к Google повторно.
+            self.assertEqual(self.client.get('/login').status_code, 503)
+            self.assertEqual(probe.call_count, 1)
+        # Ключ заменили — после сброса кэша админка снова работает.
+        self.core.reset_credentials_check()
+        self.get_ok('/')
+
+    def test_missing_key_file_gives_503(self):
+        from unittest import mock
+        with mock.patch.object(self.core, '_probe_credentials', side_effect=FileNotFoundError('нет файла')):
+            self.assertEqual(self.client.get('/').status_code, 503)
+
+    def test_network_error_does_not_block_site(self):
+        from unittest import mock
+        with mock.patch.object(self.core, '_probe_credentials', side_effect=RuntimeError('timeout')):
+            self.get_ok('/')
+
+    def test_static_is_not_blocked(self):
+        from unittest import mock
+        from google.auth.exceptions import RefreshError
+        with mock.patch.object(self.core, '_probe_credentials', side_effect=RefreshError('invalid_grant')):
+            self.assertEqual(self.client.get('/static/css/app.css').status_code, 200)

@@ -94,6 +94,10 @@ _ERRORS = {
     500: ('Что-то пошло не так', 'Мы уже записали ошибку в журнал. Обновите страницу или вернитесь назад.', 'bug'),
     503: ('Сервис временно недоступен', 'Не удалось связаться с базой данных. Попробуйте через минуту.', 'cloud-slash'),
 }
+_CREDENTIALS_TEXT = ('Нет доступа к базе данных',
+                     'Google отклонил ключ сервис-аккаунта Firebase, поэтому админка не может читать '
+                     'и сохранять данные. Администратору сайта: создайте новый ключ в Google Cloud и '
+                     'пропишите путь к нему в FIREBASE_CREDENTIALS (DEPLOY.md, раздел 3).', 'key')
 _CSRF_TEXT = ('Сессия устарела', 'Страница была открыта слишком давно или cookie были очищены. '
               'Обновите страницу и повторите действие.', 'arrow-clockwise')
 
@@ -102,6 +106,8 @@ def _handle_error(e):
     code = getattr(e, 'code', None) or 500
     if code == 400 and getattr(e, 'description', '') == 'csrf':
         title, text, icon = _CSRF_TEXT
+    elif code == 503 and getattr(e, 'description', '') == 'credentials':
+        title, text, icon = _CREDENTIALS_TEXT
     else:
         title, text, icon = _ERRORS.get(code, _ERRORS[500])
     if code >= 500:
