@@ -1,54 +1,42 @@
-{% extends "base.html" %}
-{% block title %}{{ 'Редактировать' if club else 'Добавить' }} клуб{% endblock %}
+{# Клуб: создание/правка (поля как в club_service.dart) (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% set is_edit = club is not none %}
+{% block title %}{{ 'Редактирование клуба' if is_edit else 'Новый клуб' }}{% endblock %}
+{% block page_title %}{{ 'Редактирование клуба' if is_edit else 'Новый клуб' }}{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<h1>{{ 'Редактировать' if club else 'Добавить' }} клуб</h1>
-<form method="POST" enctype="multipart/form-data">
-    <div class="mb-3">
-        <label class="form-label">Название</label>
-        <input type="text" name="title" class="form-control" value="{{ club.title if club else '' }}" required>
+{% call ui.page_header('Редактирование клуба' if is_edit else 'Новый клуб',
+                       ('Участников: ' ~ (club.registrationsCount or 0)) if is_edit else 'Студенты вступают в клуб в приложении',
+                       icon='stars') %}
+    {% if is_edit %}{{ ui.button('Участники', href=url_for('club_registrations', club_id=club.id), icon='people', variant='light') }}{% endif %}
+    {{ ui.button('К списку', href=url_for('clubs'), icon='arrow-left', variant='light') }}
+{% endcall %}
+
+<form method="post" enctype="multipart/form-data" class="ct-editor ct-editor--single" data-dirty-guard novalidate>
+    {{ ui.csrf_field() }}
+    <div class="ct-editor__main">
+        {% call ui.card('О клубе', icon='card-text') %}
+            {{ ui.field('title', 'Название', value=values.title, required=True, error=errors.title, attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
+            {{ ui.field('description', 'Описание', 'textarea', value=values.description, rows=5, error=errors.description, attrs={'maxlength': 5000}) }}
+            {{ ui.image_uploader('image', [{'url': club.imageUrl}] if (is_edit and club.imageUrl) else [], max=1, label='Обложка',
+                                 help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ.') }}
+            {% if errors.image %}<div class="invalid-feedback d-block mb-2">{{ errors.image }}</div>{% endif %}
+        {% endcall %}
     </div>
-    <div class="mb-3">
-        <label class="form-label">Описание</label>
-        <textarea name="description" class="form-control">{{ club.description if club else '' }}</textarea>
-    </div>
-  <div class="mb-3">
-    <label class="form-label">Категория</label>
-    <select name="category" class="form-select" required>
-        <option value="" disabled {{ 'selected' if not club else '' }}>Выберите категорию</option>
-        
-        <option value="physical" {{ 'selected' if club and club.category == 'physical' else '' }}>
-            Физкультура
-        </option>
-        <option value="creative" {{ 'selected' if club and club.category == 'creative' else '' }}>
-            Творчество
-        </option>
-        <option value="tech" {{ 'selected' if club and club.category == 'tech' else '' }}>
-            Технологии
-        </option>
-        <option value="community" {{ 'selected' if club and club.category == 'community' else '' }}>
-            Сообщество
-        </option>
-    </select>
-</div>
-    <div class="mb-3">
-        <label class="form-label">Время встречи</label>
-        <input type="text" name="meetingTime" class="form-control" value="{{ club.meetingTime if club else '' }}">
-    </div>
-    <div class="mb-3">
-        <label class="form-label">Местоположение</label>
-        <input type="text" name="location" class="form-control" value="{{ club.location if club else '' }}">
-    </div>
-    <div class="mb-3">
-        <label class="form-label">Куратор</label>
-        <input type="text" name="curator" class="form-control" value="{{ club.curator if club else '' }}">
-    </div>
-    <div class="mb-3">
-        <label class="form-label">Изображение</label>
-        <input type="file" name="image" class="form-control">
-        {% if club.imageUrl %}
-            <img src="{{ club.imageUrl }}" alt="Current image" style="max-width: 200px; margin-top: 10px;">
-        {% endif %}
-    </div>
-    <button type="submit" class="btn btn-primary">Сохранить</button>
+    <aside class="ct-editor__side">
+        {% call ui.card('Детали', icon='info-circle') %}
+            {{ ui.field('category', 'Категория', 'select', value=values.category, options=categories, required=True, error=errors.category,
+                        help='«Физкультура» — вкладка спортивных секций в приложении') }}
+            {{ ui.field('meetingTime', 'Когда встречается', value=values.meetingTime, error=errors.meetingTime, placeholder='Пн, Ср 16:00', attrs={'maxlength': 100}) }}
+            {{ ui.field('location', 'Где', value=values.location, error=errors.location, placeholder='Кабинет 204', attrs={'maxlength': 200}) }}
+            {{ ui.field('curator', 'Куратор', value=values.curator, error=errors.curator, placeholder='ФИО руководителя', attrs={'maxlength': 200}) }}
+        {% endcall %}
+        <div class="ct-editor__actions">
+            {{ ui.button('Отмена', href=url_for('clubs'), variant='light') }}
+            {{ ui.button('Сохранить' if is_edit else 'Создать клуб', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+        </div>
+    </aside>
 </form>
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

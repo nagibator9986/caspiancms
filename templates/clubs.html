@@ -1,62 +1,64 @@
-{% extends "base.html" %}
+{# Клубы: категории (вкладки приложения), поиск, участники (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Клубы{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1>Управление клубами</h1>
-        <a href="/clubs/add" class="btn btn-primary">+ Добавить клуб</a>
-    </div>
+{{ ui.page_header('Клубы', 'Кружки и секции. Категория «Физкультура» — отдельная вкладка в приложении, остальные — во второй.', [
+    {'label': 'Новый клуб', 'href': url_for('club_form'), 'icon': 'plus-lg'},
+], icon='stars') }}
 
-    <div class="card shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Фото</th>
-                        <th>Название и Категория</th>
-                        <th>Информация</th>
-                        <th>Участники</th>
-                        <th class="text-end">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for club in clubs %}
-                    <tr>
-                        <td style="width: 80px;">
-                            {% if club.imageUrl %}
-                                <img src="{{ club.imageUrl }}" alt="" class="rounded" style="width: 60px; height: 60px; object-fit: cover;">
-                            {% else %}
-                                <div class="bg-light rounded d-flex align-items-center justify-content-center" style="width: 60px; height: 60px;">
-                                    <i class="bi bi-image text-muted"></i>
-                                </div>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <div class="fw-bold">{{ club.title }}</div>
-                            <span class="badge bg-info text-dark">{{ club.category }}</span>
-                        </td>
-                        <td>
-                            <small class="d-block text-muted"><i class="bi bi-clock"></i> {{ club.meetingTime }}</small>
-                            <small class="d-block text-muted"><i class="bi bi-geo-alt"></i> {{ club.location }}</small>
-                        </td>
-                        <td>
-                            <span class="badge bg-secondary">{{ club.registrationsCount or 0 }} чел.</span>
-                        </td>
-                        <td class="text-end">
-                            <div class="btn-group">
-                                <a href="/clubs/registrations/{{ club.id }}" class="btn btn-sm btn-outline-primary">Список</a>
-                                <a href="/clubs/edit/{{ club.id }}" class="btn btn-sm btn-outline-warning">Редакт.</a>
-                                <form method="POST" action="/clubs/delete/{{ club.id }}" style="display:inline;" onsubmit="return confirm('Удалить клуб со всеми данными?')">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Удалить</button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="5" class="text-center py-4">Клубы пока не созданы</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+<div class="cc-stats">
+    {{ ui.stat_card('Клубов', stats.total, 'stars') }}
+    {{ ui.stat_card('Участников', stats.members, 'people', tone='info') }}
+    {{ ui.stat_card('Спортивных', by_cat.get('physical', 0), 'trophy', tone='success', href=url_with(category='physical', page=None)) }}
+    {{ ui.stat_card('Творчество и IT', by_cat.get('creative', 0) + by_cat.get('tech', 0) + by_cat.get('community', 0), 'palette', tone='violet') }}
 </div>
+
+{% set cat_tabs = [{'key': '', 'label': 'Все', 'href': url_with(category=None, page=None), 'count': stats.total}] %}
+{% for k, l in categories %}{% set _ = cat_tabs.append({'key': k, 'label': l, 'href': url_with(category=k, page=None), 'count': by_cat.get(k, 0)}) %}{% endfor %}
+{{ ui.tabs(cat_tabs, category, pills=True, label='Категории') }}
+
+{% call ui.filters_bar() %}
+    {% if category %}<input type="hidden" name="category" value="{{ category }}">{% endif %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Название, куратор, место') }}
+{% endcall %}
+
+{% if page.total %}
+<div class="ct-cards">
+    {% for c in page.items %}
+    <article class="ct-card">
+        <a class="ct-card__media{{ ' ct-card__media--empty' if not c.imageUrl }}" href="{{ url_for('club_registrations', club_id=c.id) }}" tabindex="-1" aria-hidden="true">
+            {% if c.imageUrl %}<img src="{{ c.imageUrl|safe_url }}" alt="" loading="lazy" decoding="async" width="320" height="180">
+            {% else %}<i class="bi bi-stars" aria-hidden="true"></i>{% endif %}
+        </a>
+        <div class="ct-card__body">
+            <div class="d-flex align-items-start gap-2">
+                <h2 class="ct-card__title me-auto"><a href="{{ url_for('club_registrations', club_id=c.id) }}">{{ c.display_title }}</a></h2>
+                {{ ui.badge(c.category, c.category_label, {'physical': 'success', 'creative': 'violet', 'tech': 'info', 'community': 'brand'}.get(c.category, 'neutral'), icon='') }}
+            </div>
+            {% if c.description %}<p class="ct-card__text ct-clamp-2">{{ c.description }}</p>{% endif %}
+            <ul class="ct-card__meta">
+                {% if c.meetingTime %}<li><i class="bi bi-clock" aria-hidden="true"></i>{{ c.meetingTime }}</li>{% endif %}
+                {% if c.location %}<li><i class="bi bi-geo-alt" aria-hidden="true"></i>{{ c.location }}</li>{% endif %}
+                {% if c.curator %}<li><i class="bi bi-person-badge" aria-hidden="true"></i>{{ c.curator }}</li>{% endif %}
+            </ul>
+        </div>
+        <div class="ct-card__foot">
+            <a class="ct-count-link" href="{{ url_for('club_registrations', club_id=c.id) }}"><i class="bi bi-people" aria-hidden="true"></i>{{ c.regs }} {{ c.regs|plural('участник', 'участника', 'участников') }}</a>
+            <span class="ms-auto d-flex gap-1">
+                {{ ui.button('Редактировать', href=url_for('club_form', club_id=c.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
+                {{ ui.confirm_button(url_for('club_delete', club_id=c.id), 'Удалить', 'Удалить клуб «' ~ c.display_title ~ '» вместе со списком участников?', fields={'next': request.full_path}, icon_only=True) }}
+            </span>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{{ ui.pagination(page) }}
+{% elif stats.total %}
+<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос или выберите другую категорию.', {'label': 'Все клубы', 'href': url_for('clubs'), 'variant': 'light'}) }}</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('stars', 'Клубов пока нет', 'Создайте клуб — студенты смогут вступить в него в приложении.', {'label': 'Новый клуб', 'href': url_for('club_form'), 'icon': 'plus-lg'}) }}</section>
+{% endif %}
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

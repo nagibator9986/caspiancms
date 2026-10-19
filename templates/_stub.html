@@ -1,0 +1,16 @@
+{# Временная страница «раздел в разработке» (cms.core.stub_page). Владельцы модулей заменят. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}{{ stub_title }}{% endblock %}
+{% block content %}
+{{ ui.page_header(stub_title, stub_subtitle, icon=stub_icon) }}
+{% call ui.card() %}
+    {% call ui.empty_state('cone-striped', 'Раздел в разработке', 'Скоро здесь появится:') %}
+        {% if stub_features %}
+        <ul class="cc-empty__list">
+            {% for f in stub_features %}<li><i class="bi bi-check2-circle" aria-hidden="true"></i><span>{{ f }}</span></li>{% endfor %}
+        </ul>
+        {% endif %}
+    {% endcall %}
+{% endcall %}
+{% endblock %}

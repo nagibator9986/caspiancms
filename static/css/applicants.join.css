@@ -1,0 +1,117 @@
+/* ==========================================================================
+   Публичная регистрация абитуриента /join (APPLICANTS). Mobile-first, только токены --cc-*.
+   Каркас страницы — public/base_public.html + app.css (.cc-public*).
+   ========================================================================== */
+
+.cc-join .cc-public__main { padding-top: 16px; }
+.jn-muted { color: var(--cc-text-muted); }
+.jn-small { font-size: 13px; }
+
+/* ----------------------------- Шапка формы ----------------------------- */
+.jn-hero { text-align: center; margin: 4px 0 16px; }
+.jn-hero h1 { font-size: 26px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 8px; line-height: 1.2; }
+.jn-hero p { color: var(--cc-text-muted); margin: 0 auto; max-width: 460px; font-size: 15px; line-height: 1.5; }
+.jn-perks { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.jn-perks li {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--cc-radius-pill);
+  background: var(--cc-surface); border: 1px solid var(--cc-border); font-size: 13px; font-weight: 600; color: var(--cc-text);
+}
+.jn-perks .bi { color: var(--cc-brand); }
+
+.jn-banners { display: grid; gap: 8px; margin-bottom: 14px; }
+.jn-banner {
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--cc-radius-md);
+  background: var(--cc-info-soft); color: var(--cc-info-fg); font-weight: 600; font-size: 14px; line-height: 1.4;
+}
+.jn-banner .bi { font-size: 20px; flex: 0 0 auto; }
+.jn-banner--coins { background: var(--cc-brand-tint); color: var(--cc-brand-strong); border: 1px solid var(--cc-brand-soft); }
+.jn-banner--coins .bi { color: var(--cc-brand); }
+.jn-banner--muted { background: var(--cc-surface); color: var(--cc-text-muted); border: 1px solid var(--cc-border); font-weight: 500; }
+
+/* ----------------------------- Карточка формы ----------------------------- */
+.jn-card { padding: 22px 18px; }
+@media (min-width: 480px) { .jn-card { padding: 28px 28px; } }
+.jn-h2 { font-size: 18px; font-weight: 800; margin: 22px 0 14px; letter-spacing: -.01em; }
+.jn-h2.mt-0 { margin-top: 0; }
+.jn-field { margin-bottom: 16px; }
+.jn-field .form-label { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+.jn-field .form-text { font-size: 13px; line-height: 1.45; }
+.cc-join .form-control { border-radius: var(--cc-radius-sm); }
+.cc-join .cc-password__toggle { min-width: 44px; min-height: 44px; }
+
+.jn-preview {
+  margin-top: 8px; padding: 8px 12px; border-radius: var(--cc-radius-sm); font-size: 14px;
+  background: var(--cc-success-soft); color: var(--cc-success-fg); font-weight: 600; word-break: break-all;
+}
+
+.jn-check { display: flex; gap: 12px; align-items: flex-start; margin: 14px 0 0; }
+.jn-check .form-check-input { width: 22px; height: 22px; margin: 1px 0 0; flex: 0 0 auto; cursor: pointer; }
+.jn-check label { font-size: 14px; line-height: 1.45; cursor: pointer; }
+.jn-check.is-invalid .form-check-input { border-color: var(--cc-danger); }
+.jn-check-error { margin-left: 34px; }
+.jn-privacy { margin: 8px 0 0 34px; font-size: 14px; }
+.jn-privacy a { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.jn-privacy-text { margin: 8px 0 0 34px; font-size: 13px; color: var(--cc-text-muted); }
+.jn-privacy-text summary { color: var(--cc-brand-strong); font-weight: 600; cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.jn-privacy-text p { margin: 6px 0 0; line-height: 1.5; }
+
+.jn-submit { margin-top: 22px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; min-height: 52px; }
+.jn-note { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--cc-text-muted); margin: 14px 0 0; line-height: 1.45; }
+.jn-note .bi { color: var(--cc-brand); margin-top: 1px; flex: 0 0 auto; }
+.jn-have { text-align: center; color: var(--cc-text-muted); font-size: 14px; margin: 18px 8px 0; }
+
+/* Ловушка для ботов: вне экрана, не display:none (некоторые боты такие поля пропускают) */
+.jn-hp { position: absolute !important; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+
+.jn-error-summary {
+  display: flex; gap: 12px; padding: 12px 14px; margin-bottom: 18px; border-radius: var(--cc-radius-md);
+  background: var(--cc-danger-soft); color: var(--cc-danger-fg); border: 1px solid var(--cc-danger); outline: none;
+}
+.jn-error-summary .bi { font-size: 20px; flex: 0 0 auto; }
+.jn-error-summary ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.jn-error-summary a { color: inherit; text-decoration: underline; }
+.jn-error-summary:focus-visible { box-shadow: 0 0 0 3px var(--bs-focus-ring-color); }
+
+/* ----------------------------- Готово ----------------------------- */
+.jn-done { text-align: center; margin: 8px 0 16px; }
+.jn-done h1 { font-size: 26px; font-weight: 800; margin: 12px 0 6px; letter-spacing: -.02em; }
+.jn-done p { margin: 0; }
+.jn-done__badge {
+  width: 72px; height: 72px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center;
+  background: var(--cc-success); color: var(--cc-on-brand); font-size: 38px; box-shadow: 0 0 0 8px var(--cc-success-soft);
+  animation: jn-pop var(--cc-dur-med) var(--cc-ease) both;
+}
+@keyframes jn-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.jn-login { display: grid; gap: 6px; padding: 14px 16px; border-radius: var(--cc-radius-md); background: var(--cc-surface-2); }
+.jn-login__label { font-size: 13px; font-weight: 600; color: var(--cc-text-muted); }
+.jn-login__row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.jn-login__value { font-size: 22px; font-weight: 800; letter-spacing: -.01em; word-break: break-all; }
+.jn-coins {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: var(--cc-radius-md);
+  background: var(--cc-brand-tint); color: var(--cc-brand-strong); font-weight: 700; border: 1px solid var(--cc-brand-soft);
+}
+.jn-coins .bi { font-size: 22px; color: var(--cc-brand); }
+
+.jn-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.jn-steps li { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; line-height: 1.45; }
+.jn-steps__n {
+  width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--cc-brand-strong); color: var(--cc-on-brand); font-weight: 800; font-size: 14px;
+}
+
+.jn-stores { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 18px; }
+.jn-store {
+  display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 52px; padding: 8px 14px;
+  border-radius: var(--cc-radius-sm); background: var(--cc-text); color: var(--cc-surface); text-decoration: none; font-weight: 700;
+  line-height: 1.1; transition: transform var(--cc-dur-fast) var(--cc-ease);
+}
+.jn-store:hover, .jn-store:focus-visible { color: var(--cc-surface); transform: translateY(-1px); }
+.jn-store .bi { font-size: 24px; }
+.jn-store small { display: block; font-size: 11px; font-weight: 500; opacity: .85; }
+
+.jn-contacts { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin: 16px 0 0; color: var(--cc-text-muted); font-size: 14px; }
+.jn-contacts .btn { display: inline-flex; align-items: center; gap: 6px; }
+.jn-again { text-align: center; margin: 14px 0 0; font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) { .jn-done__badge { animation: none; } }

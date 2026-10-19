@@ -1,0 +1,70 @@
+{# Опросы: список с вкладками «идут / завершены», поиском и быстрыми действиями (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Опросы{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
+{% block content %}
+{{ ui.page_header('Опросы', 'Голосование проходит в приложении: один голос с аккаунта. Здесь — создание, сроки и результаты.', [
+    {'label': 'Новый опрос', 'href': url_for('poll_form'), 'icon': 'plus-lg'},
+], icon='ui-checks') }}
+
+{{ ui.tabs([
+    {'key': '', 'label': 'Все', 'href': url_with(status=None, page=None), 'icon': 'list-ul', 'count': counts.all},
+    {'key': 'active', 'label': 'Идут', 'href': url_with(status='active', page=None), 'icon': 'broadcast', 'count': counts.active},
+    {'key': 'finished', 'label': 'Завершены', 'href': url_with(status='finished', page=None), 'icon': 'flag', 'count': counts.finished},
+], status, label='Статус опросов') }}
+
+{% call ui.filters_bar() %}
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Вопрос или описание') }}
+    {{ ui.filter_select('audience', 'Аудитория', audiences, request.args.get('audience')) }}
+{% endcall %}
+
+{% if page.total %}
+{% call ui.data_table('pollsTable') %}
+<table class="cc-table" id="pollsTable">
+    <thead><tr><th>Опрос</th><th class="d-none d-lg-table-cell">Кому</th><th class="d-none d-lg-table-cell">Тип</th><th class="text-end">Голосов</th><th class="d-none d-md-table-cell">Окончание</th><th>Статус</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
+    <tbody>
+    {% for p in page.items %}
+        <tr data-href="{{ url_for('poll_results', poll_id=p.id) }}">
+            <td>
+                <div class="ct-item ct-main-col">
+                    <span class="ct-cover ct-cover--sm">{% if p.imageUrl %}<img src="{{ p.imageUrl|safe_url }}" alt="" width="44" height="44" loading="lazy" decoding="async">{% else %}<i class="bi bi-bar-chart-line" aria-hidden="true"></i>{% endif %}</span>
+                    <div class="min-w-0">
+                        <div class="cc-cell-main ct-clamp-1">{{ p.title or 'Без названия' }}</div>
+                        <div class="cc-cell-sub">{% if p.meta.anonymous %}<i class="bi bi-incognito" aria-hidden="true"></i> Анонимный · {% endif %}{{ p.meta.audience_label|lower if p.meta.audience != 'all' else 'для всех' }} · создан {{ p.createdAt|dateonly }}</div>
+                        {% if p.meta.active and p.meta.left_label %}<div class="cc-cell-sub d-md-none">{{ p.meta.left_label }}</div>{% endif %}
+                    </div>
+                </div>
+            </td>
+            <td class="d-none d-lg-table-cell">{{ p.meta.audience_label }}</td>
+            <td class="d-none d-lg-table-cell cc-nowrap">{{ p.meta.type_label }}</td>
+            <td class="text-end cc-num">{{ p.votes|num }}</td>
+            <td class="d-none d-md-table-cell cc-nowrap">
+                {% if p.meta.end %}<div>{{ p.meta.end|dt }}</div><div class="cc-cell-sub">{{ p.meta.left_label if p.meta.active else (p.meta.end|ago) }}</div>
+                {% else %}<span class="cc-muted">Без срока</span>{% endif %}
+            </td>
+            <td>{{ ui.badge('active', 'Идёт', 'success', 'broadcast') if p.meta.active else ui.badge('closed', 'Завершён', 'neutral', 'flag') }}</td>
+            <td class="cc-actions">
+                {{ ui.button('Результаты', href=url_for('poll_results', poll_id=p.id), icon='bar-chart', variant='light', size='sm', icon_only=True) }}
+                {{ ui.button('Редактировать', href=url_for('poll_form', poll_id=p.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
+                {% if p.meta.active %}
+                {{ ui.confirm_button(url_for('poll_close', poll_id=p.id), 'Завершить сейчас', 'Завершить опрос «' ~ (p.title or '') ~ '» сейчас? Голосование в приложении закроется.', variant='light', icon='stop-circle', ok='Завершить', fields={'next': request.full_path}, icon_only=True) }}
+                {% else %}
+                {{ ui.confirm_button(url_for('poll_extend', poll_id=p.id), 'Продлить на 7 дней', 'Открыть опрос «' ~ (p.title or '') ~ '» ещё на 7 дней?', variant='light', icon='arrow-clockwise', ok='Продлить', fields={'days': 7, 'next': request.full_path}, icon_only=True) }}
+                {% endif %}
+                {{ ui.confirm_button(url_for('poll_delete', poll_id=p.id), 'Удалить', 'Удалить опрос «' ~ (p.title or '') ~ '» вместе со всеми голосами?', fields={'next': request.full_path}, icon_only=True) }}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endcall %}
+{{ ui.pagination(page) }}
+{% elif counts.all %}
+<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос или выберите другую вкладку.', {'label': 'Все опросы', 'href': url_for('polls'), 'variant': 'light'}) }}</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('ui-checks', 'Опросов пока нет', 'Создайте опрос — студенты и преподаватели проголосуют в приложении, а результаты появятся здесь.', {'label': 'Новый опрос', 'href': url_for('poll_form'), 'icon': 'plus-lg'}) }}</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

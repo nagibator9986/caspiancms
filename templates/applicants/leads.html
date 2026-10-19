@@ -1,0 +1,128 @@
+{# Лиды: поиск, фильтры, вкладки статусов, пагинация, массовые действия, экспорт CSV (APPLICANTS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'applicants/_macros.html' as ap with context %}
+{% block title %}Лиды{% endblock %}
+{% block styles %}{{ ui.css('applicants') }}{% endblock %}
+{% block content %}
+{% call ui.page_header('Лиды', 'Абитуриенты и статусы приёмной комиссии' ~ (' · данные на ' ~ (loaded_at|timeonly) if loaded_at else ''), icon='person-lines-fill') %}
+    <form method="post" action="{{ url_for('applicants_refresh') }}" class="m-0">
+        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+        {{ ui.button('Обновить', type='submit', icon='arrow-clockwise', variant='light', icon_only=True) }}
+    </form>
+    {{ ui.button('Экспорт CSV', href=url_for('applicants_leads_export') ~ ('?' ~ request.query_string.decode() if request.query_string else ''), icon='download', variant='light') }}
+    {{ ui.button('Аналитика', href=url_for('applicants_dashboard'), icon='graph-up-arrow') }}
+{% endcall %}
+
+{% set more_active = f.city or f.grade or f['from'] or f.to or f.profile or f.kind or f.sort != 'new' or f.per != 25 %}
+{% call ui.filters_bar() %}
+    {{ ui.filter_search('q', 'Поиск', f.q, 'Имя, логин, телефон, школа, заметка') }}
+    {% if opts %}
+    {{ ui.filter_select('source', 'Источник', opts.sources, f.source) }}
+    {{ ui.filter_select('specialty', 'Специальность', opts.specialties, f.specialty) }}
+    {% endif %}
+    {{ ui.filter_select('period', 'Период', periods, f.period, all_label='За всё время') }}
+    <button type="button" class="btn btn-light ap-more-toggle" data-bs-toggle="collapse" data-bs-target="#apMoreFilters" aria-expanded="{{ 'true' if more_active else 'false' }}" aria-controls="apMoreFilters">
+        <i class="bi bi-sliders" aria-hidden="true"></i><span>Ещё фильтры</span>{% if more_active %}<span class="ap-dot" aria-hidden="true"></span><span class="visually-hidden">(есть активные)</span>{% endif %}
+    </button>
+    <div class="collapse ap-more-filters{{ ' show' if more_active }}" id="apMoreFilters">
+        <div class="ap-more-filters__body">
+            {% if opts %}
+            {{ ui.filter_select('city', 'Город', opts.cities, f.city) }}
+            {{ ui.filter_select('grade', 'Класс', opts.grades, f.grade) }}
+            {% endif %}
+            {{ ui.filter_input('from', 'С даты', f['from'].isoformat() if f['from'] else '', 'date') }}
+            {{ ui.filter_input('to', 'По дату', f.to.isoformat() if f.to else '', 'date') }}
+            {{ ui.filter_select('profile', 'Профиль', [('complete', 'Заполнен'), ('incomplete', 'Не заполнен')], f.profile) }}
+            {{ ui.filter_select('kind', 'Кто', [('applicant', 'Абитуриенты'), ('converted', 'Уже студенты')], f.kind) }}
+            {{ ui.filter_select('sort', 'Сортировка', sorts, f.sort, all_label=None) }}
+            {{ ui.filter_select('per', 'На странице', per_options|map('string')|list, f.per|string, all_label=None) }}
+        </div>
+    </div>
+    {% if f.status %}<input type="hidden" name="status" value="{{ f.status }}">{% endif %}
+{% endcall %}
+
+{% if page is none %}
+    <section class="cc-card">{{ ui.empty_state('cloud-slash', 'Список не загрузился', 'Проверьте соединение и обновите страницу.') }}</section>
+{% else %}
+{% set tabs = [] %}
+{% for t in status_tabs %}{% set _ = tabs.append({'key': t.key, 'label': t.label, 'count': t.count, 'href': url_with(status=t.key or None, page=None)}) %}{% endfor %}
+{{ ui.tabs(tabs, f.status, label='Статус лида') }}
+
+<form id="apBulk" method="post" action="{{ url_for('applicants_bulk') }}" class="m-0">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+</form>
+
+<section class="cc-card">
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">{{ page.total|num }} {{ page.total|plural('абитуриент', 'абитуриента', 'абитуриентов') }}{% if page.total != total %} <span class="cc-muted fw-normal">из {{ total|num }}</span>{% endif %}</h2>
+        <div class="ap-bulk" data-ap-bulk hidden>
+            <span class="cc-muted small">Выбрано: <b data-ap-bulk-count>0</b></span>
+            <select class="form-select form-select-sm" name="status" form="apBulk" aria-label="Новый статус">
+                {% for k, lbl in statuses %}<option value="{{ k }}">{{ lbl }}</option>{% endfor %}
+            </select>
+            <button type="submit" form="apBulk" name="action" value="status" class="btn btn-sm btn-primary"><i class="bi bi-flag" aria-hidden="true"></i><span>Сменить статус</span></button>
+            <button type="button" class="btn btn-sm btn-light" data-bs-toggle="collapse" data-bs-target="#apBulkCoins" aria-expanded="false" aria-controls="apBulkCoins"><i class="bi bi-coin" aria-hidden="true"></i><span>Начислить коины</span></button>
+        </div>
+    </div>
+    <div class="collapse" id="apBulkCoins">
+        <div class="ap-bulk-coins">
+            <label class="form-label" for="apBulkAmount">Коинов каждому</label>
+            <input class="form-control form-control-sm" type="number" min="1" max="100000" step="1" id="apBulkAmount" name="amount" form="apBulk" placeholder="50">
+            <label class="form-label" for="apBulkReason">Причина (её увидит абитуриент)</label>
+            <input class="form-control form-control-sm" type="text" maxlength="200" id="apBulkReason" name="reason" form="apBulk" placeholder="Например: участие в дне открытых дверей">
+            <button type="submit" form="apBulk" name="action" value="coins" class="btn btn-sm btn-primary" data-confirm="Начислить коины всем выбранным абитуриентам?" data-confirm-variant="primary" data-confirm-ok="Начислить"><i class="bi bi-check2" aria-hidden="true"></i><span>Начислить</span></button>
+        </div>
+    </div>
+
+    {% if page.total %}
+    <div class="cc-table-wrap">
+        <table class="cc-table ap-leads" id="apLeads">
+            <thead><tr>
+                <th class="ap-check"><input class="form-check-input" type="checkbox" data-ap-check-all aria-label="Выбрать всех на странице"></th>
+                <th>Абитуриент</th>
+                <th class="d-none d-lg-table-cell">Источник</th>
+                <th>Статус</th>
+                <th class="d-none d-md-table-cell">Профиль</th>
+                <th class="text-end d-none d-xxl-table-cell">Коины</th>
+                <th class="d-none d-sm-table-cell">Регистрация</th>
+            </tr></thead>
+            <tbody>
+            {% for x in page.items %}
+                <tr data-href="{{ url_for('applicant_detail', uid=x.uid) }}">
+                    <td class="ap-check"><input class="form-check-input" type="checkbox" name="uids" value="{{ x.uid }}" form="apBulk" data-ap-check aria-label="Выбрать {{ x.title }}"></td>
+                    <td>
+                        <div class="ap-person">
+                            {{ ui.avatar(x.title, size='sm') }}
+                            <div class="min-w-0">
+                                <a class="cc-cell-main ap-person__name" href="{{ url_for('applicant_detail', uid=x.uid) }}">{{ x.title }}</a>
+                                <div class="cc-cell-sub cc-truncate">
+                                    {% if x.name %}{{ x.login }}{% else %}имя не указано{% endif %}{% if x.phone_fmt and x.phone_fmt != x.login %} · {{ x.phone_fmt }}{% endif %}{% if x.city %} · {{ x.city }}{% endif %}
+                                    {% if x.converted %} · <span class="ap-tag ap-tag--success">студент{% if x.group %} {{ x.group }}{% endif %}</span>{% endif %}
+                                    {% if x.must_change %} · <span class="ap-tag" title="Пароль сброшен — ждём, пока абитуриент придумает новый">сброс пароля</span>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="d-none d-lg-table-cell ap-src-cell">{{ ap.source_label(x.source_title, x.source_icon, x.source) }}</td>
+                    <td>{{ ui.badge(x.status) }}</td>
+                    <td class="d-none d-md-table-cell">{{ ap.profile_meter(x.filled, x.complete) }}</td>
+                    <td class="text-end cc-num d-none d-xxl-table-cell">{{ x.balance|num }}</td>
+                    <td class="cc-nowrap d-none d-sm-table-cell"><div title="{{ x.created|dt }}">{{ x.created|dateonly }}</div><div class="cc-cell-sub">{{ x.created|ago }}</div></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        {% if has_filters or f.status %}
+            {{ ui.empty_state('search', 'Никого не нашли', 'Измените условия поиска или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('applicants_leads'), 'icon': 'x-lg', 'variant': 'light'}) }}
+        {% else %}
+            {{ ui.empty_state('person-plus', 'Абитуриентов пока нет', 'Они появятся после регистрации в приложении или по QR-коду со стенда.', {'label': 'QR-источники', 'href': url_for('applicant_sources'), 'icon': 'qr-code'}) }}
+        {% endif %}
+    {% endif %}
+</section>
+{{ ui.pagination(page) }}
+{% endif %}
+{% endblock %}
+{% block scripts %}{{ ui.js('applicants') }}{% endblock %}

@@ -1,466 +1,83 @@
-{% extends "base.html" %}
-
+{# Результаты опроса: голоса по вариантам, участники (только у неанонимных), экспорт CSV (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
 {% block title %}Результаты опроса{% endblock %}
-
+{% block page_title %}Результаты опроса{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<style>
-    .poll-results-page {
-        max-width: 1100px;
-        margin: 0 auto;
-        padding: 24px 16px 48px;
-    }
+{% call ui.page_header(poll.title or 'Опрос без названия', poll.description or None, icon='bar-chart') %}
+    {{ ui.button('CSV', href=url_with(format='csv'), icon='download', variant='light') }}
+    {{ ui.button('Редактировать', href=url_for('poll_form', poll_id=poll.id), icon='pencil', variant='light') }}
+    {% if meta.active %}
+    {{ ui.confirm_button(url_for('poll_close', poll_id=poll.id), 'Завершить сейчас', 'Завершить опрос сейчас? Голосование в приложении закроется.', variant='outline-primary', icon='stop-circle', size=None, ok='Завершить', fields={'next': url_for('poll_results', poll_id=poll.id)}) }}
+    {% else %}
+    {{ ui.confirm_button(url_for('poll_extend', poll_id=poll.id), 'Продлить на 7 дней', 'Открыть голосование ещё на 7 дней?', variant='outline-primary', icon='arrow-clockwise', size=None, ok='Продлить', fields={'days': 7, 'next': url_for('poll_results', poll_id=poll.id)}) }}
+    {% endif %}
+{% endcall %}
 
-    .poll-header {
-        background: #fff;
-        border-radius: 18px;
-        padding: 28px;
-        margin-bottom: 22px;
-        box-shadow: 0 4px 18px rgba(15, 23, 42, .08);
-        border: 1px solid #e5e7eb;
-    }
+<div class="d-flex flex-wrap gap-2 mb-3">
+    {{ ui.badge('active', 'Идёт', 'success', 'broadcast') if meta.active else ui.badge('closed', 'Завершён', 'neutral', 'flag') }}
+    {{ ui.badge('aud', meta.audience_label, 'info', 'people') }}
+    {{ ui.badge('type', meta.type_label, 'neutral', 'ui-checks') }}
+    {% if meta.anonymous %}{{ ui.badge('anon', 'Анонимный', 'violet', 'incognito') }}{% endif %}
+</div>
 
-    .poll-header-grid {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 24px;
-        align-items: start;
-    }
+<div class="cc-stats">
+    {{ ui.stat_card('Голосов', total_votes, 'check2-square') }}
+    {{ ui.stat_card('Проголосовали', voters_count, 'people', tone='info', meta='аккаунтов' if voters_count else None) }}
+    {{ ui.stat_card('Вариантов', answers|length, 'list-ol', tone='violet') }}
+    {{ ui.stat_card('Окончание', (meta.end|dt('%d.%m.%Y')) if meta.end else 'Без срока', 'hourglass-split', tone='warning' if meta.active else None, meta=((meta.end|timeonly) ~ ' · ' ~ (meta.left_label if meta.active else (meta.end|ago))) if meta.end else None) }}
+</div>
 
-    .poll-title {
-        margin: 0 0 10px;
-        font-size: 30px;
-        line-height: 1.2;
-        font-weight: 700;
-        color: #111827;
-    }
-
-    .poll-description {
-        margin: 0;
-        color: #6b7280;
-        font-size: 16px;
-        line-height: 1.6;
-        white-space: pre-line;
-    }
-
-    .poll-image {
-        width: 180px;
-        max-height: 130px;
-        object-fit: cover;
-        border-radius: 12px;
-        border: 1px solid #e5e7eb;
-    }
-
-    .poll-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 18px;
-    }
-
-    .poll-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 7px 11px;
-        border-radius: 999px;
-        background: #f3f4f6;
-        color: #4b5563;
-        font-size: 13px;
-        font-weight: 600;
-    }
-
-    .poll-badge.success {
-        background: #ecfdf5;
-        color: #047857;
-    }
-
-    .poll-badge.warning {
-        background: #fffbeb;
-        color: #b45309;
-    }
-
-    .results-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 300px;
-        gap: 22px;
-        align-items: start;
-    }
-
-    .results-card {
-        background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 18px;
-        padding: 24px;
-        box-shadow: 0 4px 18px rgba(15, 23, 42, .06);
-    }
-
-    .results-card h2 {
-        margin: 0 0 20px;
-        font-size: 20px;
-        color: #111827;
-    }
-
-    .stat-card {
-        text-align: center;
-        padding: 24px 18px;
-        margin-bottom: 14px;
-        border-radius: 16px;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-    }
-
-    .stat-number {
-        font-size: 38px;
-        line-height: 1;
-        font-weight: 800;
-        color: #111827;
-        margin-bottom: 8px;
-    }
-
-    .stat-label {
-        color: #6b7280;
-        font-size: 14px;
-    }
-
-    .answer-row {
-        margin-bottom: 22px;
-    }
-
-    .answer-row:last-child {
-        margin-bottom: 0;
-    }
-
-    .answer-top {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 8px;
-        align-items: baseline;
-    }
-
-    .answer-text {
-        font-weight: 600;
-        color: #1f2937;
-        overflow-wrap: anywhere;
-    }
-
-    .answer-values {
-        flex: 0 0 auto;
-        color: #6b7280;
-        font-size: 14px;
-        white-space: nowrap;
-    }
-
-    .progress-track {
-        width: 100%;
-        height: 12px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: #e5e7eb;
-    }
-
-    .progress-bar {
-        height: 100%;
-        min-width: 0;
-        border-radius: inherit;
-        background: #2563eb;
-        transition: width .3s ease;
-    }
-
-    .percentage {
-        margin-top: 6px;
-        text-align: right;
-        color: #2563eb;
-        font-size: 13px;
-        font-weight: 700;
-    }
-
-    .empty-results {
-        text-align: center;
-        padding: 40px 20px;
-        color: #6b7280;
-        background: #f8fafc;
-        border-radius: 12px;
-    }
-
-    .voters-section {
-        margin-top: 24px;
-        padding-top: 22px;
-        border-top: 1px solid #e5e7eb;
-    }
-
-    .voters-title {
-        font-size: 16px;
-        font-weight: 700;
-        color: #374151;
-        margin-bottom: 12px;
-    }
-
-    .voter-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-    }
-
-    .voter-item {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 7px 10px;
-        border-radius: 10px;
-        background: #f3f4f6;
-        color: #374151;
-        font-size: 13px;
-    }
-
-    .voter-avatar {
-        width: 24px;
-        height: 24px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        background: #dbeafe;
-        color: #1d4ed8;
-        font-size: 11px;
-        font-weight: 800;
-    }
-
-    .anonymous-note {
-        margin-top: 18px;
-        padding: 12px 14px;
-        border-radius: 10px;
-        background: #f8fafc;
-        color: #64748b;
-        font-size: 13px;
-    }
-
-    .actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-top: 22px;
-    }
-
-    .btn-poll {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 7px;
-        padding: 10px 16px;
-        border-radius: 10px;
-        text-decoration: none;
-        font-weight: 600;
-        font-size: 14px;
-        border: 1px solid transparent;
-    }
-
-    .btn-primary-poll {
-        background: #2563eb;
-        color: #fff !important;
-    }
-
-    .btn-secondary-poll {
-        background: #fff;
-        color: #374151 !important;
-        border-color: #d1d5db;
-    }
-
-    @media (max-width: 800px) {
-        .poll-header-grid,
-        .results-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .poll-image {
-            width: 100%;
-            max-height: 220px;
-        }
-
-        .poll-title {
-            font-size: 24px;
-        }
-    }
-</style>
-
-<div class="poll-results-page">
-
-    <div class="poll-header">
-        <div class="poll-header-grid">
-            <div>
-                <h1 class="poll-title">
-                    {{ poll.get('title', 'Результаты опроса') }}
-                </h1>
-
-                {% if poll.get('description') %}
-                    <p class="poll-description">{{ poll.get('description') }}</p>
-                {% endif %}
-
-                <div class="poll-meta">
-                    {% if poll.get('poll_type') == 'single' %}
-                        <span class="poll-badge">◉ Один вариант</span>
-                    {% else %}
-                        <span class="poll-badge">☑ Несколько вариантов</span>
-                    {% endif %}
-
-                    {% if poll.get('is_anonymous', True) %}
-                        <span class="poll-badge">🔒 Анонимный</span>
-                    {% else %}
-                        <span class="poll-badge success">👤 Голоса открыты</span>
-                    {% endif %}
-
-                    {% if poll.get('target_audience') == 'students' %}
-                        <span class="poll-badge">🎓 Студенты</span>
-                    {% elif poll.get('target_audience') == 'teachers' %}
-                        <span class="poll-badge">👨‍🏫 Преподаватели</span>
-                    {% else %}
-                        <span class="poll-badge">👥 Все пользователи</span>
-                    {% endif %}
-
-                    {% if poll.get('endTime') %}
-                        <span class="poll-badge warning">
-                            ⏱ До: {{ poll.get('endTime') }}
-                        </span>
-                    {% endif %}
+<div class="cc-grid cc-grid-2 ct-results-grid">
+    {% call ui.card('Результаты', icon='bar-chart-line', subtitle=total_votes ~ ' ' ~ total_votes|plural('голос', 'голоса', 'голосов')) %}
+        {% if answers %}
+        <ol class="ct-results">
+            {% for a in answers|sort(attribute='votes', reverse=True) %}
+            <li class="ct-results__row{{ ' is-leader' if a.leader }}">
+                <div class="ct-results__top">
+                    <span class="ct-results__text">{% if a.leader %}<i class="bi bi-trophy" aria-hidden="true"></i>{% endif %}{{ a.text or '—' }}</span>
+                    <span class="ct-results__num cc-num"><b>{{ a.pct }}%</b> · {{ a.votes }}</span>
                 </div>
-            </div>
+                {{ ui.progress_bar(a.votes, total_votes or 1, 'success' if a.leader else None, a.text) }}
+            </li>
+            {% endfor %}
+        </ol>
+        {% else %}
+        {{ ui.empty_state('list-ol', 'Вариантов нет', 'Добавьте варианты ответа в форме опроса.', {'label': 'Редактировать', 'href': url_for('poll_form', poll_id=poll.id), 'icon': 'pencil', 'variant': 'light'}) }}
+        {% endif %}
+    {% endcall %}
 
-            {% if poll.get('imageUrl') %}
-                <img
-                    src="{{ poll.get('imageUrl') }}"
-                    alt="Изображение опроса"
-                    class="poll-image"
-                >
-            {% endif %}
+    {% if meta.anonymous %}
+    {% call ui.card('Участники', icon='incognito') %}
+        {{ ui.empty_state('incognito', 'Анонимный опрос', 'Имена голосовавших не показываются — видно только количество голосов.') }}
+    {% endcall %}
+    {% else %}
+    {% call ui.card('Участники', icon='people', subtitle=people|length ~ ' ' ~ (people|length)|plural('человек', 'человека', 'человек')) %}
+        {% if people %}
+        <div class="cc-search mb-2"><i class="bi bi-search" aria-hidden="true"></i>
+            <input class="form-control form-control-sm" type="search" placeholder="Имя или группа" aria-label="Поиск участника" data-table-search="#votersTable">
         </div>
-    </div>
-
-    <div class="results-grid">
-
-        <div class="results-card">
-            <h2>Результаты голосования</h2>
-
-            {% if answers %}
-                {% for answer in answers %}
-                    {% set votes = answer.get('votes', 0) %}
-                    {% set percentage = answer.get('percentage', 0) %}
-
-                    <div class="answer-row">
-                        <div class="answer-top">
-                            <div class="answer-text">
-                                {{ loop.index }}. {{ answer.get('text', 'Без названия') }}
-                            </div>
-
-                            <div class="answer-values">
-                                {{ votes }} голос{% if votes % 2 == 0 or votes % 10 in [0, 5, 6, 7, 8, 9] %}ов{% elif votes % 10 in [2, 3, 4] %}а{% endif %}
-                            </div>
-                        </div>
-
-                        <div class="progress-track" aria-label="{{ percentage }}%">
-                            <div
-                                class="progress-bar"
-                                style="width: {{ percentage|default(0)|float }}%;"
-                            ></div>
-                        </div>
-
-                        <div class="percentage">
-                            {{ percentage|default(0) }}%
-                        </div>
-
-                        {% if not poll.get('is_anonymous', True) and answer.get('voters') %}
-                            <div class="voters-section">
-                                <div class="voters-title">Кто выбрал этот вариант</div>
-
-                                <ul class="voter-list">
-                                    {% for voter in answer.get('voters', []) %}
-                                        <li class="voter-item">
-                                            <span class="voter-avatar">
-                                                {{ voter.get('user_name', '?')[:1]|upper }}
-                                            </span>
-                                            <span>{{ voter.get('user_name', 'Неизвестный пользователь') }}</span>
-                                        </li>
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        {% endif %}
-                    </div>
+        <div class="cc-table-wrap ct-scroll">
+            <table class="cc-table cc-table--compact" id="votersTable" data-sortable>
+                <thead><tr><th data-sort="text">Участник</th><th data-sort="text">Ответ</th><th data-sort="text">Когда</th></tr></thead>
+                <tbody>
+                {% for p in people %}
+                <tr>
+                    <td><div class="d-flex align-items-center gap-2">{{ ui.avatar(p.name, size='sm') }}<div class="min-w-0"><div class="cc-cell-main">{{ p.name }}</div><div class="cc-cell-sub">{{ p.group or (ui.badge(p.role) if p.role else '') }}</div></div></div></td>
+                    <td>{{ p.answers|join(', ') or '—' }}</td>
+                    <td class="cc-nowrap" data-value="{{ (p.at|dt('%Y%m%d%H%M', '')) }}">{{ p.at|dt }}</td>
+                </tr>
                 {% endfor %}
-            {% else %}
-                <div class="empty-results">
-                    <div style="font-size: 34px; margin-bottom: 10px;">📊</div>
-                    <strong>Пока нет вариантов ответа</strong>
-                    <div style="margin-top: 6px;">Результаты появятся после добавления вариантов.</div>
-                </div>
-            {% endif %}
-
-            {% if poll.get('is_anonymous', True) %}
-                <div class="anonymous-note">
-                    🔒 Опрос анонимный. Информация о том, кто выбрал конкретный вариант,
-                    не отображается.
-                </div>
-            {% endif %}
-
-            <div class="actions">
-                <a href="{{ url_for('polls') }}" class="btn-poll btn-secondary-poll">
-                    ← Вернуться к опросам
-                </a>
-
-                <a href="{{ url_for('poll_form', poll_id=poll.get('id')) }}" class="btn-poll btn-primary-poll">
-                    ✏️ Редактировать опрос
-                </a>
-            </div>
+                <tr data-table-empty class="is-hidden"><td colspan="3" class="cc-table-empty">Никого не нашли</td></tr>
+                </tbody>
+            </table>
         </div>
-
-        <aside>
-            <div class="stat-card">
-                <div class="stat-number">{{ total_votes|default(0) }}</div>
-                <div class="stat-label">Всего голосов</div>
-            </div>
-
-            <div class="results-card">
-                <h2 style="font-size: 17px;">Информация</h2>
-
-                <div style="display:grid; gap:12px; color:#4b5563; font-size:14px;">
-                    <div>
-                        <strong style="color:#111827;">Тип:</strong>
-                        {% if poll.get('poll_type') == 'single' %}
-                            один вариант
-                        {% else %}
-                            несколько вариантов
-                        {% endif %}
-                    </div>
-
-                    <div>
-                        <strong style="color:#111827;">Анонимность:</strong>
-                        {% if poll.get('is_anonymous', True) %}
-                            да
-                        {% else %}
-                            нет
-                        {% endif %}
-                    </div>
-
-                    <div>
-                        <strong style="color:#111827;">Аудитория:</strong>
-                        {% if poll.get('target_audience') == 'students' %}
-                            студенты
-                        {% elif poll.get('target_audience') == 'teachers' %}
-                            преподаватели
-                        {% else %}
-                            все
-                        {% endif %}
-                    </div>
-
-                    <div>
-                        <strong style="color:#111827;">Вариантов:</strong>
-                        {{ answers|length }}
-                    </div>
-                </div>
-            </div>
-        </aside>
-
-    </div>
+        {% else %}
+        {{ ui.empty_state('people', 'Пока никто не голосовал', 'Голоса появятся, когда студенты ответят в приложении.') }}
+        {% endif %}
+    {% endcall %}
+    {% endif %}
 </div>
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

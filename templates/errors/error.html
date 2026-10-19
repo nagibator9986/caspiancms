@@ -1,0 +1,17 @@
+{# Общая страница ошибок (400/403/404/405/413/429/500/503) — вызывается из cms/routes_auth.py. #}
+{% extends 'base.html' if admin_layout else 'public/base_public.html' %}
+{% block title %}{{ code }} — {{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+{% block lang_switch %}{% endblock %}
+{% block content %}
+<div class="cc-error">
+    <div class="cc-error__icon"><i class="bi bi-{{ icon }}" aria-hidden="true"></i></div>
+    <div class="cc-error__code cc-num">{{ code }}</div>
+    <h1>{{ title }}</h1>
+    <p>{{ text }}</p>
+    <div class="d-flex flex-wrap justify-content-center gap-2">
+        <a class="btn btn-primary" href="{{ nav_url('dashboard') if session.get('uid') else nav_url('login') }}"><i class="bi bi-house" aria-hidden="true"></i><span>{{ 'На главную' if session.get('uid') else 'Ко входу' }}</span></a>
+        <button type="button" class="btn btn-light" onclick="history.back()"><i class="bi bi-arrow-left" aria-hidden="true"></i><span>Назад</span></button>
+    </div>
+</div>
+{% endblock %}

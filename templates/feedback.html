@@ -1,71 +1,104 @@
-{% extends "base.html" %}
+{# Обратная связь («Линия доверия»): статусы, фильтры, ответ с уведомлением, массовые действия, CSV (CONTENT).
+   Анонимные обращения автора не раскрывают. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Обратная связь{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<div class="container mt-4">
-    <h2 class="mb-4">Обратная связь от студентов</h2>
+{{ ui.page_header('Обратная связь', 'Обращения из приложения («Линия доверия»). Ответ приходит автору уведомлением.', [
+    {'label': 'CSV', 'href': url_with(format='csv', page=None), 'icon': 'download', 'variant': 'light'},
+], icon='chat-dots') }}
 
-    <div class="row">
-        {% for fb in feedbacks %}
-        <div class="col-md-6 mb-4">
-            <div class="card shadow-sm h-100 border-{{ 'success' if fb.reply else 'warning' }}">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
-                        <h6 class="card-subtitle mb-2 text-muted">
-                            <i class="bi bi-tag"></i> {{ fb.topic }}
-                        </h6>
-                        <small class="text-muted">{{ fb.createdAt.strftime('%d.%m.%Y %H:%M') if fb.createdAt else '' }}</small>
-                    </div>
-                    
-                    <h5 class="card-title">{{ fb.user_name }} <small class="text-muted">{{ fb.user_group }}</small></h5>
-                    
-                    <p class="card-text border-start ps-3 py-2 bg-light">{{ fb.message }}</p>
+<div class="cc-stats">
+    {{ ui.stat_card('Ждут ответа', stats.new, 'envelope-exclamation', tone='warning' if stats.new else 'success', href=url_with(status='new', page=None)) }}
+    {{ ui.stat_card('Отвечено', stats.answered, 'reply', tone='success', href=url_with(status='answered', page=None)) }}
+    {{ ui.stat_card('Закрыто', stats.closed, 'archive', href=url_with(status='closed', page=None)) }}
+    {{ ui.stat_card('Анонимных', stats.anon, 'incognito', tone='violet', href=url_with(anon='1', page=None)) }}
+</div>
 
-                    {% if fb.reply %}
-                    <div class="mt-3 p-2 bg-success bg-opacity-10 border border-success rounded">
-                        <strong>Ваш ответ:</strong><br>
-                        {{ fb.reply }}
-                    </div>
-                    {% else %}
-                    <button class="btn btn-primary btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#replyModal{{ fb.id }}">
-                        Ответить
-                    </button>
-                    {% endif %}
-                    
-                    <form action="{{ url_for('delete_feedback', feedback_id=fb.id) }}" method="POST" class="d-inline">
-                        <button type="submit" class="btn btn-link btn-sm text-danger mt-2" onclick="return confirm('Удалить обращение?')">Удалить</button>
-                    </form>
-                </div>
-            </div>
-        </div>
+{% set st_tabs = [{'key': '', 'label': 'Все', 'href': url_with(status=None, page=None), 'count': stats.total}] %}
+{% for k, l in statuses %}{% set _ = st_tabs.append({'key': k, 'label': l, 'href': url_with(status=k, page=None), 'count': stats[k]}) %}{% endfor %}
+{{ ui.tabs(st_tabs, status, label='Статус обращений') }}
 
-        <div class="modal fade" id="replyModal{{ fb.id }}" tabindex="-1">
-            <div class="modal-dialog">
-                <form action="{{ url_for('feedback_reply', feedback_id=fb.id) }}" method="POST">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Ответ для {{ fb.user_name }}</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <p><strong>Вопрос:</strong> {{ fb.message }}</p>
-                            <div class="mb-3">
-                                <label class="form-label">Текст ответа</label>
-                                <textarea name="reply_text" class="form-control" rows="4" required placeholder="Ваш ответ придет студенту в уведомления..."></textarea>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-                            <button type="submit" class="btn btn-success">Отправить ответ</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
-        {% else %}
-        <div class="col-12 text-center py-5">
-            <i class="bi bi-inbox size-lg text-muted" style="font-size: 3rem;"></i>
-            <p class="text-muted">Новых обращений нет</p>
-        </div>
-        {% endfor %}
+{% call ui.filters_bar() %}
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Текст, тема, автор') }}
+    {{ ui.filter_select('topic', 'Тема', topics, topic) }}
+    {{ ui.filter_select('anon', 'Автор', [('1', 'Только анонимные')], '1' if anon else None, all_label='Любой') }}
+{% endcall %}
+
+{% if page.total %}
+<form id="fbBulk" method="post" action="{{ url_for('feedback_bulk') }}" class="d-none">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+</form>
+<div class="ct-fb-toolbar">
+    <label class="form-check m-0 d-flex align-items-center gap-2">
+        <input class="form-check-input m-0" type="checkbox" data-ct-check-all="fbBulk">
+        <span class="small">Выбрать все на странице</span>
+    </label>
+    <span class="cc-muted small ms-auto">{{ filtered }} {{ filtered|plural('обращение', 'обращения', 'обращений') }}</span>
+    <div class="ct-bulk" data-ct-bulk="fbBulk" hidden>
+        <span class="cc-muted small">Выбрано: <b data-ct-bulk-count>0</b></span>
+        <button type="submit" form="fbBulk" name="action" value="close" class="btn btn-sm btn-light" data-confirm="Закрыть выбранные обращения?" data-confirm-ok="Закрыть" data-confirm-variant="primary"><i class="bi bi-archive" aria-hidden="true"></i><span>Закрыть</span></button>
+        <button type="submit" form="fbBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger" data-confirm="Удалить выбранные обращения? Действие нельзя отменить." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
     </div>
 </div>
+
+<div class="ct-fb-list">
+{% for f in page.items %}
+    <article class="ct-fb ct-fb--{{ f._status }}" id="fb-{{ f.id }}">
+        <header class="ct-fb__head">
+            <input class="form-check-input" type="checkbox" name="ids" value="{{ f.id }}" form="fbBulk" aria-label="Выбрать обращение">
+            {% if f._anon %}<span class="cc-avatar cc-avatar--sm ct-fb__anon" aria-hidden="true"><i class="bi bi-incognito"></i></span>{% else %}{{ ui.avatar(f._author, size='sm') }}{% endif %}
+            <div class="min-w-0 me-auto">
+                <div class="cc-cell-main">{{ f._author }}</div>
+                <div class="cc-cell-sub">{{ f._group or ('анонимно — автор скрыт' if f._anon else '') }}{% if f._role and not f._anon %} · {{ ui.badge(f._role) }}{% endif %}</div>
+            </div>
+            <div class="ct-fb__tags">
+                {{ ui.badge('topic', f._topic, 'outline', 'tag') }}
+                {{ ui.badge(f._status, {'new': 'Новое', 'answered': 'Отвечено', 'closed': 'Закрыто'}[f._status], {'new': 'warning', 'answered': 'success', 'closed': 'neutral'}[f._status]) }}
+                <time class="cc-subtle small cc-nowrap" title="{{ f.createdAt|dt }}">{{ f.createdAt|ago }}</time>
+            </div>
+        </header>
+        {% if f.subject and f.subject != f._topic %}<p class="ct-fb__subject">{{ f.subject }}</p>{% endif %}
+        <p class="ct-fb__msg">{{ f.message or '—' }}</p>
+        {% if f.reply %}
+        <div class="ct-fb__reply">
+            <div class="ct-fb__reply-head"><i class="bi bi-reply" aria-hidden="true"></i>Ответ{% if f.repliedAt %} · {{ f.repliedAt|dt }}{% endif %}</div>
+            <p>{{ f.reply }}</p>
+        </div>
+        {% endif %}
+        <footer class="ct-fb__actions">
+            <button type="button" class="btn btn-sm {{ 'btn-light' if f.reply else 'btn-primary' }}" data-bs-toggle="collapse" data-bs-target="#reply-{{ f.id }}" aria-expanded="false" aria-controls="reply-{{ f.id }}">
+                <i class="bi bi-{{ 'pencil' if f.reply else 'reply' }}" aria-hidden="true"></i><span>{{ 'Изменить ответ' if f.reply else 'Ответить' }}</span>
+            </button>
+            {% if f._status != 'closed' %}
+            {{ ui.confirm_button(url_for('feedback_status', feedback_id=f.id), 'Закрыть', 'Закрыть обращение без ответа?' if not f.reply else 'Перенести обращение в закрытые?', variant='light', icon='archive', ok='Закрыть', fields={'status': 'closed', 'next': request.full_path}) }}
+            {% else %}
+            {{ ui.confirm_button(url_for('feedback_status', feedback_id=f.id), 'Открыть снова', 'Вернуть обращение в работу?', variant='light', icon='arrow-counterclockwise', ok='Открыть', fields={'status': 'answered' if f.reply else 'new', 'next': request.full_path}) }}
+            {% endif %}
+            <span class="ms-auto">{{ ui.confirm_button(url_for('delete_feedback', feedback_id=f.id), 'Удалить', 'Удалить обращение? Действие нельзя отменить.', fields={'next': request.full_path}, icon_only=True) }}</span>
+        </footer>
+        <div class="collapse" id="reply-{{ f.id }}">
+            <form method="post" action="{{ url_for('feedback_reply', feedback_id=f.id) }}" class="ct-fb__form">
+                {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+                <label class="form-label" for="reply-text-{{ f.id }}">{{ 'Новый текст ответа' if f.reply else 'Ответ' }}</label>
+                <textarea class="form-control" id="reply-text-{{ f.id }}" name="reply_text" rows="3" maxlength="4000" required placeholder="Ответ увидит автор обращения">{{ f.reply or '' }}</textarea>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                    <span class="cc-subtle small me-auto">{{ 'Автор получит уведомление в приложении' if f.userId else 'Автор не указан — уведомление не отправится' }}</span>
+                    <button type="submit" class="btn btn-primary btn-sm" data-loading="Отправляем…"><i class="bi bi-send" aria-hidden="true"></i><span>Отправить</span></button>
+                </div>
+            </form>
+        </div>
+    </article>
+{% endfor %}
+</div>
+{{ ui.pagination(page) }}
+{% elif stats.total %}
+<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос или сбросьте фильтры.', {'label': 'Все обращения', 'href': url_for('feedback_list'), 'variant': 'light'}) }}</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('chat-dots', 'Обращений пока нет', 'Когда студенты напишут в «Линию доверия», обращения появятся здесь.') }}</section>
+{% endif %}
+<p class="cc-subtle small mt-3"><i class="bi bi-info-circle" aria-hidden="true"></i> Приложение хранит последние 50 обращений — выгружайте CSV, если нужна история.</p>
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

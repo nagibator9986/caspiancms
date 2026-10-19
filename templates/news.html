@@ -1,213 +1,87 @@
-{% extends "base.html" %}
-{% block title %}Новости и опросники{% endblock %}
-
+{# Новости: список с фильтрами, поиском, пагинацией и массовым удалением (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Новости{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="h3">Управление новостями и опросниками</h1>
-    <div class="dropdown">
-        <button class="btn btn-success dropdown-toggle" type="button" data-bs-toggle="dropdown">
-            <i class="bi bi-plus-lg"></i> Добавить
-        </button>
-        <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="/news/add"><i class="bi bi-newspaper me-2"></i>Новость</a></li>
-            <li><a class="dropdown-item" href="/poll/add"><i class="bi bi-chat-dots me-2"></i>Опросник</a></li>
-        </ul>
-    </div>
+{{ ui.page_header('Новости', 'Лента в приложении студентов и преподавателей. При публикации приложение само рассылает уведомление.', [
+    {'label': 'Новости абитуриентов', 'href': nav_url('applicant_news'), 'icon': 'megaphone', 'variant': 'light'},
+    {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg'},
+], icon='newspaper') }}
+
+<div class="cc-stats">
+    {{ ui.stat_card('Всего новостей', stats.total, 'newspaper', href=url_for('news')) }}
+    {{ ui.stat_card('За 30 дней', stats.month, 'calendar-week', tone='info') }}
+    {{ ui.stat_card('С фото', stats.with_photo, 'images', tone='success', meta=(pct(stats.with_photo, stats.total) ~ ' от всех') if stats.total else None) }}
+    {{ ui.stat_card('Только студентам', stats.students, 'backpack', tone='violet', href=url_for('news', audience='students')) }}
 </div>
 
-<!-- Вкладки -->
-<ul class="nav nav-tabs mb-4" id="contentTabs" role="tablist">
-    <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="news-tab" data-bs-toggle="tab" data-bs-target="#news-content" type="button" role="tab">
-            <i class="bi bi-newspaper me-2"></i>Новости
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="polls-tab" data-bs-toggle="tab" data-bs-target="#polls-content" type="button" role="tab">
-            <i class="bi bi-chat-dots me-2"></i>Опросники
-        </button>
-    </li>
-</ul>
+{% call ui.filters_bar() %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Заголовок или текст') }}
+    {{ ui.filter_select('category', 'Категория', categories, request.args.get('category')) }}
+    {{ ui.filter_select('audience', 'Аудитория', audiences, request.args.get('audience')) }}
+    {{ ui.filter_select('photo', 'Фото', [('with', 'С фото'), ('without', 'Без фото')], request.args.get('photo')) }}
+{% endcall %}
 
-<!-- Содержимое вкладок -->
-<div class="tab-content" id="contentTabContent">
-    <!-- Вкладка новостей -->
-    <div class="tab-pane fade show active" id="news-content" role="tabpanel">
-        {% set news_items = items|selectattr('type', 'equalto', 'news')|list %}
-        
-        {% if news_items|length == 0 %}
-        <div class="alert alert-info text-center">
-            <strong>Новостей пока нет</strong><br>
-            Нажмите кнопку выше, чтобы создать первую новость.
+{% if page.total %}
+<form id="newsBulk" method="post" action="{{ url_for('news_bulk') }}" class="d-none">
+    {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ request.full_path }}">
+</form>
+<section class="cc-card">
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">{{ filtered }} {{ filtered|plural('новость', 'новости', 'новостей') }}{% if filtered != stats.total %} <span class="cc-muted fw-normal">из {{ stats.total }}</span>{% endif %}</h2>
+        <div class="ct-bulk" data-ct-bulk="newsBulk" hidden>
+            <span class="cc-muted small">Выбрано: <b data-ct-bulk-count>0</b></span>
+            <button type="submit" form="newsBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger"
+                    data-confirm="Удалить выбранные новости вместе с фото? Действие нельзя отменить." data-confirm-ok="Удалить">
+                <i class="bi bi-trash" aria-hidden="true"></i><span>Удалить выбранные</span>
+            </button>
         </div>
-        {% else %}
-        <div class="table-responsive">
-            <table class="table table-hover align-middle">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Изображение</th>
-                        <th>Заголовок</th>
-                        <th>Категория</th>
-                        <th>Аудитория</th>
-                        <th>Дата создания</th>
-                        <th style="width: 180px;">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for n in news_items %}
-                    <tr>
-                        <td>
-                            {% if n.imageUrl %}
-                                <img src="{{ n.imageUrl }}" alt="Превью" class="rounded" style="width: 80px; height: 60px; object-fit: cover;">
-                            {% else %}
-                                <div class="bg-light border rounded d-flex align-items-center justify-content-center" style="width: 80px; height: 60px;">
-                                    <small class="text-muted">Нет фото</small>
-                                </div>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <strong>{{ n.title }}</strong>
-                            {% if n.content %}
-                                <br><small class="text-muted">{{ n.content[:100] }}{% if n.content|length > 100 %}...{% endif %}</small>
-                            {% endif %}
-                        </td>
-                        <td>{{ n.category or '—' }}</td>
-                        <td>
-                            {% if n.target_audience == 'all' %}
-                                Всем
-                            {% elif n.target_audience == 'students' %}
-                                Студентам
-                            {% elif n.target_audience == 'teachers' %}
-                                Преподавателям
-                            {% else %}
-                                {{ n.target_audience or 'Всем' }}
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if n.createdAt %}
-                                {{ n.createdAt.strftime('%d.%m.%Y<br>%H:%M')|safe }}
-                            {% else %}
-                                —
-                            {% endif %}
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="/news/edit/{{ n.id }}" class="btn btn-outline-primary">
-                                    Редактировать
-                                </a>
-                                <form method="POST" action="/news/delete/{{ n.id }}" style="display:inline;">
-                                    <button type="submit" class="btn btn-outline-danger" 
-                                            onclick="return confirm('Удалить новость «{{ n.title }}»?')">
-                                        Удалить
-                                    </button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
     </div>
-
-    <!-- Вкладка опросников -->
-    <div class="tab-pane fade" id="polls-content" role="tabpanel">
-        {% set poll_items = items|selectattr('type', 'equalto', 'poll')|list %}
-        
-        {% if poll_items|length == 0 %}
-        <div class="alert alert-info text-center">
-            <strong>Опросников пока нет</strong><br>
-            Нажмите кнопку выше, чтобы создать первый опросник.
-        </div>
-        {% else %}
-        <div class="table-responsive">
-            <table class="table table-hover align-middle">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Заголовок</th>
-                        <th>Целевая аудитория</th>
-                        <th>Статус</th>
-                        <th>Анонимное голосование</th>
-                        <th>Время окончания</th>
-                        <th>Голосов</th>
-                        <th style="width: 220px;">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for p in poll_items %}
-                    <tr>
-                        <td>
-                            {% if p.imageUrl %}
-                                <img src="{{ p.imageUrl }}" alt="Превью опроса" class="rounded mb-2" style="width: 100px; height: 60px; object-fit: cover; display: block;">
-                            {% endif %}
-                            <strong>{{ p.title }}</strong>
-                            {% if p.description %}
-                                <br><small class="text-muted">{{ p.description[:80] }}{% if p.description|length > 80 %}...{% endif %}</small>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if p.target_audience == 'all' %}
-                                <span class="badge bg-info">Для всех</span>
-                            {% elif p.target_audience == 'students' %}
-                                <span class="badge bg-primary">Для студентов</span>
-                            {% elif p.target_audience == 'teachers' %}
-                                <span class="badge bg-warning">Для преподавателей</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if p.is_active %}
-                                <span class="badge bg-success">Активен</span>
-                            {% else %}
-                                <span class="badge bg-secondary">Завершен</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if p.get('is_anonymous', True) %}
-                                <span class="badge bg-success"><i class="bi bi-eye-slash"></i> Да</span>
-                            {% else %}
-                                <span class="badge bg-warning"><i class="bi bi-eye"></i> Нет</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if p.endTime %}
-                                {% if p.endTime.strftime %}
-                                    {{ p.endTime.strftime('%d.%m.%Y %H:%M') }}
-                                {% else %}
-                                    {{ p.endTime }}
-                                {% endif %}
-                            {% else %}
-                                —
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% set total_votes = p.get('answers', [])|sum(attribute='votes') if p.get('answers') else 0 %}
-                            <span class="badge bg-secondary">{{ total_votes }}</span>
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="/poll/edit/{{ p.id }}" class="btn btn-outline-primary" title="Редактировать">
-                                    <i class="bi bi-pencil"></i>
-                                </a>
-                                <a href="/poll/{{ p.id }}/results" class="btn btn-outline-info" title="Результаты">
-                                    <i class="bi bi-graph-up"></i>
-                                </a>
-                                <form method="POST" action="/poll/delete/{{ p.id }}" style="display:inline;">
-                                    <button type="submit" class="btn btn-outline-danger" title="Удалить"
-                                            onclick="return confirm('Удалить опросник «{{ p.title }}»?')">
-                                        <i class="bi bi-trash"></i>
-                                    </button>
-                                </form>
+    <div class="cc-table-wrap">
+        <table class="cc-table" id="newsTable">
+            <thead><tr>
+                <th class="ct-check"><input class="form-check-input" type="checkbox" data-ct-check-all="newsBulk" aria-label="Выбрать все новости на странице"></th>
+                <th>Новость</th><th class="d-none d-md-table-cell">Категория</th><th class="d-none d-lg-table-cell">Аудитория</th><th>Опубликована</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for n in page.items %}
+                <tr data-href="{{ url_for('news_form', news_id=n.id) }}">
+                    <td class="ct-check"><input class="form-check-input" type="checkbox" name="ids" value="{{ n.id }}" form="newsBulk" aria-label="Выбрать «{{ n.title }}»"></td>
+                    <td>
+                        <div class="ct-item ct-main-col">
+                            <span class="ct-cover">
+                                {% if n.cover %}<img src="{{ n.cover|safe_url }}" alt="" width="72" height="54" loading="lazy" decoding="async">
+                                {% else %}<i class="bi bi-image" aria-hidden="true"></i>{% endif %}
+                                {% if n.photos > 1 %}<span class="ct-cover__count" title="Фото в карусели"><i class="bi bi-images" aria-hidden="true"></i>{{ n.photos }}</span>{% endif %}
+                            </span>
+                            <div class="min-w-0">
+                                <div class="cc-cell-main ct-clamp-1">{{ n.title }}</div>
+                                {% if n.summary %}<div class="cc-cell-sub ct-clamp-2">{{ n.summary[:220] }}</div>{% endif %}
+                                <div class="cc-cell-sub d-md-none">{{ n.category_label }}{% if n.audience != 'all' %} · {{ n.audience_label }}{% endif %}</div>
                             </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
+                        </div>
+                    </td>
+                    <td class="d-none d-md-table-cell">{{ ui.badge(n.category, n.category_label, {'academic': 'info', 'sports': 'success', 'cultural': 'violet', 'curator': 'brand'}.get(n.category, 'neutral'), icon='') }}</td>
+                    <td class="d-none d-lg-table-cell">{{ ui.badge(n.audience, n.audience_label, 'neutral' if n.audience == 'all' else 'info', icon={'all': 'people', 'students': 'backpack', 'teachers': 'person-badge'}[n.audience]) }}</td>
+                    <td class="cc-nowrap"><div title="{{ n.createdAt|dt }}">{{ n.createdAt|dateonly }}</div><div class="cc-cell-sub">{{ n.createdAt|ago }}</div></td>
+                    <td class="cc-actions">
+                        {{ ui.button('Редактировать', href=url_for('news_form', news_id=n.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
+                        {{ ui.confirm_button(url_for('news_delete', news_id=n.id), 'Удалить', 'Удалить новость «' ~ n.title ~ '» вместе с фото?', fields={'next': request.full_path}, icon_only=True) }}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
     </div>
-</div>
-
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+</section>
+{{ ui.pagination(page) }}
+{% if truncated %}<p class="cc-subtle small mt-2">Поиск и фильтры работают по последним 1000 новостям.</p>{% endif %}
+{% elif stats.total %}
+<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('news'), 'variant': 'light', 'icon': 'x-lg'}) }}</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('newspaper', 'Новостей пока нет', 'Опубликуйте первую новость — она появится в ленте приложения, а студенты получат уведомление.', {'label': 'Добавить новость', 'href': url_for('news_form'), 'icon': 'plus-lg'}) }}</section>
+{% endif %}
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

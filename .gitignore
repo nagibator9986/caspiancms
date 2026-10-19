@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Секреты и данные экземпляра (instance/secret_key, кэш-штампы) — НЕ коммитить
+instance/
+.env
+.env.*
+tests/.env.local
+
+# ВНИМАНИЕ: firebase-service-account.json пока отслеживается git (см. DEPLOY.md → «Ротация ключа»).
+# После ротации ключа и переноса его вне репозитория: git rm --cached firebase-service-account.json
+# и раскомментировать строку ниже.
+# firebase-service-account.json
+
+# Тесты и инструменты
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.cdn-cache/
+*.log

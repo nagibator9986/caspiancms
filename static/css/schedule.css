@@ -1,0 +1,383 @@
+/* ==========================================================================
+   schedule.css — раздел «Расписание» (владелец — SCHEDULE).
+   Только токены дизайн-системы (--cc-*), подключается через {{ ui.css('schedule') }}.
+   Префикс .sch- — компоненты раздела: карточка занятия, сетка недели, редактор,
+   карточки групп и преподавателей, журнал, бланки для печати.
+   ========================================================================== */
+
+:root {
+  /* колонки строки редактора: день | время | дисциплина | преподаватель | ауд. | неделя | действия */
+  --sch-row-cols: 76px 164px minmax(150px, 1.2fr) minmax(150px, 1fr) 90px 128px 104px;
+}
+
+/* ----------------------------- Легенда недель ----------------------------- */
+.sch-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--cc-text-muted); }
+.sch-legend__item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sch-swatch { width: 12px; height: 12px; border-radius: 4px; border: 2px solid var(--cc-border-strong); background: var(--cc-week-all-bg); flex: 0 0 auto; }
+.sch-swatch--numerator { background: var(--cc-week-num-bg); border-color: var(--cc-week-num-fg); }
+.sch-swatch--denominator { background: var(--cc-week-den-bg); border-color: var(--cc-week-den-fg); }
+.sch-swatch--off { background: var(--cc-surface); border-style: dashed; }
+
+/* ----------------------------- Карточка занятия ----------------------------- */
+.sch-lesson {
+  position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  padding: 8px 10px; background: var(--cc-surface); border: 1px solid var(--cc-border);
+  border-left: 3px solid var(--cc-border-strong); border-radius: var(--cc-radius-sm);
+  transition: border-color var(--cc-dur-fast) var(--cc-ease), background-color var(--cc-dur-fast) var(--cc-ease);
+}
+.sch-lesson + .sch-lesson { margin-top: 8px; }
+.sch-lesson--numerator { border-left-color: var(--cc-week-num-fg); }
+.sch-lesson--denominator { border-left-color: var(--cc-week-den-fg); }
+.sch-lesson.is-off { background: var(--cc-surface-2); }
+.sch-lesson.is-off .sch-lesson__subject, .sch-lesson.is-off .sch-lesson__time { color: var(--cc-text-muted); }
+.sch-lesson.is-today { background: var(--cc-brand-tint); }
+.sch-lesson.is-now { border-color: var(--cc-brand); box-shadow: 0 0 0 2px var(--cc-brand-soft); }
+.sch-lesson.is-overlap { border-color: var(--cc-danger); background: var(--cc-danger-soft); }
+.sch-lesson__top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 22px; }
+.sch-lesson--editable .sch-lesson__top { padding-right: 28px; }
+.sch-lesson__time { font-weight: 700; font-size: 13px; color: var(--cc-text); }
+.sch-lesson__subject { font-weight: 600; font-size: 14px; line-height: 1.3; color: var(--cc-text); overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; }
+.sch-lesson__meta { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; color: var(--cc-text-muted); min-width: 0; }
+.sch-lesson__meta .bi { margin-right: 4px; }
+.sch-lesson__warn { color: var(--cc-danger); line-height: 1; }
+.sch-lesson__edit {
+  position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; border-radius: 8px; display: inline-flex;
+  align-items: center; justify-content: center; color: var(--cc-text-subtle); text-decoration: none;
+}
+.sch-lesson__edit:hover, .sch-lesson__edit:focus-visible { background: var(--cc-surface-2); color: var(--cc-brand-strong); }
+.sch-lesson--compact { padding: 6px 8px; }
+.sch-lesson--compact .sch-lesson__subject { font-size: 13px; }
+.sch-lesson .cc-badge { padding: 0 7px; font-size: 11px; }
+
+/* ----------------------------- Список групп ----------------------------- */
+.sch-group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 14px; }
+.sch-group-card {
+  position: relative; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; min-width: 0;
+  background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-1);
+  transition: border-color var(--cc-dur-fast) var(--cc-ease), box-shadow var(--cc-dur-fast) var(--cc-ease), transform var(--cc-dur-fast) var(--cc-ease);
+}
+.sch-group-card:hover { border-color: var(--cc-brand-light); box-shadow: var(--cc-shadow-2); transform: translateY(-1px); }
+.sch-group-card:focus-within { border-color: var(--cc-brand-light); }
+.sch-group-card.is-empty { border-style: dashed; background: var(--cc-surface-2); box-shadow: none; }
+.sch-group-card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sch-group-card__name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: var(--cc-text); text-decoration: none; }
+.sch-group-card__name:hover { color: var(--cc-brand-strong); }
+.sch-group-card__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--cc-text-muted); }
+.sch-group-card__foot b { color: var(--cc-text); }
+.sch-group-card__cta { position: relative; z-index: 2; margin-left: auto; }
+
+.sch-mini-days { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.sch-mini-days__day {
+  display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 0; border-radius: 8px;
+  background: var(--cc-brand-tint); color: var(--cc-brand-strong); font-size: 11px; line-height: 1.2;
+}
+.sch-mini-days__day b { font-weight: 600; color: var(--cc-text-muted); }
+.sch-mini-days__day span { font-weight: 800; font-size: 14px; }
+.sch-mini-days__day.is-empty { background: var(--cc-surface-2); color: var(--cc-text-subtle); }
+.sch-mini-days__day.is-today { box-shadow: inset 0 0 0 2px var(--cc-brand-light); }
+
+/* ----------------------------- Страница группы ----------------------------- */
+.sch-groupbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: -6px 0 12px; }
+.sch-groupbar__switch { display: flex; align-items: center; gap: 6px; }
+.sch-groupbar__switch .form-select { min-width: 170px; }
+.sch-viewbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 16px; }
+.sch-viewbar .cc-tabs { margin-bottom: 0; }
+.sch-viewbar__filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.sch-viewbar__filters .form-select { width: auto; min-width: 150px; }
+.sch-viewbar .sch-legend { margin-left: auto; }
+
+.sch-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.sch-layout__aside { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-content: start; }
+.sch-layout__aside > .cc-card, .sch-layout__main > .cc-card + .cc-card { margin-top: 0; }
+.sch-layout__main { display: grid; gap: 16px; align-content: start; grid-template-columns: minmax(0, 1fr); }
+.sch-layout__main > *, .sch-layout__aside > * { min-width: 0; }
+@media (min-width: 1600px) {
+  .sch-layout { grid-template-columns: minmax(0, 1fr) 320px; }
+  .sch-layout__aside { grid-template-columns: minmax(0, 1fr); position: sticky; top: calc(var(--cc-topbar-h) + 16px); }
+}
+
+.sch-week { display: grid; grid-template-columns: repeat(var(--sch-cols, 6), minmax(150px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+@media (max-width: 1199.98px) { .sch-week { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; } }
+@media (max-width: 767.98px) { .sch-week { grid-template-columns: minmax(0, 1fr); } }
+.sch-day { display: flex; flex-direction: column; min-width: 0; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-1); }
+.sch-day.is-today { border-color: var(--cc-brand-light); box-shadow: 0 0 0 1px var(--cc-brand-light), var(--cc-shadow-1); }
+.sch-day--none { border-style: dashed; border-color: var(--cc-warning); }
+.sch-day__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 10px 12px; border-bottom: 1px solid var(--cc-border); }
+.sch-day__head .cc-badge { order: 3; }
+.sch-day__name { font-weight: 700; }
+.sch-day.is-today .sch-day__name { color: var(--cc-brand-strong); }
+.sch-day__count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--cc-text-muted); }
+.sch-day__body { padding: 10px; }
+.sch-day__empty { margin: 6px 0; text-align: center; font-size: 13px; color: var(--cc-text-subtle); }
+
+/* список с массовыми действиями */
+.sch-bulkbar {
+  position: sticky; top: calc(var(--cc-topbar-h) + 8px); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--cc-surface); border: 1px solid var(--cc-brand-light); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-2);
+}
+.sch-bulkbar[hidden] { display: none; }
+.sch-bulkbar .form-select, .sch-bulkbar .form-control { width: auto; min-width: 160px; }
+.sch-bulkbar .form-control[hidden], .sch-bulkbar .form-select[hidden] { display: none; }
+.sch-bulkbar__count { font-weight: 600; margin-right: 4px; }
+.sch-list { table-layout: fixed; min-width: 900px; }
+.sch-list th:nth-child(1) { width: 44px; }
+.sch-list th:nth-child(2) { width: 124px; }
+.sch-list th:nth-child(4) { width: 24%; }
+.sch-list th:nth-child(5) { width: 92px; }
+.sch-list th:nth-child(6) { width: 150px; }
+.sch-list th:nth-child(7) { width: 96px; }
+.sch-list td { overflow-wrap: anywhere; }
+.sch-list__check { width: 44px; }
+.sch-list tr.is-off td { color: var(--cc-text-muted); }
+.sch-list tr.is-overlap td { background: var(--cc-danger-soft); }
+.sch-list tr.is-selected td { background: var(--cc-brand-tint); }
+.sch-warn-icon { color: var(--cc-danger); }
+
+.sch-people { list-style: none; margin: 0; padding: 4px 0; }
+.sch-people li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--cc-border); }
+.sch-people li:last-child { border-bottom: 0; }
+.sch-people a { color: var(--cc-text); text-decoration: none; font-weight: 500; }
+.sch-people a:hover { color: var(--cc-brand-strong); text-decoration: underline; }
+
+/* ----------------------------- Журнал изменений ----------------------------- */
+.sch-logs { list-style: none; margin: 0; padding: 0; }
+.sch-log { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--cc-border); }
+.sch-log:first-child { padding-top: 0; }
+.sch-log:last-child { border-bottom: 0; padding-bottom: 0; }
+.sch-log__icon { width: 32px; height: 32px; border-radius: 10px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--cc-surface-2); color: var(--cc-text-muted); }
+.sch-log--success .sch-log__icon { background: var(--cc-success-soft); color: var(--cc-success); }
+.sch-log--warning .sch-log__icon { background: var(--cc-warning-soft); color: var(--cc-warning-fg); }
+.sch-log--danger .sch-log__icon { background: var(--cc-danger-soft); color: var(--cc-danger); }
+.sch-log__body { flex: 1 1 auto; min-width: 0; }
+.sch-log__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sch-log__group { font-weight: 700; text-decoration: none; }
+.sch-log__summary { color: var(--cc-text); overflow-wrap: anywhere; }
+.sch-log__changes { list-style: none; margin: 6px 0 0; padding: 0; font-size: 13px; display: grid; gap: 2px; }
+.sch-log__changes s { color: var(--cc-text-muted); }
+.sch-log__changes .bi { font-size: 11px; color: var(--cc-text-subtle); }
+.sch-log__meta { margin-top: 4px; font-size: 12px; }
+.sch-logs--compact .sch-log { padding: 10px 0; gap: 10px; }
+.sch-logs--compact .sch-log__icon { width: 26px; height: 26px; font-size: 13px; border-radius: 8px; }
+.sch-logs--compact .sch-log__head .cc-badge { display: none; }
+
+/* ----------------------------- Предупреждения ----------------------------- */
+.sch-conflicts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sch-conflicts__item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--cc-radius-sm); font-size: 13px; background: var(--cc-warning-soft); color: var(--cc-warning-fg); }
+.sch-conflicts__item .bi { margin-top: 2px; }
+.sch-conflicts__item--critical { background: var(--cc-danger-soft); color: var(--cc-danger-fg); }
+.sch-conflicts__item--info { background: var(--cc-info-soft); color: var(--cc-info-fg); }
+.sch-note { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; margin-bottom: 16px; border-radius: var(--cc-radius-md); background: var(--cc-info-soft); color: var(--cc-info-fg); font-size: 13px; }
+.sch-note .bi { font-size: 16px; margin-top: 1px; }
+
+/* ----------------------------- Единая таблица / таблица преподавателей ----------------------------- */
+.sch-grid { min-width: 940px; }
+.sch-grid th, .sch-grid td { vertical-align: top; }
+.sch-grid td { min-width: 136px; padding: 6px; }
+.sch-grid .sch-lesson { padding: 5px 7px; gap: 1px; }
+.sch-grid .sch-lesson__time { font-size: 12px; }
+.sch-grid .sch-lesson__subject { font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sch-grid .sch-lesson__meta { font-size: 11px; gap: 0 8px; }
+.sch-grid .sch-lesson__meta .bi { display: none; }
+.sch-grid tbody tr:hover { background: transparent; }
+.sch-grid .sch-grid__owner { position: sticky; left: 0; z-index: 2; min-width: 120px; max-width: 180px; background: var(--cc-surface); border-right: 1px solid var(--cc-border); text-align: left; }
+.sch-grid thead .sch-grid__owner { z-index: 3; background: var(--cc-surface-2); }
+.sch-grid tbody th.sch-grid__owner { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--cc-text); }
+.sch-grid__name { display: block; font-weight: 800; color: var(--cc-text); text-decoration: none; }
+.sch-grid__name:hover { color: var(--cc-brand-strong); }
+.sch-grid__owner .cc-badge { margin-top: 4px; }
+.sch-grid__empty { color: var(--cc-text-subtle); }
+.sch-grid thead th.is-today { color: var(--cc-brand-strong); }
+.sch-grid td.is-today { background: var(--cc-brand-tint); }
+.sch-grid .sch-lesson + .sch-lesson { margin-top: 6px; }
+
+/* ----------------------------- Карточки преподавателей ----------------------------- */
+.sch-teacher-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+@media (max-width: 479.98px) { .sch-teacher-grid { grid-template-columns: minmax(0, 1fr); } }
+.sch-teacher-card { display: flex; flex-direction: column; min-width: 0; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-1); }
+.sch-teacher-card__head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 10px; }
+.sch-teacher-card__name { font-size: 15px; font-weight: 700; margin: 0; line-height: 1.25; }
+.sch-teacher-card__name a { color: var(--cc-text); text-decoration: none; }
+.sch-teacher-card__name a:hover { color: var(--cc-brand-strong); }
+.sch-teacher-card__tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.sch-teacher-card__tags a.cc-badge { text-decoration: none; }
+.sch-teacher-card__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 16px 12px; border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); overflow: hidden; }
+.sch-teacher-card__stats div { padding: 6px 4px; text-align: center; border-right: 1px solid var(--cc-border); min-width: 0; }
+.sch-teacher-card__stats div:last-child { border-right: 0; }
+.sch-teacher-card__stats dt { font-size: 11px; font-weight: 600; color: var(--cc-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sch-teacher-card__stats dd { margin: 0; font-size: 18px; font-weight: 800; }
+.sch-teacher-card__days { display: grid; gap: 12px; padding: 0 16px; flex: 1 1 auto; align-content: start; }
+.sch-tday__name { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--cc-text-muted); }
+.sch-tday--danger .sch-tday__name { color: var(--cc-danger-fg); }
+.sch-tweek { border-top: 1px dashed var(--cc-border); padding-top: 8px; }
+.sch-tweek > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--cc-brand-strong); list-style-position: inside; }
+.sch-tweek[open] > summary { margin-bottom: 10px; }
+.sch-tweek__days { display: grid; gap: 10px; }
+.sch-teacher-grid--single { grid-template-columns: minmax(0, 1fr); }
+.sch-teacher-grid--single .sch-tweek__days { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.sch-teacher-grid--single .sch-teacher-card__stats, .sch-teacher-grid--single .sch-mini-days { max-width: 560px; }
+.sch-teacher-grid--single .sch-tday--danger .sch-lines { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.sch-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sch-line {
+  display: grid; grid-template-columns: 88px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 5px 8px;
+  border-radius: 8px; border-left: 3px solid var(--cc-border-strong); background: var(--cc-surface-2); font-size: 13px; min-height: 32px;
+}
+.sch-line--numerator { border-left-color: var(--cc-week-num-fg); }
+.sch-line--denominator { border-left-color: var(--cc-week-den-fg); }
+.sch-line.is-off { color: var(--cc-text-muted); }
+.sch-line.is-overlap { background: var(--cc-danger-soft); }
+.sch-line__time { font-weight: 700; white-space: nowrap; }
+.sch-line__main { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sch-line__who { font-weight: 700; white-space: nowrap; color: var(--cc-text); text-decoration: none; }
+a.sch-line__who:hover { color: var(--cc-brand-strong); text-decoration: underline; }
+.sch-line__subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cc-text-muted); }
+.sch-line .cc-badge { padding: 0 6px; font-size: 11px; }
+.sch-line__room { font-size: 12px; color: var(--cc-text-muted); white-space: nowrap; }
+.sch-line__end { display: inline-flex; align-items: center; gap: 2px; }
+.sch-line__warn { color: var(--cc-danger); }
+.sch-line__edit { width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--cc-text-subtle); text-decoration: none; }
+.sch-line__edit:hover, .sch-line__edit:focus-visible { background: var(--cc-surface); color: var(--cc-brand-strong); }
+.sch-tday.is-today .sch-tday__name { color: var(--cc-brand-strong); }
+.sch-tday__lessons { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 6px; }
+.sch-tday__lessons .sch-lesson + .sch-lesson { margin-top: 0; }
+.sch-teacher-card__foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 16px; border-top: 1px solid var(--cc-border); }
+.sch-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.sch-chips .cc-chip { padding: 2px 10px; font-size: 12px; }
+
+/* ----------------------------- Редактор (конструктор и редактор группы) ----------------------------- */
+.sch-editor { padding-bottom: 8px; }
+.sch-builder-top { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-bottom: 16px; }
+@media (min-width: 992px) { .sch-builder-top { grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); } }
+.sch-builder-top > .cc-card { margin-top: 0; }
+.sch-existing { max-height: 220px; overflow: auto; font-size: 13px; }
+.sch-existing__day { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--cc-border); }
+.sch-existing__day:last-child { border-bottom: 0; }
+.sch-existing__day b { flex: 0 0 26px; color: var(--cc-text-muted); }
+.sch-existing__list { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.sch-existing__item { padding: 1px 8px; border-radius: var(--cc-radius-pill); background: var(--cc-surface-2); white-space: nowrap; }
+.sch-existing__item--numerator { background: var(--cc-week-num-bg); color: var(--cc-week-num-fg); }
+.sch-existing__item--denominator { background: var(--cc-week-den-bg); color: var(--cc-week-den-fg); }
+
+.sch-editor__colhead { display: none; }
+.sch-section { background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-1); margin-bottom: 12px; }
+.sch-section[hidden] { display: none; }
+.sch-section--none { border-color: var(--cc-warning); }
+.sch-section__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--cc-border); }
+.sch-section__title { margin: 0; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.sch-section__title .bi { color: var(--cc-warning-fg); }
+.sch-section__rows { padding: 6px; }
+.sch-section__rows:empty { display: none; }
+.sch-section__empty { margin: 0; padding: 10px 14px; font-size: 13px; color: var(--cc-text-subtle); }
+.sch-section__empty[hidden] { display: none; }
+
+.sch-row {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px; border: 1px solid transparent;
+  border-radius: var(--cc-radius-sm); transition: background-color var(--cc-dur-fast) var(--cc-ease), border-color var(--cc-dur-fast) var(--cc-ease);
+}
+.sch-row + .sch-row { margin-top: 4px; }
+.sch-row__label { display: block; margin-bottom: 2px; font-size: 11px; font-weight: 600; color: var(--cc-text-muted); }
+.sch-row__field { min-width: 0; }
+.sch-row__field--subject, .sch-row__field--teacher { grid-column: 1 / -1; }
+.sch-row__actions { display: flex; align-items: flex-end; justify-content: flex-end; gap: 4px; grid-column: 1 / -1; margin-top: -4px; }
+.sch-row__custom { margin-top: 4px; }
+.sch-row__custom[hidden] { display: none; }
+.sch-row__issues { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.sch-row__issues:empty { display: none; }
+.sch-row__restore { display: none; }
+.sch-row.is-changed { background: var(--cc-brand-tint); border-color: var(--cc-brand-soft); }
+.sch-row.is-new { background: var(--cc-success-soft); border-color: transparent; }
+.sch-row.has-warning { border-color: var(--cc-warning); }
+.sch-row.has-error { border-color: var(--cc-danger); background: var(--cc-danger-soft); }
+.sch-row.is-deleted { background: var(--cc-surface-2); border-color: var(--cc-border); border-style: dashed; }
+.sch-row.is-deleted .sch-row__field { opacity: .5; pointer-events: none; }
+.sch-row.is-deleted .sch-row__field .form-select, .sch-row.is-deleted .sch-row__field .form-control { text-decoration: line-through; }
+.sch-row.is-deleted .sch-row__restore { display: inline-flex; }
+.sch-row.is-deleted [data-row-delete], .sch-row.is-deleted [data-row-duplicate] { display: none; }
+.sch-row__delete:hover { color: var(--cc-danger); }
+@media (min-width: 1100px) {
+  .sch-editor__colhead {
+    display: grid; grid-template-columns: var(--sch-row-cols); gap: 8px; padding: 0 21px 6px;
+    font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--cc-text-muted);
+  }
+  .sch-row { grid-template-columns: var(--sch-row-cols); align-items: start; }
+  .sch-row__field--subject, .sch-row__field--teacher { grid-column: auto; }
+  .sch-row__label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+  .sch-row__actions { align-items: flex-start; grid-column: auto; margin-top: 0; }
+}
+.sch-issue { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: var(--cc-radius-pill); font-size: 12px; background: var(--cc-surface-2); color: var(--cc-text-muted); max-width: 100%; }
+.sch-issue--danger { background: var(--cc-danger-soft); color: var(--cc-danger-fg); }
+.sch-issue--warning { background: var(--cc-warning-soft); color: var(--cc-warning-fg); }
+.sch-issue--info { background: var(--cc-info-soft); color: var(--cc-info-fg); }
+.sch-issue--critical { background: var(--cc-danger-soft); color: var(--cc-danger-fg); font-weight: 600; }
+.sch-editor__more { margin: 4px 0 16px; }
+
+.sch-savebar {
+  position: sticky; bottom: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 16px -24px -24px; padding: 12px 24px; background: var(--cc-surface); border-top: 1px solid var(--cc-border); box-shadow: var(--cc-shadow-2);
+}
+@media (max-width: 767.98px) { .sch-savebar { margin: 16px -16px -16px; padding: 10px 16px; } }
+.sch-savebar__stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; color: var(--cc-text-muted); }
+.sch-savebar__stats b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.sch-savebar__warn { color: var(--cc-warning-fg); }
+.sch-savebar__warn[hidden] { display: none; }
+.sch-savebar__actions { display: flex; gap: 8px; margin-left: auto; }
+@media (max-width: 479.98px) { .sch-savebar__actions { width: 100%; } .sch-savebar__actions .btn { flex: 1 1 auto; } }
+
+/* правка одного занятия */
+.sch-lesson-form .cc-card__foot { border-radius: 0 0 var(--cc-radius-md) var(--cc-radius-md); }
+
+/* ----------------------------- Бланки для печати ----------------------------- */
+.sch-sheets { display: grid; gap: 24px; }
+.sch-sheet { width: 100%; max-width: 920px; margin: 0 auto; padding: 24px; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); box-shadow: var(--cc-shadow-1); }
+.sch-sheet__head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; padding-bottom: 12px; margin-bottom: 14px; border-bottom: 3px solid var(--cc-brand); }
+.sch-sheet__logo { border-radius: 12px; background: var(--cc-on-brand); }
+.sch-sheet__org { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--cc-text-muted); }
+.sch-sheet__group { margin: 0; font-size: 24px; font-weight: 800; }
+.sch-sheet__week { margin-left: auto; display: flex; flex-direction: column; text-align: right; font-size: 13px; }
+.sch-sheet__week span { color: var(--cc-text-muted); font-size: 12px; }
+.sch-sheet__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sch-sheet__table th, .sch-sheet__table td { padding: 6px 8px; border: 1px solid var(--cc-border-strong); text-align: left; vertical-align: top; }
+.sch-sheet__table thead th { background: var(--cc-surface-2); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--cc-text-muted); }
+.sch-sheet__day { width: 118px; background: var(--cc-surface-2); font-weight: 700; }
+.sch-sheet__time { width: 112px; white-space: nowrap; }
+.sch-sheet__room { width: 76px; }
+.sch-sheet__teacher { font-size: 12px; color: var(--cc-text-muted); }
+.sch-sheet__row--first > * { border-top-width: 2px; }
+.sch-sheet__mark { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; font-weight: 800; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.sch-sheet__mark--numerator { background: var(--cc-week-num-bg); color: var(--cc-week-num-fg); }
+.sch-sheet__mark--denominator { background: var(--cc-week-den-bg); color: var(--cc-week-den-fg); }
+.sch-sheet__foot { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; font-size: 12px; color: var(--cc-text-muted); }
+@media (max-width: 575.98px) {
+  .sch-sheet { padding: 14px; }
+  .sch-sheet__week { margin-left: 0; text-align: left; }
+  .sch-sheet__day, .sch-sheet__time { width: auto; }
+}
+
+/* ----------------------------- Мобильные доводки ----------------------------- */
+@media (max-width: 575.98px) {
+  .sch-viewbar .sch-legend { margin-left: 0; }
+  .sch-viewbar__filters { width: 100%; }
+  .sch-viewbar__filters .form-select { flex: 1 1 140px; min-width: 0; }
+  .sch-groupbar__switch { flex: 1 1 auto; justify-content: flex-end; }
+  .sch-groupbar__switch .form-select { min-width: 0; flex: 1 1 auto; }
+  .sch-bulkbar .form-select, .sch-bulkbar .form-control { flex: 1 1 140px; min-width: 0; }
+  .cc-page-header__actions .cc-week-pill { width: 100%; justify-content: center; }
+}
+
+/* ----------------------------- Печать ----------------------------- */
+@media print {
+  .sch-viewbar, .sch-groupbar, .sch-bulkbar, .sch-savebar, .sch-layout__aside, .sch-lesson__edit, .cc-table-toolbar { display: none !important; }
+  .sch-layout { display: block; }
+  .sch-week { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
+  .sch-lesson, .sch-day { break-inside: avoid; }
+  .sch-lesson.is-today, .sch-lesson.is-now, .sch-grid td.is-today { background: transparent; box-shadow: none; }
+  .sch-print-page .cc-content { padding: 0; }
+  .sch-sheets { display: block; }
+  .sch-sheet { max-width: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; break-after: page; page-break-after: always; }
+  .sch-sheet:last-child { break-after: auto; page-break-after: auto; }
+  .sch-sheet__table th, .sch-sheet__table td { border-color: var(--cc-text-muted); }
+  .sch-grid { min-width: 0; font-size: 11px; }
+  .sch-grid .sch-grid__owner { position: static; }
+}
+@page { size: A4; margin: 12mm; }
+/* узкие колонки недели: шрифт дисциплины чуть меньше, чтобы длинные слова реже переносились */
+.sch-week .sch-lesson__subject { font-size: 13px; }

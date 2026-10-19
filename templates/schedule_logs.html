@@ -1,138 +1,41 @@
-{% extends "base.html" %}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'schedule_ui.html' as sch with context %}
+{# История изменений расписания (владелец — SCHEDULE). #}
+{% block title %}История изменений расписания{% endblock %}
+{% block styles %}{{ ui.css('schedule') }}{% endblock %}
+{% block scripts %}{{ ui.js('schedule') }}{% endblock %}
+
 {% block content %}
-<div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1 class="h3">📋 История изменений расписания</h1>
-        <a href="{{ url_for('schedule') }}" class="btn btn-secondary">← Вернуться</a>
+{{ ui.page_header('История изменений', 'Кто, что и когда менял в расписании: добавления, правки и удаления занятий', icon='clock-history') }}
+
+{% set tab_items = [{'key': '', 'label': 'Все', 'href': url_with(action=None, page=None), 'icon': 'list-ul', 'count': counts.values()|sum}] %}
+{% for key, meta in action_labels.items() %}{% set _ = tab_items.append({'key': key, 'label': meta[0], 'href': url_with(action=key, page=None), 'icon': meta[2], 'count': counts.get(key, 0)}) %}{% endfor %}
+{{ ui.tabs(tab_items, action, pills=True, label='Тип изменения') }}
+
+{% call ui.filters_bar() %}
+    {{ ui.filter_select('group', 'Группа', log_groups, group, 'Все группы') }}
+    {{ ui.filter_search('q', 'Поиск', q, 'Дисциплина, преподаватель, аудитория, id занятия') }}
+    {% if action %}<input type="hidden" name="action" value="{{ action }}">{% endif %}
+{% endcall %}
+
+{% if load_error %}
+<div class="alert alert-warning" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Журнал сейчас недоступен. Попробуйте обновить страницу через минуту.</div>
+{% endif %}
+
+{% if logs %}
+<section class="cc-card">
+    <div class="cc-card__head">
+        <div><h2 class="cc-card__title">Записи журнала</h2><p class="cc-card__sub">Найдено {{ total }} {{ total|plural('запись', 'записи', 'записей') }}</p></div>
+        {% if group %}{{ ui.button('Расписание ' ~ group, href=url_for('schedule', group=group), icon='calendar-week', variant='light', size='sm') }}{% endif %}
     </div>
-
-    {% if not logs %}
-        <div class="alert alert-info text-center py-5">
-            <p class="mb-0">История изменений пуста</p>
-        </div>
-    {% else %}
-        <div class="row">
-            {% for log in logs %}
-            <div class="col-md-12 mb-3">
-                <div class="card border-0 shadow-sm">
-                    <div class="card-header {% if log.action == 'create' %}bg-success{% elif log.action == 'update' %}bg-warning{% elif log.action == 'delete' %}bg-danger{% endif %} text-white py-3">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <div>
-                                {% if log.action == 'create' %}
-                                    <h5 class="mb-0">✅ Создано занятие</h5>
-                                {% elif log.action == 'update' %}
-                                    <h5 class="mb-0">✏️ Изменено занятие</h5>
-                                {% elif log.action == 'delete' %}
-                                    <h5 class="mb-0">🗑️ Удалено занятие</h5>
-                                {% endif %}
-                            </div>
-                            <small>{{ log.changed_at.strftime('%d.%m.%Y %H:%M:%S') if log.changed_at else 'Неизвестно' }}</small>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <small class="text-muted"><strong>Группа:</strong> {{ log.group_id or 'Не указана' }}</small><br>
-                                <small class="text-muted"><strong>ID занятия:</strong> {{ log.schedule_id }}</small><br>
-                                <small class="text-muted"><strong>Администратор:</strong> {{ log.changed_by_name }}</small>
-                            </div>
-                        </div>
-
-                        {% if log.action != 'delete' and log.new_data %}
-                        <div class="mb-3">
-                            <h6 class="text-dark">Текущие данные:</h6>
-                            <div class="alert alert-light border-left border-primary">
-                                <small>
-                                    {% if log.new_data.get('subject') %}<strong>Предмет:</strong> {{ log.new_data.subject }}<br>{% endif %}
-                                    {% if log.new_data.get('teacher') %}<strong>Преподаватель:</strong> {{ get_teacher_name(log.new_data.teacher) }}<br>{% endif %}
-                                    {% if log.new_data.get('time') %}<strong>Время:</strong> {{ log.new_data.time }}<br>{% endif %}
-                                    {% if log.new_data.get('room') %}<strong>Аудитория:</strong> {{ log.new_data.room }}<br>{% endif %}
-                                    {% if log.new_data.get('date') %}<strong>Дата:</strong> {{ log.new_data.date }}<br>{% endif %}
-                                    {% if log.new_data.get('week_type') %}<strong>Тип недели:</strong> 
-                                        {% if log.new_data.week_type == 'always' %}Еженедельно
-                                        {% elif log.new_data.week_type == 'numerator' %}Числитель
-                                        {% elif log.new_data.week_type == 'denominator' %}Знаменатель
-                                        {% endif %}<br>{% endif %}
-                                </small>
-                            </div>
-                        </div>
-                        {% endif %}
-
-                        {% if log.action == 'update' and log.old_data %}
-                        <div class="mb-3">
-                            <h6 class="text-dark">Изменения:</h6>
-                            <div class="alert alert-light border-left border-warning">
-                                <small>
-                                    {% set changes = [] %}
-                                    {% if log.old_data.get('subject') != log.new_data.get('subject') %}
-                                        {% set _ = changes.append('Предмет: ' ~ (log.old_data.subject or '-') ~ ' → ' ~ (log.new_data.subject or '-')) %}
-                                    {% endif %}
-                                    {% if log.old_data.get('teacher') != log.new_data.get('teacher') %}
-                                        {% set _ = changes.append('Преподаватель: ' ~ (get_teacher_name(log.old_data.teacher) or '-') ~ ' → ' ~ (get_teacher_name(log.new_data.teacher) or '-')) %}
-                                    {% endif %}
-                                    {% if log.old_data.get('time') != log.new_data.get('time') %}
-                                        {% set _ = changes.append('Время: ' ~ (log.old_data.time or '-') ~ ' → ' ~ (log.new_data.time or '-')) %}
-                                    {% endif %}
-                                    {% if log.old_data.get('room') != log.new_data.get('room') %}
-                                        {% set _ = changes.append('Аудитория: ' ~ (log.old_data.room or '-') ~ ' → ' ~ (log.new_data.room or '-')) %}
-                                    {% endif %}
-                                    {% if log.old_data.get('date') != log.new_data.get('date') %}
-                                        {% set _ = changes.append('Дата: ' ~ (log.old_data.date or '-') ~ ' → ' ~ (log.new_data.date or '-')) %}
-                                    {% endif %}
-                                    {% if log.old_data.get('week_type') != log.new_data.get('week_type') %}
-                                        {% set _ = changes.append('Тип недели: ' ~ (log.old_data.week_type or '-') ~ ' → ' ~ (log.new_data.week_type or '-')) %}
-                                    {% endif %}
-
-                                    {% if changes %}
-                                        {% for change in changes %}
-                                            {{ change }}<br>
-                                        {% endfor %}
-                                    {% else %}
-                                        <em>Видимых изменений не обнаружено</em>
-                                    {% endif %}
-                                </small>
-                            </div>
-                        </div>
-                        {% endif %}
-
-                        {% if log.action == 'delete' and log.old_data %}
-                        <div class="mb-3">
-                            <h6 class="text-dark">Удалённые данные:</h6>
-                            <div class="alert alert-danger border-left">
-                                <small>
-                                    {% if log.old_data.get('subject') %}<strong>Предмет:</strong> {{ log.old_data.subject }}<br>{% endif %}
-                                    {% if log.old_data.get('teacher') %}<strong>Преподаватель:</strong> {{ get_teacher_name(log.old_data.teacher) }}<br>{% endif %}
-                                    {% if log.old_data.get('time') %}<strong>Время:</strong> {{ log.old_data.time }}<br>{% endif %}
-                                    {% if log.old_data.get('room') %}<strong>Аудитория:</strong> {{ log.old_data.room }}<br>{% endif %}
-                                    {% if log.old_data.get('date') %}<strong>Дата:</strong> {{ log.old_data.date }}<br>{% endif %}
-                                </small>
-                            </div>
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <nav class="mt-4">
-            <div class="d-flex justify-content-between">
-                <small class="text-muted">Всего записей: {{ logs|length }}</small>
-            </div>
-        </nav>
-    {% endif %}
-</div>
-
-<style>
-    .card {
-        transition: all 0.3s ease;
-    }
-    .card:hover {
-        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15) !important;
-    }
-    .border-left {
-        border-left: 4px solid !important;
-        padding-left: 1rem;
-    }
-</style>
+    <div class="cc-card__body">
+        <ul class="sch-logs">{% for e in logs %}{{ sch.log_item(e) }}{% endfor %}</ul>
+        {{ ui.pagination(page) }}
+    </div>
+</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('clock-history', 'Записей нет', 'По выбранным фильтрам изменений не найдено.' if (group or action or q) else 'Изменения расписания появятся здесь после первой правки.', {'label': 'Сбросить фильтры', 'href': url_for('schedule_logs'), 'icon': 'x-lg', 'variant': 'light'} if (group or action or q) else none) }}</section>
+{% endif %}
+<p class="cc-subtle small mt-3"><i class="bi bi-info-circle" aria-hidden="true"></i> Показаны последние {{ fetch_limit }} записей журнала. Сервер автоматически удаляет самые старые записи.</p>
 {% endblock %}

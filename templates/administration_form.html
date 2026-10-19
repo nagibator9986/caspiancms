@@ -1,66 +1,50 @@
-{% extends "base.html" %}
-
-{% block title %}
-{% if action == 'add' %}Добавить члена администрации{% else %}Редактировать члена администрации{% endif %}
-{% endblock %}
-
+{# Член администрации: добавление / правка (PEOPLE). Данные: routes_people._management_form.
+   Фото — в Storage management/<id>/… с download-токеном; превью — как карточка в приложении. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% set heading = 'Новый член администрации' if action == 'add' else 'Изменить карточку' %}
+{% block title %}{{ heading }}{% endblock %}
+{% block page_title %}{{ heading }}{% endblock %}
+{% block styles %}{{ ui.css('people') }}{% endblock %}
+{% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-lg-6 col-md-8">
-        <div class="card shadow">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0">
-                    <i class="bi bi-person-plus me-2"></i>
-                    {% if action == 'add' %}Добавить члена администрации{% else %}Редактировать члена администрации{% endif %}
-                </h5>
+{% call ui.page_header(heading, 'Отображается в приложении: Профиль → Администрация', icon='person-vcard') %}
+    {{ ui.button('К списку', href=url_for('administration'), icon='arrow-left', variant='light') }}
+{% endcall %}
+
+<div class="pp-form-layout">
+    <form method="post" enctype="multipart/form-data" class="pp-form-main" novalidate data-dirty-guard data-pp-mgmt-form>
+        {{ ui.csrf_field() }}
+        {% call ui.card('Данные', icon='person') %}
+            {% if errors.get('_form') %}<div class="alert alert-danger">{{ errors._form }}</div>{% endif %}
+            {{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120, 'data-pp-preview': 'name'}) }}
+            {{ ui.field('position', 'Должность', value=values.position, required=True, error=errors.get('position'), attrs={'maxlength': 160, 'data-pp-preview': 'position'}, placeholder='Например: Директор колледжа') }}
+            <div class="mb-3">
+                <label class="form-label" for="f-photo">Фото</label>
+                <input class="form-control{{ ' is-invalid' if errors.get('photo') }}" type="file" id="f-photo" name="photo" accept="image/jpeg,image/png,image/webp,image/gif" data-pp-photo-input>
+                {% if errors.get('photo') %}<div class="invalid-feedback d-block">{{ errors.photo }}</div>{% else %}<div class="form-text">JPG, PNG, WEBP или GIF до 10 МБ. Лучше вертикальное фото 3:4.</div>{% endif %}
             </div>
-            <div class="card-body">
-                <form method="POST" enctype="multipart/form-data">
-                    <div class="mb-3">
-                        <label for="name" class="form-label">
-                            <i class="bi bi-person me-1"></i>ФИО <span class="text-danger">*</span>
-                        </label>
-                        <input type="text" class="form-control" id="name" name="name"
-                               value="{{ admin.name if admin else '' }}" required>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="position" class="form-label">
-                            <i class="bi bi-briefcase me-1"></i>Должность <span class="text-danger">*</span>
-                        </label>
-                        <input type="text" class="form-control" id="position" name="position"
-                               value="{{ admin.position if admin else '' }}" required>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="photo" class="form-label">
-                            <i class="bi bi-camera me-1"></i>Фото
-                        </label>
-                        <input type="file" class="form-control" id="photo" name="photo" accept="image/*">
-                        <div class="form-text">
-                            {% if action == 'edit' and admin.photo_url %}
-                            <div class="mt-2">
-                                <img src="{{ admin.photo_url }}" alt="Текущее фото" class="img-thumbnail" style="max-width: 150px;">
-                                <p class="mb-0 mt-1">Оставьте поле пустым, чтобы сохранить текущее фото</p>
-                            </div>
-                            {% else %}
-                            Выберите фото для загрузки (PNG, JPG, JPEG, GIF)
-                            {% endif %}
-                        </div>
-                    </div>
-
-                    <div class="d-flex gap-2">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-circle me-2"></i>
-                            {% if action == 'add' %}Добавить{% else %}Сохранить{% endif %}
-                        </button>
-                        <a href="{{ url_for('administration') }}" class="btn btn-secondary">
-                            <i class="bi bi-arrow-left me-2"></i>Отмена
-                        </a>
-                    </div>
-                </form>
+            {% if admin and admin.image %}
+            {{ ui.field('remove_photo', 'Убрать текущее фото', 'checkbox', attrs={'data-pp-photo-remove': ''}) }}
+            {% endif %}
+            <div class="pp-form-actions">
+                {{ ui.button('Добавить' if action == 'add' else 'Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+                {{ ui.button('Отмена', href=url_for('administration'), variant='light') }}
             </div>
-        </div>
-    </div>
+        {% endcall %}
+    </form>
+
+    <aside class="pp-form-aside">
+        {% call ui.card('Как в приложении', icon='phone') %}
+            <div class="pp-mgmt-preview">
+                <div class="pp-mgmt-preview__photo">
+                    <img src="{{ (admin.image if admin else '')|safe_url('') }}" alt="" data-pp-preview-img {% if not (admin and admin.image) %}hidden{% endif %}>
+                    <i class="bi bi-person" aria-hidden="true" data-pp-preview-empty {% if admin and admin.image %}hidden{% endif %}></i>
+                </div>
+                <div class="pp-mgmt-preview__name" data-pp-preview-name>{{ values.name or 'ФИО' }}</div>
+                <div class="pp-mgmt-preview__pos" data-pp-preview-position>{{ values.position or 'Должность' }}</div>
+            </div>
+        {% endcall %}
+    </aside>
 </div>
 {% endblock %}

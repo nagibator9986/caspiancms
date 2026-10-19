@@ -1,0 +1,68 @@
+{# Плакат с QR-кодом для печати (A4/A5, RU + KZ). Отдельная страница без каркаса админки (APPLICANTS). #}
+{% import '_ui.html' as ui with context %}
+<!DOCTYPE html>
+<html lang="ru" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Плакат {{ code }} · Caspian College</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ static_url('css/app.css') }}">
+    {{ ui.css('applicants') }}
+    <link rel="icon" type="image/png" href="{{ static_url('img/favicon.png') }}">
+</head>
+<body class="ap-poster-body">
+<div class="ap-poster-toolbar cc-no-print">
+    {{ ui.button('Назад', href=url_for('applicant_sources', _anchor='src-' ~ code), icon='arrow-left', variant='light', size='sm') }}
+    {{ ui.tabs([
+        {'key': 'a4', 'label': 'A4', 'href': url_for('applicant_source_poster', code=code, format='a4')},
+        {'key': 'a5', 'label': 'A5', 'href': url_for('applicant_source_poster', code=code, format='a5')},
+    ], fmt, pills=True, label='Формат') }}
+    <span class="ap-poster-toolbar__spacer"></span>
+    <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="svg" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-svg" aria-hidden="true"></i><span>QR SVG</span></button>
+    <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="png" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-png" aria-hidden="true"></i><span>QR PNG</span></button>
+    <button type="button" class="btn btn-primary btn-sm" data-ap-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать</span></button>
+</div>
+{% if not active %}
+<p class="ap-poster-warning cc-no-print"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Источник выключен: регистрация по этому QR работает, но приветственные коины не начисляются.</p>
+{% endif %}
+
+<div class="ap-poster-wrap ap-poster-wrap--{{ fmt }}">
+<article class="ap-poster" aria-label="Плакат с QR-кодом">
+    <header class="ap-poster__band">
+        <img src="{{ static_url('img/logo.png') }}" alt="" width="64" height="64">
+        <div><b>Caspian College</b><span>Колледж Caspian University · Caspian University колледжі</span></div>
+    </header>
+    <div class="ap-poster__body">
+        <h1 class="ap-poster__title">Стань абитуриентом Caspian!</h1>
+        <p class="ap-poster__title-kk" lang="kk">Caspian талапкері бол!</p>
+        <p class="ap-poster__lead">Наведи камеру телефона на QR-код — регистрация за 1 минуту<br>
+            <span lang="kk">Телефон камерасын QR-кодқа бағытта — 1 минутта тіркел</span></p>
+        <div class="ap-poster__qr" data-ap-qr="{{ url }}" data-ap-qr-size="poster" role="img" aria-label="QR-код регистрации: {{ url }}"></div>
+        {% if welcome %}
+        <div class="ap-poster__coins"><i class="bi bi-coin" aria-hidden="true"></i><span><b>+{{ welcome }} Caspian Coin</b> за регистрацию · <span lang="kk">тіркелгені үшін</span></span></div>
+        {% endif %}
+        <ol class="ap-poster__steps">
+            <li><b>Отсканируй QR-код</b><span lang="kk">QR-кодты сканерле</span></li>
+            <li><b>Придумай логин и пароль</b><span lang="kk">Логин мен құпиясөз ойлап тап</span></li>
+            <li><b>Войди в приложении во вкладке «Абитуриент»</b><span lang="kk">Қосымшаға «Талапкер» бөлімінде кір</span></li>
+        </ol>
+        <p class="ap-poster__perks">Новости приёмной · Caspian Coin · Мерч колледжа</p>
+    </div>
+    <footer class="ap-poster__foot">
+        <span class="ap-poster__url">{{ url|replace('https://', '')|replace('http://', '') }}</span>
+        {% if adm.phone %}<span><i class="bi bi-telephone" aria-hidden="true"></i> Приёмная: {{ adm.phone }}</span>{% endif %}
+    </footer>
+</article>
+</div>
+<script src="{{ static_url('js/app.js') }}"></script>
+{{ ui.lib('qrcode') }}
+{{ ui.js('applicants') }}
+</body>
+</html>

@@ -1,281 +1,91 @@
-{% extends "base.html" %}
-{% block title %}{{ 'Редактировать' if poll else 'Добавить' }} опросник{% endblock %}
-
+{# Опрос: создание/правка в схеме приложения (poll_service.dart): target_audience, poll_type, is_anonymous,
+   endTime (ввод по Алматы), варианты polls/{id}/answers (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% set is_edit = poll is not none %}
+{% block title %}{{ 'Редактирование опроса' if is_edit else 'Новый опрос' }}{% endblock %}
+{% block page_title %}{{ 'Редактирование опроса' if is_edit else 'Новый опрос' }}{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<div class="container-lg">
-    <h1 class="mb-4">{{ 'Редактировать' if poll else 'Добавить' }} опросник</h1>
+{% call ui.page_header('Редактирование опроса' if is_edit else 'Новый опрос',
+                       'Создан ' ~ (poll.createdAt|dt) if is_edit else 'После создания приложение пришлёт уведомление выбранной аудитории',
+                       icon='ui-checks') %}
+    {% if is_edit %}{{ ui.button('Результаты', href=url_for('poll_results', poll_id=poll.id), icon='bar-chart', variant='light') }}{% endif %}
+    {{ ui.button('К списку', href=url_for('polls'), icon='arrow-left', variant='light') }}
+{% endcall %}
 
-    <form id="poll-main-form" method="POST" enctype="multipart/form-data" class="needs-validation" novalidate>
-        <!-- Основная информация -->
-        <div class="card mb-4">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0">Основная информация</h5>
+<form method="post" enctype="multipart/form-data" class="ct-editor ct-editor--single" data-dirty-guard novalidate>
+    {{ ui.csrf_field() }}
+    <div class="ct-editor__main">
+        {% call ui.card('Вопрос', icon='question-circle') %}
+            {{ ui.field('title', 'Вопрос', value=values.title, required=True, error=errors.title, placeholder='Например: Какой клуб открыть в следующем семестре?', attrs={'maxlength': 200, 'autocomplete': 'off'}) }}
+            {{ ui.field('description', 'Пояснение', 'textarea', value=values.description, rows=2, error=errors.description, attrs={'maxlength': 1000}) }}
+            {{ ui.image_uploader('image', [{'url': poll.imageUrl}] if (is_edit and poll.imageUrl) else [], max=1, label='Картинка (необязательно)',
+                                 help='Одна картинка JPG, PNG, WEBP или GIF до 10 МБ — показывается в ленте рядом с опросом.') }}
+            {% if errors.image %}<div class="invalid-feedback d-block mb-2">{{ errors.image }}</div>{% endif %}
+        {% endcall %}
+
+        {% call ui.card('Варианты ответа', icon='list-check', subtitle='От 2 до %d вариантов'|format(max_options)) %}
+            {% if errors.options %}<div class="alert alert-danger py-2 small" role="alert">{{ errors.options }}</div>{% endif %}
+            <div class="ct-options" data-ct-options data-max="{{ max_options }}">
+                {% for a in answers %}
+                <div class="ct-option{{ ' is-deleted' if a.deleted }}" data-ct-option="existing">
+                    <input type="hidden" name="answer_ids" value="{{ a.id }}">
+                    <input type="hidden" name="delete_answers" value="{{ a.id }}"{{ '' if a.deleted else ' disabled' }} data-ct-option-delete>
+                    <span class="ct-option__handle" aria-hidden="true"><i class="bi bi-grip-vertical"></i></span>
+                    <label class="visually-hidden" for="ans-{{ a.id }}">Вариант {{ loop.index }}</label>
+                    <input class="form-control" id="ans-{{ a.id }}" name="answer_text_{{ a.id }}" value="{{ a.text }}" maxlength="200" required>
+                    <span class="cc-badge cc-badge--neutral ct-option__votes" title="Голосов">{{ a.votes|default(0) }} {{ (a.votes|default(0))|plural('голос', 'голоса', 'голосов') }}</span>
+                    <div class="ct-option__tools">
+                        <button type="button" class="btn btn-light btn-sm cc-btn-icon" data-ct-option-move="-1" aria-label="Выше"><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+                        <button type="button" class="btn btn-light btn-sm cc-btn-icon" data-ct-option-move="1" aria-label="Ниже"><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
+                        <button type="button" class="btn btn-outline-danger btn-sm cc-btn-icon" data-ct-option-remove aria-pressed="{{ 'true' if a.deleted else 'false' }}" aria-label="{{ 'Вернуть вариант' if a.deleted else 'Удалить вариант' }}" title="{{ 'Вернуть вариант' if a.deleted else 'Удалить вариант' }}"><i class="bi {{ 'bi-arrow-counterclockwise' if a.deleted else 'bi-x-lg' }}" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+                {% endfor %}
+                {% set fresh = new_options if new_options else ([] if is_edit else ['', '']) %}
+                {% for text in fresh %}
+                <div class="ct-option" data-ct-option="new">
+                    <span class="ct-option__handle" aria-hidden="true"><i class="bi bi-plus-circle-dotted"></i></span>
+                    <input class="form-control" name="options" value="{{ text }}" maxlength="200" placeholder="Новый вариант" aria-label="Новый вариант ответа">
+                    <div class="ct-option__tools">
+                        <button type="button" class="btn btn-outline-danger btn-sm cc-btn-icon" data-ct-option-remove aria-label="Убрать вариант"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+                {% endfor %}
             </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">Заголовок <span class="text-danger">*</span></label>
-                    <input type="text" name="title" class="form-control" 
-                           value="{{ poll.title if poll else '' }}" required>
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label">Описание (опционально)</label>
-                    <textarea name="description" class="form-control" rows="3" placeholder="Введите описание опроса...">{{ poll.description if poll else '' }}</textarea>
-                </div>
-
-                <!-- Варианты ответов -->
-                <div class="mb-3">
-                    <label class="form-label">Варианты ответов <span class="text-danger">*</span></label>
-                    {% if poll %}
-                    <p class="text-muted">Варианты ответов редактируются ниже.</p>
-                    {% else %}
-                    <div id="options-container">
-                        <div class="input-group mb-2 option-group">
-                            <input type="text" name="options" class="form-control" placeholder="Вариант ответа 1" required>
-                            <button type="button" class="btn btn-outline-danger remove-option" style="display: none;">
-                                <i class="bi bi-dash-lg"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <button type="button" class="btn btn-outline-success" id="add-option">
-                        <i class="bi bi-plus-lg"></i> Добавить вариант
-                    </button>
-                    {% endif %}
-                </div>
-
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">Целевая аудитория <span class="text-danger">*</span></label>
-                        <select name="target_audience" class="form-select" required>
-                            <option value="all" {{ 'selected' if poll and poll.target_audience == 'all' else '' }}>
-                                Для всех
-                            </option>
-                            <option value="students" {{ 'selected' if poll and poll.target_audience == 'students' else '' }}>
-                                Только для студентов
-                            </option>
-                            <option value="teachers" {{ 'selected' if poll and poll.target_audience == 'teachers' else '' }}>
-                                Только для преподавателей
-                            </option>
-                        </select>
-                    </div>
-
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">Тип опроса <span class="text-danger">*</span></label>
-                        <select name="poll_type" class="form-select" required>
-                            <option value="multiple" {{ 'selected' if poll and poll.poll_type == 'multiple' or not poll else '' }}>
-                                Несколько вариантов
-                            </option>
-                            <option value="single" {{ 'selected' if poll and poll.poll_type == 'single' else '' }}>
-                                Один вариант
-                            </option>
-                        </select>
+            <template data-ct-option-template>
+                <div class="ct-option" data-ct-option="new">
+                    <span class="ct-option__handle" aria-hidden="true"><i class="bi bi-plus-circle-dotted"></i></span>
+                    <input class="form-control" name="options" maxlength="200" placeholder="Новый вариант" aria-label="Новый вариант ответа">
+                    <div class="ct-option__tools">
+                        <button type="button" class="btn btn-outline-danger btn-sm cc-btn-icon" data-ct-option-remove aria-label="Убрать вариант"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                     </div>
                 </div>
+            </template>
+            <button type="button" class="btn btn-light btn-sm mt-2" data-ct-option-add><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить вариант</span></button>
+            {% if is_edit %}<p class="form-text mb-0 mt-2">Правка текста не сбрасывает голоса. Удалённый вариант пропадёт из результатов.</p>{% endif %}
+        {% endcall %}
+    </div>
 
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" name="is_anonymous" id="is_anonymous"
-                                   {{ 'checked' if poll and poll.get('is_anonymous', True) else '' }}>
-                            <label class="form-check-label" for="is_anonymous">
-                                Анонимное голосование
-                            </label>
-                            <small class="text-muted d-block mt-2">Если включено, голоса не будут привязаны к пользователям</small>
-                        </div>
-                    </div>
-                </div>
+    <aside class="ct-editor__side">
+        {% call ui.card('Настройки', icon='sliders') %}
+            {{ ui.field('target_audience', 'Кому показывать', 'select', value=values.target_audience, options=audiences, error=errors.target_audience) }}
+            {{ ui.field('poll_type', 'Сколько вариантов можно выбрать', 'select', value=values.poll_type, options=poll_types, error=errors.poll_type) }}
+            {{ ui.field('is_anonymous', 'Анонимный опрос', 'switch', value=values.is_anonymous, help='Имена голосовавших не будут видны в результатах') }}
+            {{ ui.field('endTime', 'Окончание (время Алматы)', 'datetime-local', value=values.endTime, error=errors.endTime, help='Пусто — без срока', attrs={'data-ct-endtime': ''}) }}
+            <div class="d-flex flex-wrap gap-1 mb-1" aria-label="Быстрый выбор срока">
+                {% for d, l in [(1, '+1 день'), (3, '+3 дня'), (7, '+7 дней'), (14, '+2 недели')] %}
+                <button type="button" class="cc-chip" data-ct-endtime-add="{{ d }}">{{ l }}</button>
+                {% endfor %}
+                <button type="button" class="cc-chip" data-ct-endtime-clear>Без срока</button>
             </div>
+        {% endcall %}
+        <div class="ct-editor__actions">
+            {{ ui.button('Отмена', href=url_for('polls'), variant='light') }}
+            {{ ui.button('Сохранить' if is_edit else 'Создать опрос', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
         </div>
-
-        <!-- Изображение -->
-        <div class="card mb-4">
-            <div class="card-header bg-warning text-dark">
-                <h5 class="mb-0">Изображение опроса (опционально)</h5>
-            </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">Загрузить изображение</label>
-                    <input type="file" name="image" id="poll-image-input" class="form-control" accept="image/*">
-                    <div id="poll-image-preview" class="mt-3" style="display: none;">
-                        <img id="poll-image-preview-img" src="#" alt="Превью изображения" class="img-thumbnail" style="max-width: 200px;">
-                        <p class="mt-2 text-muted"><small>Выбранное изображение. Оно будет загружено при сохранении.</small></p>
-                    </div>
-                    {% if poll and poll.imageUrl %}
-                        <div class="mt-3" id="poll-current-image">
-                            <img src="{{ poll.imageUrl }}" alt="Текущее изображение" class="img-thumbnail" style="max-width: 200px;">
-                            <p class="mt-2 text-muted"><small>Текущее изображение. Загрузите новое, чтобы заменить.</small></p>
-                        </div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <div class="card mb-4">
-            <div class="card-header bg-info text-white">
-                <h5 class="mb-0">Время завершения опроса</h5>
-            </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">Конец опроса <span class="text-danger">*</span></label>
-                    <input type="datetime-local" name="endTime" class="form-control" required
-                           value="{% if poll and poll.endTime %}{{ poll.endTime.strftime('%Y-%m-%dT%H:%M') if poll.endTime.strftime else '' }}{% endif %}">
-                    <small class="text-muted">После этого времени опросник будет завершен и участники смогут видеть только результаты</small>
-                </div>
-            </div>
-        </div>
-
-        {% if poll %}
-        </form>
-
-        <!-- Варианты ответов -->
-        <div class="card mb-4">
-            <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Варианты ответов</h5>
-                <span class="badge bg-light text-dark">{{ poll.get('answers', [])|length }} вариантов</span>
-            </div>
-            <div class="card-body">
-                {% if poll.get('answers') %}
-                <div class="list-group mb-3">
-                    {% for answer in poll.answers %}
-                    <div class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="mb-0">{{ answer.text }}</h6>
-                            <small class="text-muted">Голосов: {{ answer.get('votes', 0) }}</small>
-                        </div>
-                        <form method="POST" action="{{ url_for('poll_delete_answer', poll_id=poll.id, answer_id=answer.id) }}"
-                              style="display:inline;">
-                            <button type="submit" class="btn btn-sm btn-outline-danger"
-                                    onclick="return confirm('Удалить этот вариант?')">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </form>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="text-muted">Варианты ответов пока не добавлены</p>
-                {% endif %}
-
-                <form method="POST" action="{{ url_for('poll_add_answer', poll_id=poll.id) }}" class="mt-3">
-                    <div class="input-group">
-                        <input type="text" name="answer" class="form-control" placeholder="Введите новый вариант ответа" required>
-                        <button type="submit" class="btn btn-outline-success">
-                            <i class="bi bi-plus-lg"></i> Добавить
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Кнопки -->
-        <div class="d-flex gap-2">
-            <button type="submit" form="poll-main-form" class="btn btn-primary">
-                <i class="bi bi-check-lg"></i> {{ 'Обновить' if poll else 'Создать' }}
-            </button>
-            <a href="{{ url_for('polls') }}" class="btn btn-secondary">
-                <i class="bi bi-x-lg"></i> Отмена
-            </a>
-            {% if poll %}
-            <a href="{{ url_for('poll_results', poll_id=poll.id) }}" class="btn btn-info" style="margin-left: auto;">
-                <i class="bi bi-graph-up"></i> Результаты
-            </a>
-            {% endif %}
-        </div>
-        {% if not poll %}
-    </form>
-        {% endif %}
-</div>
-
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-
-<script>
-    // Валидация формы
-    document.querySelectorAll('form.needs-validation').forEach(form => {
-        form.addEventListener('submit', event => {
-            if (!form.checkValidity()) {
-                event.preventDefault();
-                event.stopPropagation();
-            }
-            form.classList.add('was-validated');
-        });
-    });
-
-    // Динамическое управление вариантами ответов
-    {% if not poll %}
-    let optionCount = 1;
-
-    document.getElementById('add-option').addEventListener('click', function() {
-        optionCount++;
-        const container = document.getElementById('options-container');
-        const newOption = document.createElement('div');
-        newOption.className = 'input-group mb-2 option-group';
-        newOption.innerHTML = `
-            <input type="text" name="options" class="form-control" placeholder="Вариант ответа ${optionCount}" required>
-            <button type="button" class="btn btn-outline-danger remove-option">
-                <i class="bi bi-dash-lg"></i>
-            </button>
-        `;
-        container.appendChild(newOption);
-        updateRemoveButtons();
-    });
-
-    document.getElementById('options-container').addEventListener('click', function(e) {
-        if (e.target.classList.contains('remove-option') || e.target.parentElement.classList.contains('remove-option')) {
-            e.target.closest('.option-group').remove();
-            optionCount--;
-            updateRemoveButtons();
-            updatePlaceholders();
-        }
-    });
-
-    function updateRemoveButtons() {
-        const options = document.querySelectorAll('.option-group');
-        options.forEach((option, index) => {
-            const removeBtn = option.querySelector('.remove-option');
-            if (options.length > 1) {
-                removeBtn.style.display = 'inline-block';
-            } else {
-                removeBtn.style.display = 'none';
-            }
-        });
-    }
-
-    function updatePlaceholders() {
-        const options = document.querySelectorAll('.option-group input');
-        options.forEach((input, index) => {
-            input.placeholder = `Вариант ответа ${index + 1}`;
-        });
-    }
-    {% endif %}
-
-    // Image preview for poll form
-    const imageInput = document.getElementById('poll-image-input');
-    const previewWrapper = document.getElementById('poll-image-preview');
-    const previewImg = document.getElementById('poll-image-preview-img');
-    const currentImage = document.getElementById('poll-current-image');
-
-    if (imageInput) {
-        imageInput.addEventListener('change', function() {
-            const file = this.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    previewImg.src = e.target.result;
-                    previewWrapper.style.display = 'block';
-                };
-                reader.readAsDataURL(file);
-                if (currentImage) {
-                    currentImage.style.display = 'none';
-                }
-            } else {
-                previewImg.src = '#';
-                previewWrapper.style.display = 'none';
-                if (currentImage) {
-                    currentImage.style.display = 'block';
-                }
-            }
-        });
-    }
-</script>
+    </aside>
+</form>
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

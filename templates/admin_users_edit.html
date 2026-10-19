@@ -1,0 +1,156 @@
+{# Карточка и правка пользователя (PEOPLE). Данные: routes_people.admin_edit_user.
+   Роль «Абитуриент» не меняется: у абитуриента правятся только имя и телефон. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% set is_applicant = user.role == 'applicant' %}
+{% set back_url = next_url or url_for('admin_users', role=user.role if user.role in role_labels else None) %}
+{% block title %}{{ user.title }}{% endblock %}
+{% block page_title %}{{ user.title }}{% endblock %}
+{% block styles %}{{ ui.css('people') }}{% endblock %}
+{% block scripts %}{{ ui.js('people') }}{% endblock %}
+{% block content %}
+<div class="cc-page-header pp-profile-head">
+    <div class="pp-person pp-person--lg min-w-0">
+        {{ ui.avatar(user.name or user.title, size='lg') }}
+        <div class="min-w-0 cc-page-header__text">
+            <h1 class="cc-truncate">{{ user.title }}</h1>
+            <p class="d-flex flex-wrap align-items-center gap-2">
+                {{ ui.badge(user.role or 'none', role_labels.get(user.role) or 'Без роли', None if user.role in role_labels else 'neutral') }}
+                {% if user.role == 'student' and user.group %}<span class="cc-badge cc-badge--outline">{{ user.group }}{% if user.course %} · {{ user.course }} курс{% endif %}</span>{% endif %}
+                {% if user.must_change %}<span class="cc-badge cc-badge--warning"><i class="bi bi-key" aria-hidden="true"></i>ждёт смены пароля</span>{% endif %}
+                {% if account and account.disabled %}<span class="cc-badge cc-badge--danger"><i class="bi bi-lock" aria-hidden="true"></i>вход заблокирован</span>{% endif %}
+                <span class="cc-subtle small">uid: <code data-copy="{{ user.id }}" title="Скопировать" class="pp-copy">{{ user.id }}</code></span>
+            </p>
+        </div>
+    </div>
+    <div class="cc-page-header__actions">
+        {{ ui.button('Назад', href=back_url, icon='arrow-left', variant='light') }}
+        {% if is_applicant and nav_url('applicant_detail', uid=user.id) != '#' %}
+        {{ ui.button('Карточка лида', href=nav_url('applicant_detail', uid=user.id), icon='person-lines-fill') }}
+        {% elif user.role == 'teacher' %}
+        {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id), icon='person-workspace') }}
+        {% endif %}
+    </div>
+</div>
+
+<div class="pp-form-layout">
+    <div class="pp-form-main">
+        <form method="post" action="{{ url_for('admin_edit_user', user_id=user.id) }}" novalidate data-dirty-guard>
+            {{ ui.csrf_field() }}
+            {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+            {% call ui.card('Профиль', icon='person-vcard', subtitle='данные, которые видит приложение') %}
+                {% if errors.get('_form') %}<div class="alert alert-danger">{{ errors._form }}</div>{% endif %}
+                {% if is_applicant %}
+                    <div class="pp-hint mb-3">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <div>Это абитуриент: роль, группа и курс здесь не меняются. Перевод в студенты, статус CRM и коины — в карточке лида.</div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">{{ ui.field('name', 'Имя', value=values.name, error=errors.get('name'), attrs={'maxlength': 120}, help='Можно оставить пустым — абитуриент заполнит профиль сам', classes='') }}</div>
+                        <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone|phone if values.phone and not errors.get('phone') else values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+                    </div>
+                    <div class="pp-kv-block">
+                    {{ ui.kv([
+                        ('Логин', user.login or '—'),
+                        ('Email в Firebase', user.email or '—'),
+                        ('Источник', user.source or '—'),
+                        ('Город', data.get('city') or '—'),
+                        ('Школа / класс', ((data.get('school') or '—') ~ (' · ' ~ data.get('grade') if data.get('grade') else ''))),
+                        ('Специальности', (data.get('specialties') or [])|join(', ') or '—'),
+                        ('Зарегистрирован', user.created|dt),
+                    ]) }}
+                    </div>
+                {% else %}
+                    <div class="row g-3">
+                        <div class="col-12">{{ ui.field('name', 'ФИО', value=values.name, required=True, error=errors.get('name'), attrs={'maxlength': 120}, classes='') }}</div>
+                        <div class="col-md-6">{{ ui.field('email', 'Email', 'email', value=values.email, error=errors.get('email'), attrs={'maxlength': 120},
+                                                           help='Меняется и в аккаунте входа' if account and not account.error else None, classes='') }}</div>
+                        <div class="col-md-6">{{ ui.field('phone', 'Телефон', 'tel', value=values.phone, error=errors.get('phone'), attrs={'maxlength': 20}, placeholder='+7 7XX XXX XX XX', classes='') }}</div>
+                        <div class="col-md-6">
+                            {{ ui.field('role', 'Роль', 'select', value=values.role, error=errors.get('role'), options=role_options,
+                                        attrs={'data-pp-role-select': ''} if not is_self else {'data-pp-role-select': '', 'disabled': true},
+                                        help='Свою роль администратора снять нельзя' if is_self else None, classes='') }}
+                            {% if is_self %}<input type="hidden" name="role" value="admin">{% endif %}
+                        </div>
+                        <div class="col-md-3" data-pp-role-only="student">
+                            {{ ui.field('group', 'Группа', 'select', value=values.group, error=errors.get('group'),
+                                        options=(groups if (not values.group or values.group in groups) else [values.group] + groups),
+                                        placeholder='— без группы —', classes='') }}
+                        </div>
+                        <div class="col-md-3" data-pp-role-only="student">
+                            {{ ui.field('course', 'Курс', 'select', value=values.course, error=errors.get('course'),
+                                        options=(courses if (not values.course or values.course in courses) else [values.course] + courses|list),
+                                        placeholder='—', classes='') }}
+                        </div>
+                    </div>
+                    <p class="cc-muted small mt-3 mb-0" data-pp-role-only="teacher,admin,club"><i class="bi bi-info-circle" aria-hidden="true"></i> Группа и курс у не-студентов удаляются — иначе приложение подпишет их на уведомления группы.</p>
+                {% endif %}
+                <div class="pp-form-actions">
+                    {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+                    {{ ui.button('Отмена', href=back_url, variant='light') }}
+                </div>
+            {% endcall %}
+        </form>
+
+        {% if user.role == 'teacher' %}
+        {% call ui.card('Расписание', icon='calendar-week') %}
+            <p class="mb-2">{% if lessons_count %}Ведёт <b>{{ lessons_count }}</b> {{ plural(lessons_count, 'занятие', 'занятия', 'занятий') }} в неделю.{% else %}В расписании занятий нет.{% endif %}</p>
+            <div class="d-flex flex-wrap gap-2">
+                {{ ui.button('Расписание преподавателя', href=nav_url('schedule_teachers', teacher=user.id), icon='person-workspace', variant='light', size='sm') }}
+                {{ ui.button('Нагрузка и вход', href=url_for('teacher_edit', uid=user.id), icon='speedometer', variant='light', size='sm') }}
+            </div>
+        {% endcall %}
+        {% endif %}
+    </div>
+
+    <aside class="pp-form-aside">
+        {% call ui.card('Вход в приложение', icon='key') %}
+            {% if account is none %}
+                <p class="mb-2"><span class="cc-badge cc-badge--neutral"><i class="bi bi-person-slash" aria-hidden="true"></i>Нет аккаунта</span></p>
+                <p class="cc-muted small mb-0">
+                    {% if user.role == 'teacher' %}Вход можно создать на странице <a href="{{ url_for('teacher_edit', uid=user.id) }}">преподавателя</a> — uid сохранится, расписание не сломается.
+                    {% else %}У профиля нет аккаунта Firebase Auth — пользователь не может войти. Обычно это старая запись.{% endif %}
+                </p>
+            {% elif account.error %}
+                <p class="cc-muted mb-0">Сервис входа сейчас недоступен — данные аккаунта не загрузились.</p>
+            {% else %}
+                {{ ui.kv([
+                    ('Статус', ui.badge('inactive', 'Заблокирован', 'danger') if account.disabled else ui.badge('active', 'Активен')),
+                    ('Вход по', user.login if is_applicant else (account.email or '—')),
+                    ('Последний вход', (account.last_sign_in|ago) if account.last_sign_in else 'ещё не входил'),
+                    ('Аккаунт создан', account.created|dt),
+                ]) }}
+                {% if is_applicant and data.get('passwordResetAt') %}<p class="cc-muted small mt-2 mb-0">Пароль сброшен {{ data.get('passwordResetAt')|dt }}{% if user.must_change %} — абитуриент ещё не сменил его{% endif %}.</p>{% endif %}
+                <div class="pp-account-actions">
+                    {% if default_password and not is_self and user.role != 'admin' %}
+                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=user.id), 'Сбросить пароль на ' ~ default_password,
+                                         'Пароль станет ' ~ default_password ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if is_applicant else ' Сообщите его пользователю лично.'),
+                                         variant='outline-primary', icon='key', size=None, ok='Сбросить', title='Сброс пароля', classes='w-100') }}
+                    {% endif %}
+                    {% if not is_self %}
+                    {% if account.disabled %}
+                    {{ ui.confirm_button(url_for('admin_user_set_disabled', user_id=user.id), 'Разблокировать вход', 'Разрешить пользователю снова входить в приложение?',
+                                         variant='light', icon='unlock', size=None, fields={'disabled': '0'}, ok='Разблокировать', classes='w-100') }}
+                    {% else %}
+                    {{ ui.confirm_button(url_for('admin_user_set_disabled', user_id=user.id), 'Заблокировать вход', 'Пользователь не сможет войти, пока вы не разблокируете аккаунт. Все сеансы завершатся. Данные сохранятся.',
+                                         variant='light', icon='lock', size=None, fields={'disabled': '1'}, ok='Заблокировать', classes='w-100') }}
+                    {% endif %}
+                    {{ ui.confirm_button(url_for('admin_user_revoke', user_id=user.id), 'Завершить все сеансы', 'Выйти из аккаунта на всех устройствах? Пароль не изменится.',
+                                         variant='light', icon='box-arrow-right', size=None, ok='Завершить', classes='w-100') }}
+                    {% endif %}
+                </div>
+                {% if user.role == 'admin' and not is_self %}<p class="cc-muted small mt-2 mb-0">Пароль администратора стандартным не сбрасывается — он меняет его сам.</p>{% endif %}
+            {% endif %}
+        {% endcall %}
+
+        {% if not is_self %}
+        {% call ui.card('Удаление', icon='trash', classes='pp-danger-card') %}
+            <p class="cc-muted small">Удалится аккаунт входа и профиль.{% if is_applicant %} CRM, кошелёк и заказы абитуриента подчистит сервер.{% elif lessons_count %} В расписании останется {{ lessons_count }} {{ plural(lessons_count, 'занятие', 'занятия', 'занятий') }} без преподавателя.{% endif %} Действие необратимо.</p>
+            {{ ui.confirm_button(url_for('admin_delete_user', user_id=user.id, next=back_url), 'Удалить пользователя',
+                                 'Удалить «' ~ user.title ~ '» вместе с аккаунтом входа? Действие необратимо.',
+                                 variant='outline-danger', icon='trash', size=None, ok='Удалить', classes='w-100') }}
+        {% endcall %}
+        {% endif %}
+    </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+{# Временная публичная страница-заглушка (cms.core.stub_page(public=True)). #}
+{% extends 'public/base_public.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}{{ stub_title }}{% endblock %}
+{% block content %}
+<div class="cc-public__hero">
+    <h1>{{ stub_title }}</h1>
+    <p>{{ 'Бөлім әзірленуде' if public_lang() == 'kk' else 'Скоро здесь можно будет зарегистрироваться' }}</p>
+</div>
+<div class="cc-public__card">
+    {% call ui.empty_state(stub_icon, 'Страница в разработке') %}
+        {% if stub_features %}
+        <ul class="cc-empty__list">
+            {% for f in stub_features %}<li><i class="bi bi-check2-circle" aria-hidden="true"></i><span>{{ f }}</span></li>{% endfor %}
+        </ul>
+        {% endif %}
+    {% endcall %}
+</div>
+{% endblock %}

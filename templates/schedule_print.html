@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% import 'schedule_ui.html' as sch with context %}
+{# Бланки расписания для печати (владелец — SCHEDULE): одна группа — один лист A4. «Сохранить как PDF» — в окне печати. #}
+{% block title %}Бланки расписания{% endblock %}
+{% block styles %}{{ ui.css('schedule') }}{% endblock %}
+{% block scripts %}{{ ui.js('schedule') }}{% endblock %}
+{% block body_class %}sch-print-page{% endblock %}
+
+{% block content %}
+<div class="cc-no-print">
+    {% call ui.page_header('Бланки для печати', sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · одна группа на листе A4', icon='printer') %}
+        {{ ui.button('Назад', href=url_for('schedule', group=selected[0] if selected|length == 1 else None), icon='arrow-left', variant='light') }}
+        <button type="button" class="btn btn-primary" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать / PDF</span></button>
+    {% endcall %}
+    <form method="get" class="cc-filters" action="{{ url_for('schedule_print') }}">
+        {% for g in selected %}<input type="hidden" name="group" value="{{ g }}">{% endfor %}
+        {% if course %}<input type="hidden" name="course" value="{{ course }}">{% endif %}
+        {% if major %}<input type="hidden" name="major" value="{{ major }}">{% endif %}
+        {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
+        <div class="cc-filters__field">
+            <label class="form-label" for="sch-print-week">Какие пары</label>
+            <select class="form-select" id="sch-print-week" name="week" data-autosubmit>
+                <option value="" {{ 'selected' if not week }}>Все недели (Ч и З с пометками)</option>
+                <option value="current" {{ 'selected' if week == 'current' }}>Только текущая неделя ({{ current_week_label|lower }})</option>
+            </select>
+        </div>
+        <p class="cc-subtle small mb-0 align-self-center">Совет: в окне печати выберите «Сохранить как PDF», чтобы отправить бланки в мессенджер.</p>
+    </form>
+</div>
+
+{% if not sheets %}
+<section class="cc-card">{{ ui.empty_state('printer', 'Нечего печатать', 'По выбранным фильтрам нет групп с расписанием.', {'label': 'К расписанию', 'href': url_for('schedule'), 'icon': 'arrow-left', 'variant': 'light'}) }}</section>
+{% endif %}
+
+<div class="sch-sheets">
+{% for s in sheets %}
+<section class="sch-sheet" aria-label="Расписание группы {{ s.group }}">
+    <header class="sch-sheet__head">
+        <img src="{{ static_url('img/logo.png') }}" alt="" width="44" height="44" class="sch-sheet__logo">
+        <div>
+            <div class="sch-sheet__org">Caspian College · расписание занятий</div>
+            <h2 class="sch-sheet__group">Группа {{ s.group }}</h2>
+        </div>
+        <div class="sch-sheet__week">
+            {% if week == 'current' %}Неделя: <b>{{ current_week_label|lower }}</b>{% else %}Сейчас идёт: <b>{{ current_week_label|lower }}</b>{% endif %}
+            <span>{{ week_number }}-я учебная неделя</span>
+        </div>
+    </header>
+    {% if s.count %}
+    <table class="sch-sheet__table">
+        <thead><tr><th>День</th><th>Время</th><th>Дисциплина и преподаватель</th><th>Ауд.</th></tr></thead>
+        <tbody>
+        {% for d, ls in s.by_day.items() %}
+            {% for l in ls %}
+            <tr class="{{ 'sch-sheet__row--first' if loop.first }}">
+                {% if loop.first %}<th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day">{{ day_names[d] }}</th>{% endif %}
+                <td class="sch-sheet__time cc-num">{{ l|sch_time }}</td>
+                <td>
+                    <b>{{ l.subject }}</b>{% if l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}
+                    {% if l|sch_teacher %}<div class="sch-sheet__teacher">{{ l|sch_teacher }}</div>{% endif %}
+                </td>
+                <td class="sch-sheet__room">{{ l.room }}</td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="cc-muted">У группы пока нет занятий.</p>
+    {% endif %}
+    <footer class="sch-sheet__foot">
+        <span><span class="sch-sheet__mark sch-sheet__mark--numerator">Ч</span> числитель</span>
+        <span><span class="sch-sheet__mark sch-sheet__mark--denominator">З</span> знаменатель</span>
+        <span>без пометки — каждую неделю</span>
+        <span class="ms-auto">Сформировано {{ generated }}</span>
+    </footer>
+</section>
+{% endfor %}
+</div>
+{% endblock %}

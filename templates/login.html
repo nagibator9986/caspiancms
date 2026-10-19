@@ -1,19 +1,50 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-4">
-        <h2 class="text-center">Вход</h2>
-        <form method="POST">
-            <div class="mb-3">
-                <label class="form-label">Email</label>
-                <input type="email" name="email" class="form-control" required>
+{% extends "public/base_public.html" %}
+{% block title %}Вход · Caspian College{% endblock %}
+{% block body_class %}cc-auth-page{% endblock %}
+{% block body %}
+<div class="cc-auth">
+    <aside class="cc-auth__aside" aria-hidden="true">
+        <div class="cc-auth__brand">
+            <img src="{{ static_url('img/logo.png') }}" alt="" width="56" height="56">
+            <span><b>Caspian College</b><small>Админ-панель</small></span>
+        </div>
+        <div class="cc-auth__pitch">
+            <h2>Всё управление приложением колледжа — в одном месте</h2>
+            <p>Расписание и накладки, абитуриенты и приёмная, новости, Caspian Coin и магазин мерча.</p>
+            <ul class="cc-auth__features">
+                <li><i class="bi bi-calendar-week"></i>Расписание без накладок</li>
+                <li><i class="bi bi-mortarboard"></i>Абитуриенты и аналитика приёма</li>
+                <li><i class="bi bi-coin"></i>Коины, кампании и заказы</li>
+            </ul>
+        </div>
+        <div class="cc-auth__foot">© Caspian College</div>
+    </aside>
+    <main class="cc-auth__main" id="cc-main">
+        <div class="cc-auth__card">
+            <div class="cc-auth__mobile-brand">
+                <img src="{{ static_url('img/logo.png') }}" alt="" width="48" height="48">
+                <span><b>Caspian College</b><small>Админ-панель</small></span>
             </div>
-            <div class="mb-3">
-                <label class="form-label">Пароль</label>
-                <input type="password" name="password" class="form-control" required>
-            </div>
-            <button type="submit" class="btn btn-primary w-100">Войти</button>
-        </form>
-    </div>
+            <h1>Вход</h1>
+            <p class="cc-lead">Для администраторов колледжа. Используйте email и пароль учётной записи приложения.</p>
+            <form method="post" action="{{ url_for('login') }}" novalidate>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+                <div class="mb-3">
+                    <label class="form-label" for="login-email">Email</label>
+                    <input class="form-control" type="email" id="login-email" name="email" value="{{ email or '' }}" autocomplete="username" inputmode="email" required autofocus>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label" for="login-password">Пароль</label>
+                    <div class="cc-password">
+                        <input class="form-control" type="password" id="login-password" name="password" autocomplete="current-password" required>
+                        <button type="button" class="btn btn-ghost cc-btn-icon cc-password__toggle" data-password-toggle="#login-password" aria-label="Показать пароль" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-lg w-100" data-loading><span>Войти</span><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+            </form>
+            <p class="cc-muted small mt-4 mb-0"><i class="bi bi-shield-lock me-1" aria-hidden="true"></i>Сессия действует 12 часов. Не входите с чужих устройств.</p>
+        </div>
+    </main>
 </div>
 {% endblock %}

@@ -1,78 +1,49 @@
-{% extends "base.html" %}
+{# Товары (магазин в тенге, коллекция products — экран «Магазин» студента) (CONTENT). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
 {% block title %}Товары{% endblock %}
+{% block styles %}{{ ui.css('content') }}{% endblock %}
 {% block content %}
-<h1>Товары</h1>
-<a href="/products/add" class="btn btn-primary mb-3">Добавить товар</a>
-<div class="table-responsive">
-    <table class="table table-hover">
-        <thead>
-            <tr>
-                <th>Название</th>
-                <th>Базовая цена</th>
-                <th>Фильтры (варианты)</th>
-                <th>Ссылка</th>
-                <th>Изображение</th>
-                <th>Создано</th>
-                <th>Действия</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for product in products %}
-            <tr>
-                <td><strong>{{ product.name }}</strong></td>
-                <td>{{ product.price }} ₸</td>
-                <td>
-                    {% if product.variants and product.variants|length > 0 %}
-                        <div class="filters-display">
-                            {% for filter in product.variants %}
-                            <div class="mb-2">
-                                <span class="badge bg-primary">{{ filter.filterName }}</span>
-                                <div class="small text-muted">
-                                    {% for option in filter.options %}
-                                        <span class="badge bg-light text-dark me-1">
-                                            {{ option.name }} ({{ option.price }} ₸)
-                                        </span>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    {% else %}
-                        <span class="text-muted">—</span>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if product.url %}
-                        <a href="{{ product.url }}" target="_blank" class="btn btn-sm btn-outline-primary">Ссылка</a>
-                    {% else %}
-                        —
-                    {% endif %}
-                </td>
-                <td>
-                    {% if product.imageUrl %}
-                        <img src="{{ product.imageUrl }}" alt="Image" style="max-height: 60px; max-width: 90px;" />
-                    {% else %}
-                        —
-                    {% endif %}
-                </td>
-                <td class="small">{{ product.createdAt if product.createdAt else '—' }}</td>
-                <td>
-                    <a href="/products/edit/{{ product.id }}" class="btn btn-warning btn-sm">✏️ Ред.</a>
-                    <form method="POST" action="/products/delete/{{ product.id }}" style="display:inline;">
-                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Удалить товар?')">🗑️ Удалить</button>
-                    </form>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="7" class="text-center text-muted">Нет товаров</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
+{{ ui.page_header('Товары', 'Каталог в тенге для студентов: заказ уходит продавцу по ссылке или в WhatsApp. Мерч за коины — в разделе Caspian Coin.', [
+    {'label': 'Магазин коинов', 'href': nav_url('coins_shop'), 'icon': 'coin', 'variant': 'light'},
+    {'label': 'Добавить товар', 'href': url_for('product_form'), 'icon': 'plus-lg'},
+], icon='cart') }}
 
-<style>
-.filters-display {
-    max-width: 400px;
-}
-</style>
+{% call ui.filters_bar() %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Название товара') }}
+{% endcall %}
+
+{% if page.total %}
+{% call ui.data_table('productsTable', title=page.total ~ ' ' ~ page.total|plural('товар', 'товара', 'товаров')) %}
+<table class="cc-table" id="productsTable" data-sortable>
+    <thead><tr><th data-sort="text">Товар</th><th data-sort="num" class="text-end">Цена</th><th class="d-none d-lg-table-cell">Варианты</th><th class="d-none d-md-table-cell">Ссылка</th><th class="d-none d-md-table-cell" data-sort="text">Обновлён</th><th class="cc-actions"><span class="visually-hidden">Действия</span></th></tr></thead>
+    <tbody>
+    {% for p in page.items %}
+    <tr data-href="{{ url_for('product_form', product_id=p.id) }}">
+        <td>
+            <div class="ct-item ct-main-col">
+                <span class="ct-cover ct-cover--sm">{% if p.imageUrl %}<img src="{{ p.imageUrl|safe_url }}" alt="" width="44" height="44" loading="lazy" decoding="async">{% else %}<i class="bi bi-box" aria-hidden="true"></i>{% endif %}</span>
+                <div class="cc-cell-main ct-clamp-2">{{ p.name or 'Без названия' }}</div>
+            </div>
+        </td>
+        <td class="text-end cc-num cc-nowrap" data-value="{{ p.price_num }}">{{ p.price_num|num }} ₸</td>
+        <td class="d-none d-lg-table-cell">{{ p.variant_summary or '—' }}</td>
+        <td class="d-none d-md-table-cell">{% if p.url %}<a href="{{ p.url|safe_url }}" target="_blank" rel="noopener noreferrer" class="ct-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Открыть</a>{% else %}<span class="cc-muted">—</span>{% endif %}</td>
+        <td class="d-none d-md-table-cell cc-nowrap" data-value="{{ (p.updatedAt or p.createdAt)|dt('%Y%m%d%H%M', '') }}">{{ (p.updatedAt or p.createdAt)|dateonly }}</td>
+        <td class="cc-actions">
+            {{ ui.button('Редактировать', href=url_for('product_form', product_id=p.id), icon='pencil', variant='light', size='sm', icon_only=True) }}
+            {{ ui.confirm_button(url_for('product_delete', product_id=p.id), 'Удалить', 'Удалить товар «' ~ (p.name or '') ~ '»?', fields={'next': request.full_path}, icon_only=True) }}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endcall %}
+{{ ui.pagination(page) }}
+{% elif total %}
+<section class="cc-card">{{ ui.empty_state('search', 'Ничего не найдено', 'Измените запрос.', {'label': 'Все товары', 'href': url_for('products'), 'variant': 'light'}) }}</section>
+{% else %}
+<section class="cc-card">{{ ui.empty_state('cart', 'Товаров пока нет', 'Добавьте товар — он появится в магазине приложения.', {'label': 'Добавить товар', 'href': url_for('product_form'), 'icon': 'plus-lg'}) }}</section>
+{% endif %}
 {% endblock %}
+{% block scripts %}{{ ui.js('content') }}{% endblock %}

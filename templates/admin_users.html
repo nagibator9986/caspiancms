@@ -1,259 +1,160 @@
-{% extends "base.html" %}
+{# Пользователи (PEOPLE): вкладки ролей, поиск, фильтры, массовые действия. Данные: routes_people.admin_users.
+   Пользовательские данные выводятся только через автоэкранирование Jinja (никаких onclick/innerHTML). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Пользователи{% endblock %}
+{% block styles %}{{ ui.css('people') }}{% endblock %}
+{% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+{% call ui.page_header('Пользователи', 'Аккаунты приложения: студенты, преподаватели, абитуриенты и администрация', icon='people') %}
+    {{ ui.button('Обновить', href=url_with(refresh=1, page=None), icon='arrow-clockwise', variant='ghost', attrs={'title': 'Перечитать список из базы'}) }}
+    {{ ui.button('CSV', href=url_with(format='csv', page=None, refresh=None), icon='download', variant='light', attrs={'title': 'Скачать отфильтрованный список'}) }}
+    {{ ui.button('Новый пользователь', href=url_for('admin_add_user', role=role if role in ('student', 'teacher', 'admin', 'club') else None, group=group if group and group != '__none__' else None), icon='person-plus') }}
+{% endcall %}
 
-<div class="container-fluid py-4 px-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2><i class="bi bi-person-badge-fill me-2 text-primary"></i>База пользователей</h2>
-        <button class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#addUserModal">
-            <i class="bi bi-person-plus-fill me-1"></i> Новый пользователь
-        </button>
-    </div>
+{% set tab_items = [{'key': '', 'label': 'Все', 'href': url_with(role=None, page=None, group=None, course=None, sort=None, refresh=None), 'icon': 'people', 'count': total}] %}
+{% for key, label, icon in role_tabs %}
+    {% set _ = tab_items.append({'key': key, 'label': label, 'href': url_with(role=key, page=None, group=None, course=None, sort=None, refresh=None), 'icon': icon, 'count': counts.get(key, 0)}) %}
+{% endfor %}
+{% if counts.get('none') %}
+    {% set _ = tab_items.append({'key': 'none', 'label': 'Без роли', 'href': url_with(role='none', page=None, group=None, course=None, sort=None, refresh=None), 'icon': 'question-circle', 'count': counts.get('none')}) %}
+{% endif %}
+{{ ui.tabs(tab_items, role, label='Роли') }}
 
-    <div class="accordion" id="usersAccordion">
-        {% for section_name, members in grouped_users.items() %}
-        <div class="accordion-item mb-3 border-0 shadow-sm rounded-3 overflow-hidden">
-            <h2 class="accordion-header">
-                <button class="accordion-button {% if not loop.first %}collapsed{% endif %} bg-white text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}">
-                    <i class="bi bi-folder2-open me-2 text-primary"></i>
-                    <strong>{{ section_name }}</strong>
-                    <span class="ms-2 badge bg-secondary rounded-pill small">{{ members|length }}</span>
-                </button>
-            </h2>
-            <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#usersAccordion">
-                <div class="accordion-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0">
-                            <thead class="table-light small text-uppercase text-muted">
-                                <tr>
-                                    <th class="ps-4">ФИО / Почта</th>
-                                    <th>Телефон</th>
-                                    <th>Курс</th>
-                                    <th>Создан / Обновлен</th>
-                                    <th class="text-end px-4">Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for user in members %}
-                                <tr style="cursor: pointer;" onclick="showFullDetails('{{ user|tojson|forceescape }}')">
-                                    <td class="ps-4">
-                                        <div class="fw-bold text-dark">{{ user.name }}</div>
-                                        <div class="small text-muted">{{ user.email }}</div>
-                                    </td>
-                                    <td>{{ user.phone or '-' }}</td>
-                                    <td><span class="badge bg-light text-dark border px-3">{{ user.course or '?' }} курс</span></td>
-                                    <td class="small text-muted">
-                                        <div><i class="bi bi-clock-history me-1"></i>{{ user.created_str }}</div>
-                                        <div style="font-size: 0.75rem;"><i class="bi bi-pencil-square me-1"></i>{{ user.updated_str }}</div>
-                                    </td>
-                                    <td class="text-end px-4" onclick="event.stopPropagation()">
-                                        <div class="d-flex justify-content-end gap-2">
-                                            <!-- Редактировать -->
-                                            <button class="btn btn-sm btn-light border shadow-sm"
-                                                    title="Редактировать"
-                                                    onclick="editUser('{{ user.id }}', '{{ user.name }}', '{{ user.role }}', '{{ user.group }}', '{{ user.phone }}', '{{ user.course }}', '{{ user.email }}')">
-                                                <i class="bi bi-pencil text-primary"></i>
-                                            </button>
-
-                                            <!-- Сброс пароля -->
-                                            <form action="{{ url_for('admin_reset_password', user_id=user.id) }}" method="POST" class="d-inline">
-                                                <button type="submit"
-                                                        class="btn btn-sm btn-light border shadow-sm"
-                                                        title="Сбросить пароль"
-                                                        onclick="return confirm('Сбросить пароль для {{ user.name|e }}?')">
-                                                    <i class="bi bi-key-fill text-warning"></i>
-                                                </button>
-                                            </form>
-
-                                            <!-- Удалить -->
-                                            <a href="{{ url_for('admin_delete_user', user_id=user.id) }}"
-                                               class="btn btn-sm btn-light border shadow-sm"
-                                               onclick="return confirm('Вы уверены, что хотите удалить пользователя {{ user.name|e }}?')">
-                                                <i class="bi bi-trash3 text-danger"></i>
-                                            </a>
-                                        </div>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
+{% if role == 'applicant' %}
+<div class="pp-hint">
+    <i class="bi bi-mortarboard" aria-hidden="true"></i>
+    <div>Абитуриенты регистрируются сами — по QR-коду на стенде или в приложении. Роль, группу и курс здесь не меняют:
+        статус CRM, коины, заказы и перевод в студенты — в <a href="{{ nav_url('applicants_leads') }}">карточке лида</a>.
+        Сброс пароля ставит <b>abiturient123</b> и просит сменить его при входе.</div>
 </div>
+{% elif role == 'none' %}
+<div class="pp-hint pp-hint--warning">
+    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+    <div>У этих профилей нет известной роли — приложение покажет им безопасный экран «нет доступа». Откройте профиль и назначьте роль.</div>
+</div>
+{% endif %}
 
-<div class="modal fade" id="detailModal" tabindex="-1">
-    <div class="modal-dialog border-0">
-        <div class="modal-content shadow border-0">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title"><i class="bi bi-person-vcard me-2"></i>Карточка пользователя</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body p-0" id="detailContent"></div>
+{% call ui.filters_bar(reset=url_for('admin_users', role=role or None)) %}
+    {% if role %}<input type="hidden" name="role" value="{{ role }}">{% endif %}
+    {{ ui.filter_search('q', 'Поиск', q, 'Имя, email, логин, телефон') }}
+    {% if role in ('', 'student') %}
+        {% set group_opts = [('__none__', 'Без группы (' ~ no_group ~ ')')] + groups %}
+        {{ ui.filter_select('group', 'Группа', group_opts, group) }}
+        {{ ui.filter_select('course', 'Курс', course_options, course) }}
+    {% endif %}
+    {{ ui.filter_select('sort', 'Сортировка', sorts.items()|list, sort, all_label=None) }}
+{% endcall %}
+
+{% if users %}
+<form id="usersBulk" method="post" action="{{ url_for('admin_users_bulk') }}" class="d-none">{{ ui.csrf_field() }}</form>
+<section class="cc-card">
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">{{ filtered|num }} {{ plural(filtered, 'пользователь', 'пользователя', 'пользователей') }}{% if q or group or course %} <span class="cc-muted fw-normal">по фильтрам</span>{% endif %}</h2>
+        <div class="pp-bulk" data-pp-bulk="usersBulk" hidden>
+            <span class="cc-muted small">Выбрано: <b data-pp-bulk-count>0</b></span>
+            {% if role in ('', 'student') %}
+            <select name="group" form="usersBulk" class="form-select form-select-sm" aria-label="Группа для выбранных студентов">
+                <option value="">— без группы —</option>
+                {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+            </select>
+            <button type="submit" form="usersBulk" name="action" value="group" class="btn btn-sm btn-light" data-confirm="Перевести выбранных студентов в выбранную группу?" data-confirm-variant="primary" data-confirm-ok="Перевести"><i class="bi bi-arrow-left-right" aria-hidden="true"></i><span>В группу</span></button>
+            <select name="course" form="usersBulk" class="form-select form-select-sm" aria-label="Курс для выбранных студентов">
+                {% for c in courses %}<option value="{{ c }}">{{ c }} курс</option>{% endfor %}
+            </select>
+            <button type="submit" form="usersBulk" name="action" value="course" class="btn btn-sm btn-light" data-confirm="Назначить курс выбранным студентам?" data-confirm-variant="primary" data-confirm-ok="Назначить"><i class="bi bi-mortarboard" aria-hidden="true"></i><span>Курс</span></button>
+            {% endif %}
+            <button type="submit" form="usersBulk" name="action" value="export" class="btn btn-sm btn-light"><i class="bi bi-download" aria-hidden="true"></i><span>CSV</span></button>
+            <button type="submit" form="usersBulk" name="action" value="delete" class="btn btn-sm btn-outline-danger" data-confirm="Удалить выбранных пользователей вместе с аккаунтами входа? Себя и администраторов массово удалить нельзя. Действие необратимо." data-confirm-ok="Удалить"><i class="bi bi-trash" aria-hidden="true"></i><span>Удалить</span></button>
         </div>
     </div>
-</div>
-
-<div class="modal fade" id="editUserModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered border-0">
-        <form id="editUserForm" method="POST" class="modal-content shadow border-0">
-            <div class="modal-header bg-white">
-                <h5 class="modal-title fw-bold">Редактирование профиля</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3">
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">ФИО</label>
-                        <input type="text" name="name" id="edit_name" class="form-control" required>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Email (ID)</label>
-                        <input type="text" id="edit_email" class="form-control bg-light" readonly disabled>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Телефон</label>
-                        <input type="text" name="phone" id="edit_phone" class="form-control">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Роль</label>
-                        <select name="role" id="edit_role" class="form-select">
-                            <option value="student">student</option>
-                            <option value="club">club</option>
-                            <option value="admin">admin</option>
-                            <option value="teacher">teacher</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Группа</label>
-                        <select name="group" id="edit_group" class="form-select">
-                            <option value="-">Без группы</option>
-                            {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Курс</label>
-                        <input type="text" name="course" id="edit_course" class="form-control">
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer border-0">
-                <button type="submit" class="btn btn-primary w-100 py-2">Сохранить изменения</button>
-            </div>
-        </form>
+    <div class="cc-table-wrap">
+        <table class="cc-table pp-users">
+            <thead>
+                <tr>
+                    <th class="pp-check"><input class="form-check-input" type="checkbox" data-pp-check-all="usersBulk" aria-label="Выбрать всех на странице"></th>
+                    <th class="pp-col-main">Пользователь</th>
+                    {% if role in ('', 'none') %}<th class="d-none d-md-table-cell">Роль</th>{% endif %}
+                    <th class="d-none d-md-table-cell">{{ 'Источник' if role == 'applicant' else ('Дисциплина' if role == 'teacher' else ('Группа · курс' if role in ('', 'student') else '')) }}</th>
+                    <th class="d-none d-lg-table-cell">Телефон</th>
+                    <th class="d-none d-md-table-cell">Создан</th>
+                    <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for u in users %}
+                {% set edit_url = url_for('admin_edit_user', user_id=u.id, next=request.full_path) %}
+                {% set lead_url = nav_url('applicant_detail', uid=u.id) if u.role == 'applicant' else '#' %}
+                <tr data-href="{{ lead_url if u.role == 'applicant' and lead_url != '#' else edit_url }}" class="cc-row-link">
+                    <td class="pp-check"><input class="form-check-input" type="checkbox" name="ids" value="{{ u.id }}" form="usersBulk" aria-label="Выбрать {{ u.title }}"></td>
+                    <td class="pp-col-main">
+                        <div class="pp-person">
+                            {{ ui.avatar(u.name or (role_labels.get(u.role) if u.role == 'applicant' else u.title), size='sm') }}
+                            <div class="min-w-0">
+                                <div class="cc-cell-main cc-truncate">{{ u.title }}{% if u.id == me %} <span class="cc-badge cc-badge--outline">вы</span>{% endif %}</div>
+                                <div class="cc-cell-sub cc-truncate">
+                                    {% if u.role == 'applicant' %}{% if u.name %}Логин: {{ u.login or '—' }}{% else %}профиль не заполнен{% endif %}{% else %}{{ u.email or 'без email' }}{% endif %}
+                                    {% if u.must_change %} · <span class="pp-warn-text">ждёт смены пароля</span>{% endif %}
+                                </div>
+                                <div class="pp-mobile-meta d-md-none">
+                                    {% if role in ('', 'none') %}{{ ui.badge(u.role or 'none', role_labels.get(u.role) or 'Без роли', None if u.role in role_labels else 'neutral') }}{% endif %}
+                                    {% if u.role == 'student' %}<span class="cc-subtle">{{ u.group or 'без группы' }}{% if u.course %} · {{ u.course }} курс{% endif %}</span>{% endif %}
+                                    {% if u.role == 'applicant' and u.source %}<span class="cc-subtle">{{ u.source }}</span>{% endif %}
+                                    <span class="cc-subtle">{{ u.created|dateonly }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                    {% if role in ('', 'none') %}<td class="d-none d-md-table-cell">{{ ui.badge(u.role or 'none', role_labels.get(u.role) or 'Без роли', None if u.role in role_labels else 'neutral') }}</td>{% endif %}
+                    <td class="d-none d-md-table-cell">
+                        {% if u.role == 'student' %}
+                            {% if u.group %}<a class="pp-link" href="{{ url_with(role='student', group=u.group, page=None) }}">{{ u.group }}</a>{% else %}<span class="pp-warn-text">без группы</span>{% endif %}{% if u.course %}<span class="cc-subtle"> · {{ u.course }} курс</span>{% endif %}
+                        {% elif u.role == 'applicant' %}
+                            {% if u.source %}<span class="cc-badge cc-badge--outline">{{ u.source }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}
+                        {% elif u.role == 'teacher' %}
+                            <span class="cc-cell-sub">{{ u.subject or '—' }}</span>
+                        {% else %}
+                            <span class="cc-subtle">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="cc-nowrap d-none d-lg-table-cell">{% if u.phone %}<a class="pp-tel" href="tel:{{ u.phone }}">{{ u.phone|phone }}</a>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-nowrap d-none d-md-table-cell">{% set ago = u.created|ago %}<span class="cc-cell-main">{{ u.created|dateonly }}</span>{% if u.created and ago != u.created|dateonly %}<div class="cc-cell-sub">{{ ago }}</div>{% endif %}</td>
+                    <td class="cc-actions">
+                        <div class="pp-row-actions">
+                            {% if u.role == 'applicant' and lead_url != '#' %}
+                            {{ ui.button('Карточка лида', href=lead_url, icon='person-lines-fill', variant='ghost', size='sm', icon_only=True) }}
+                            {% endif %}
+                            {{ ui.button('Изменить', href=edit_url, icon='pencil', variant='ghost', size='sm', icon_only=True) }}
+                            <span class="pp-desktop-actions">
+                            {% if u.id != me and u.role != 'admin' and default_passwords.get(u.role) %}
+                            {{ ui.confirm_button(url_for('admin_reset_password', user_id=u.id), 'Сбросить пароль',
+                                                 'Пароль «' ~ u.title ~ '» станет ' ~ default_passwords[u.role] ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if u.role == 'applicant' else ' Сообщите его пользователю лично.'),
+                                                 variant='ghost', icon='key', icon_only=True, ok='Сбросить', title='Сброс пароля') }}
+                            {% endif %}
+                            {% if u.id != me %}
+                            {{ ui.confirm_button(url_for('admin_delete_user', user_id=u.id, next=request.full_path), 'Удалить',
+                                                 'Удалить «' ~ u.title ~ '» вместе с аккаунтом входа? Действие необратимо.',
+                                                 variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
+                            {% endif %}
+                            </span>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
     </div>
-</div>
-
-<div class="modal fade" id="addUserModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered border-0">
-        <form action="{{ url_for('admin_add_user') }}" method="POST" class="modal-content shadow border-0">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title fw-bold"><i class="bi bi-person-plus-fill me-2"></i>Новый пользователь</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3">
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">ФИО</label>
-                        <input type="text" name="name" class="form-control" placeholder="Иванов Иван Иванович" required>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Email</label>
-                        <input type="email" name="email" class="form-control" placeholder="example@mail.com" required>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label small fw-bold">Пароль</label>
-                        <input type="password" name="password" class="form-control" placeholder="Минимум 6 символов" required>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Телефон</label>
-                        <input type="text" name="phone" class="form-control" placeholder="+7...">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Курс</label>
-                        <input type="text" name="course" class="form-control" placeholder="1">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Роль</label>
-                        <select name="role" class="form-select">
-                            <option value="student" selected>student</option>
-                            <option value="club">club</option>
-                            <option value="admin">admin</option>
-                            <option value="teacher">teacher</option>
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label small fw-bold">Группа</label>
-                        <select name="group" class="form-select">
-                            <option value="-">Без группы</option>
-                            {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
-                        </select>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer border-0 bg-light">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-                <button type="submit" class="btn btn-primary px-4">Создать аккаунт</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<script>
-function showFullDetails(userJson) {
-    const user = JSON.parse(userJson);
-    const content = `
-        <div class="list-group list-group-flush">
-            <div class="list-group-item d-flex justify-content-between py-3">
-                <span class="text-muted small">ФИО:</span>
-                <strong class="text-primary">${user.name}</strong>
-            </div>
-            <div class="list-group-item d-flex justify-content-between py-3">
-                <span class="text-muted small">Email:</span>
-                <strong>${user.email}</strong>
-            </div>
-            <div class="list-group-item d-flex justify-content-between py-3">
-                <span class="text-muted small">Телефон:</span>
-                <strong>${user.phone || '-'}</strong>
-            </div>
-            <div class="list-group-item d-flex justify-content-between py-3">
-                <span class="text-muted small">Роль:</span>
-                <span class="badge bg-info text-white">${user.role}</span>
-            </div>
-            <div class="list-group-item d-flex justify-content-between py-3">
-                <span class="text-muted small">Группа:</span>
-                <strong>${user.group}</strong>
-            </div>
-            <div class="list-group-item bg-light small">
-                <strong><i class="bi bi-calendar-check me-2"></i>Создан:</strong>
-                <span class="float-end">${user.created_str}</span>
-            </div>
-        </div>`;
-    document.getElementById('detailContent').innerHTML = content;
-    new bootstrap.Modal(document.getElementById('detailModal')).show();
-}
-
-function editUser(id, name, role, group, phone, course, email) {
-    const form = document.getElementById('editUserForm');
-    form.action = "/admin/users/edit/" + id;
-
-    document.getElementById('edit_name').value = name;
-    document.getElementById('edit_email').value = email;
-    document.getElementById('edit_role').value = role;
-    document.getElementById('edit_group').value = group;
-    document.getElementById('edit_phone').value = phone;
-    document.getElementById('edit_course').value = course;
-
-    new bootstrap.Modal(document.getElementById('editUserModal')).show();
-}
-</script>
-
-<style>
-    .accordion-button:not(.collapsed) { background-color: #f8f9fa; color: #0d6efd; box-shadow: none; }
-    .table-hover tbody tr:hover { background-color: rgba(13, 110, 253, 0.03); }
-    .btn-light:hover { background-color: #fff; box-shadow: 0 .125rem .25rem rgba(0,0,0,.075)!important; }
-</style>
+</section>
+{{ ui.pagination(page) }}
+{% else %}
+    {% call ui.card() %}
+        {% if q or group or course %}
+            {{ ui.empty_state('search', 'Никого не нашли', 'Проверьте запрос или сбросьте фильтры.', {'label': 'Сбросить фильтры', 'href': url_for('admin_users', role=role or None), 'icon': 'x-lg', 'variant': 'light'}) }}
+        {% elif role == 'applicant' %}
+            {{ ui.empty_state('mortarboard', 'Абитуриентов пока нет', 'Распечатайте QR-код для стенда — абитуриенты зарегистрируются сами.', {'label': 'QR-источники', 'href': nav_url('applicant_sources'), 'icon': 'qr-code'}) }}
+        {% else %}
+            {{ ui.empty_state('people', 'Пользователей нет', 'Создайте первого пользователя.', {'label': 'Новый пользователь', 'href': url_for('admin_add_user'), 'icon': 'person-plus'}) }}
+        {% endif %}
+    {% endcall %}
+{% endif %}
 {% endblock %}

@@ -1,0 +1,50 @@
+{# Редактирование QR-источника: поля, статистика, QR-код и ссылки (APPLICANTS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Источник {{ code }}{% endblock %}
+{% block page_title %}Источник {{ code }}{% endblock %}
+{% block styles %}{{ ui.css('applicants') }}{% endblock %}
+{% block content %}
+{{ ui.page_header(form.title or code, 'QR-источник ' ~ code ~ (' · создан ' ~ (created|dateonly) if created else '') ~ (' · ' ~ created_by if created_by else ''), [
+    {'label': 'К списку', 'href': url_for('applicant_sources'), 'icon': 'arrow-left', 'variant': 'light'},
+    {'label': 'Плакат', 'href': url_for('applicant_source_poster', code=code), 'icon': 'printer', 'variant': 'light', 'attrs': {'target': '_blank', 'rel': 'noopener'}},
+    {'label': 'Абитуриенты', 'href': url_for('applicants_leads', source=code), 'icon': 'people'},
+], icon='qr-code') }}
+
+{% if stats %}
+<div class="cc-stats">
+    {{ ui.stat_card('Сканы', stats.scans, 'phone', meta=('последний ' ~ (stats.last_scan|ago)) if stats.last_scan else None) }}
+    {{ ui.stat_card('Регистрации', stats.registrations, 'person-plus', tone='success', href=url_for('applicants_leads', source=code), meta=('+' ~ stats.week ~ ' за 7 дней') if stats.week else None) }}
+    {{ ui.stat_card('Конверсия', ('%.0f%%'|format(stats.conv)) if stats.conv is not none else '—', 'funnel', tone='info', meta='регистраций от сканов') }}
+    {{ ui.stat_card('Поступили', stats.enrolled, 'mortarboard', tone='warning', meta=(stats.complete ~ ' заполнили профиль')) }}
+</div>
+{% endif %}
+
+<div class="ap-source-edit">
+    {% call ui.card('Настройки', icon='sliders') %}
+        <form method="post" action="{{ url_for('applicant_source_edit', code=code) }}" class="row g-3" data-dirty-guard>
+            {{ ui.csrf_field() }}
+            <div class="col-12">{{ ui.field('title', 'Название', value=form.title, required=True, error=errors.title, attrs={'maxlength': 120}, classes='') }}</div>
+            <div class="col-md-6">{{ ui.field('channel', 'Канал', 'select', value=form.channel, options=channels, error=errors.channel, classes='') }}</div>
+            <div class="col-md-6">{{ ui.field('welcomeCoins', 'Приветственные коины', 'number', value=form.welcomeCoins, error=errors.welcomeCoins, attrs={'min': 0, 'max': max_welcome, 'step': 1}, help='0 — без коинов. Начисляются, только пока источник включён', classes='') }}</div>
+            <div class="col-12">{{ ui.field('note', 'Заметка', 'textarea', value=form.note, error=errors.note, rows=3, attrs={'maxlength': 500}, classes='') }}</div>
+            <div class="col-12">{{ ui.field('active', 'Источник включён', 'switch', value=form.active, help='Выключенный источник не начисляет приветственные коины, но регистрация по QR работает', classes='') }}</div>
+            <div class="col-12 d-flex flex-wrap gap-2">
+                {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+                {{ ui.button('Отмена', href=url_for('applicant_sources'), variant='light') }}
+            </div>
+        </form>
+    {% endcall %}
+
+    {% call ui.card('QR-код', icon='qr-code', subtitle='Генерируется в браузере') %}
+        <div class="ap-qr-big" data-ap-qr="{{ url }}" data-ap-qr-size="big"></div>
+        <p class="ap-qr-url"><a href="{{ url }}?preview=1" target="_blank" rel="noopener">{{ url }}</a></p>
+        <div class="d-flex flex-wrap gap-2 justify-content-center">
+            <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="svg" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-svg" aria-hidden="true"></i><span>SVG</span></button>
+            <button type="button" class="btn btn-light btn-sm" data-ap-qr-download="png" data-ap-qr-url="{{ url }}" data-code="{{ code }}"><i class="bi bi-filetype-png" aria-hidden="true"></i><span>PNG</span></button>
+            <button type="button" class="btn btn-light btn-sm" data-copy="{{ url }}" data-copy-message="Ссылка скопирована"><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Ссылка</span></button>
+        </div>
+    {% endcall %}
+</div>
+{% endblock %}
+{% block scripts %}{{ ui.lib('qrcode') }}{{ ui.js('applicants') }}{% endblock %}

@@ -1,0 +1,162 @@
+{# Публичная регистрация абитуриента по QR (/join, /join/<CODE>): форма и экран «Готово». RU/KZ (APPLICANTS). #}
+{% extends 'public/base_public.html' %}
+{% block title %}{{ t.done_title if mode == 'done' else t.title }} · Caspian College{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ static_url('css/applicants.join.css') }}">{% endblock %}
+{% block head %}
+    <meta name="description" content="{{ t.hero_sub }}">
+    <meta name="robots" content="noindex">
+{% endblock %}
+{% block body_class %}cc-public cc-join{% endblock %}
+{% block brand_href %}{{ url_for('public_join', code=code) }}{% endblock %}
+{% block content %}
+{% if mode == 'done' %}
+{# ----------------------------- Готово ----------------------------- #}
+<section class="jn-done" aria-labelledby="jnDoneTitle">
+    <div class="jn-done__badge" aria-hidden="true"><i class="bi bi-check-lg"></i></div>
+    <h1 id="jnDoneTitle">{{ t.done_title }}</h1>
+    <p class="jn-muted">{{ t.done_sub }}</p>
+</section>
+
+<div class="cc-public__card jn-card">
+    <div class="jn-login">
+        <span class="jn-login__label">{{ t.your_login }}</span>
+        <div class="jn-login__row">
+            <b class="jn-login__value" id="jnLogin">{{ info.login }}</b>
+            <button type="button" class="btn btn-light btn-sm" data-copy="{{ info.login }}" data-copy-message="{{ t.copied }}"><i class="bi bi-copy" aria-hidden="true"></i><span>{{ t.copy_btn }}</span></button>
+        </div>
+        <span class="jn-muted jn-small">{{ t.password_note }}</span>
+    </div>
+    {% if info.coins %}
+    <div class="jn-coins" role="status"><i class="bi bi-coin" aria-hidden="true"></i><span>{{ t.welcome_done|replace('{n}', info.coins|string) }}</span></div>
+    {% endif %}
+
+    <h2 class="jn-h2">{{ t.next_title }}</h2>
+    <ol class="jn-steps">
+        <li><span class="jn-steps__n" aria-hidden="true">1</span><span>{{ t.step1 }}</span></li>
+        <li><span class="jn-steps__n" aria-hidden="true">2</span><span>{{ t.step2 }}</span></li>
+        <li><span class="jn-steps__n" aria-hidden="true">3</span><span>{{ t.step3 }}</span></li>
+    </ol>
+
+    {% set ios_btn %}{% if app_store %}<a class="jn-store" href="{{ app_store }}" rel="noopener" target="_blank"><i class="bi bi-apple" aria-hidden="true"></i><span><small>{{ t.download_on }}</small>App Store</span></a>{% endif %}{% endset %}
+    {% set android_btn %}{% if play_store %}<a class="jn-store" href="{{ play_store }}" rel="noopener" target="_blank"><i class="bi bi-google-play" aria-hidden="true"></i><span><small>{{ t.get_it_on }}</small>Google Play</span></a>{% endif %}{% endset %}
+    {% if app_store or play_store %}
+    <div class="jn-stores">{% if platform == 'android' %}{{ android_btn }}{{ ios_btn }}{% else %}{{ ios_btn }}{{ android_btn }}{% endif %}</div>
+    {% else %}
+    <p class="jn-muted jn-small">{{ t.stores_missing }}</p>
+    {% endif %}
+
+    <p class="jn-note"><i class="bi bi-shield-lock" aria-hidden="true"></i><span>{{ t.remember }}</span></p>
+</div>
+
+{% if adm_phone or adm_whatsapp %}
+<div class="jn-contacts">
+    <span>{{ t.contacts }}</span>
+    {% if adm_phone %}<a class="btn btn-light btn-sm" href="tel:{{ adm_phone|replace(' ', '')|replace('-', '') }}"><i class="bi bi-telephone" aria-hidden="true"></i><span>{{ t.call }}</span></a>{% endif %}
+    {% if adm_whatsapp %}<a class="btn btn-light btn-sm" href="https://wa.me/{{ adm_whatsapp|replace('+', '')|replace(' ', '') }}" rel="noopener" target="_blank"><i class="bi bi-whatsapp" aria-hidden="true"></i><span>WhatsApp</span></a>{% endif %}
+</div>
+{% endif %}
+<p class="jn-again"><a href="{{ url_for('public_join', code=code) }}">{{ t.again }}</a></p>
+
+{% else %}
+{# ----------------------------- Форма ----------------------------- #}
+<section class="jn-hero">
+    <h1>{{ t.hero_title }}</h1>
+    <p>{{ t.hero_sub }}</p>
+    <ul class="jn-perks" aria-label="{{ t.hero_title }}">
+        <li><i class="bi bi-megaphone" aria-hidden="true"></i>{{ t.perk_news }}</li>
+        <li><i class="bi bi-coin" aria-hidden="true"></i>{{ t.perk_coins }}</li>
+        <li><i class="bi bi-bag-heart" aria-hidden="true"></i>{{ t.perk_shop }}</li>
+    </ul>
+</section>
+
+{% if welcome or ref_ok or source_title %}
+<div class="jn-banners">
+    {% if welcome %}<div class="jn-banner jn-banner--coins"><i class="bi bi-gift" aria-hidden="true"></i><span>{{ t.welcome_banner|replace('{n}', welcome|string) }}</span></div>{% endif %}
+    {% if ref_ok %}<div class="jn-banner"><i class="bi bi-people" aria-hidden="true"></i><span>{{ t.ref_banner }}</span></div>{% endif %}
+    {% if source_title and not welcome %}<div class="jn-banner jn-banner--muted"><i class="bi bi-qr-code-scan" aria-hidden="true"></i><span>{{ t.source_chip|replace('{title}', source_title) }}</span></div>{% endif %}
+</div>
+{% endif %}
+
+<div class="cc-public__card jn-card">
+    <h2 class="jn-h2 mt-0">{{ t.form_title }}</h2>
+    {% if general %}
+    <div class="jn-error-summary" role="alert" id="jnErrors" tabindex="-1">
+        <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+        <div>
+            <b>{{ t[general] }}</b>
+            {% if errors %}<ul>{% for field, key in errors.items() %}<li><a href="#jn-{{ field }}">{{ t[key] }}</a></li>{% endfor %}</ul>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('public_join', code=code, lang=lang if request.args.get('lang') else None) }}" novalidate data-jn-form autocomplete="on">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if ref %}<input type="hidden" name="ref" value="{{ ref }}">{% endif %}
+
+        <div class="jn-field">
+            <label class="form-label" for="jn-login">{{ t.login_label }}</label>
+            <input class="form-control{{ ' is-invalid' if errors.login }}" type="text" id="jn-login" name="login" value="{{ form.login or '' }}"
+                   required maxlength="100" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+                   inputmode="text" placeholder="{{ t.login_placeholder }}"
+                   aria-describedby="jn-login-help{{ ' jn-login-error' if errors.login }}" {% if errors.login %}aria-invalid="true"{% endif %}
+                   data-jn-login data-preview-text="{{ t.login_preview }}">
+            {% if errors.login %}<div class="invalid-feedback d-block" id="jn-login-error">{{ t[errors.login] }}</div>{% endif %}
+            <div class="form-text" id="jn-login-help">{{ t.login_rules }}</div>
+            <div class="jn-preview" data-jn-preview aria-live="polite" hidden></div>
+        </div>
+
+        <div class="jn-field">
+            <label class="form-label" for="jn-password">{{ t.password_label }}</label>
+            <div class="cc-password">
+                <input class="form-control{{ ' is-invalid' if errors.password }}" type="password" id="jn-password" name="password" required
+                       minlength="6" maxlength="64" autocomplete="new-password"
+                       aria-describedby="jn-password-help{{ ' jn-password-error' if errors.password }}" {% if errors.password %}aria-invalid="true"{% endif %}>
+                <button type="button" class="btn btn-ghost cc-password__toggle" data-password-toggle="#jn-password" aria-label="{{ t.show_password }}" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
+            </div>
+            {% if errors.password %}<div class="invalid-feedback d-block" id="jn-password-error">{{ t[errors.password] }}</div>{% endif %}
+            <div class="form-text" id="jn-password-help">{{ t.password_rules }}</div>
+        </div>
+
+        <div class="jn-field">
+            <label class="form-label" for="jn-password2">{{ t.password_repeat }}</label>
+            <div class="cc-password">
+                <input class="form-control{{ ' is-invalid' if errors.password2 }}" type="password" id="jn-password2" name="password2" required
+                       minlength="6" maxlength="64" autocomplete="new-password"
+                       {% if errors.password2 %}aria-invalid="true" aria-describedby="jn-password2-error"{% endif %} data-jn-repeat data-mismatch="{{ t.err_pw_repeat }}">
+                <button type="button" class="btn btn-ghost cc-password__toggle" data-password-toggle="#jn-password2" aria-label="{{ t.show_password }}" aria-pressed="false"><i class="bi bi-eye" aria-hidden="true"></i></button>
+            </div>
+            <div class="invalid-feedback{{ ' d-block' if errors.password2 }}" id="jn-password2-error" data-jn-repeat-error>{{ t[errors.password2] if errors.password2 else '' }}</div>
+        </div>
+
+        <div class="jn-check{{ ' is-invalid' if errors.consent }}" id="jn-consent-wrap">
+            <input class="form-check-input" type="checkbox" id="jn-consent" name="consent" value="1" required {{ 'checked' if form.consent }}
+                   {% if errors.consent %}aria-invalid="true" aria-describedby="jn-consent-error"{% endif %}>
+            <label for="jn-consent">{{ t.consent_pd }}</label>
+        </div>
+        {% if errors.consent %}<div class="invalid-feedback d-block jn-check-error" id="jn-consent-error">{{ t[errors.consent] }}</div>{% endif %}
+        {% if privacy_url %}
+        <p class="jn-privacy"><a href="{{ privacy_url }}" target="_blank" rel="noopener"><i class="bi bi-file-earmark-text" aria-hidden="true"></i>{{ t.privacy }}</a></p>
+        {% else %}
+        <details class="jn-privacy-text"><summary>{{ t.privacy_title }}</summary><p>{{ t.privacy_text }}</p></details>
+        {% endif %}
+
+        <div class="jn-check">
+            <input class="form-check-input" type="checkbox" id="jn-marketing" name="marketing" value="1" {{ 'checked' if form.marketing }}>
+            <label for="jn-marketing">{{ t.consent_marketing }} <span class="jn-muted">({{ t.optional }})</span></label>
+        </div>
+
+        {# Поле-ловушка для ботов: людям не видно и недоступно с клавиатуры #}
+        <div class="jn-hp" aria-hidden="true">
+            <label for="jn-website">{{ t.hp_label }}</label>
+            <input type="text" id="jn-website" name="website" tabindex="-1" autocomplete="off" value="">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg jn-submit" data-loading="{{ t.submitting }}"><i class="bi bi-person-plus" aria-hidden="true"></i><span>{{ t.submit }}</span></button>
+        <p class="jn-note"><i class="bi bi-shield-lock" aria-hidden="true"></i><span>{{ t.remember }}</span></p>
+        <p class="jn-note"><i class="bi bi-person-gear" aria-hidden="true"></i><span>{{ t.profile_later }}</span></p>
+    </form>
+</div>
+<p class="jn-have">{{ t.have_account }}</p>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script src="{{ static_url('js/applicants.join.js') }}" defer></script>{% endblock %}

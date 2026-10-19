@@ -1,0 +1,141 @@
+{# QR-источники: список со статистикой сканов/регистраций, QR (генерируется в браузере), PNG/SVG,
+   плакат для печати, создание/включение/удаление (APPLICANTS). #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}QR-источники{% endblock %}
+{% block styles %}{{ ui.css('applicants') }}{% endblock %}
+{% block content %}
+{{ ui.page_header('QR-источники', 'Свой QR-код для каждого стенда, школы и мероприятия: абитуриент сканирует его и сам создаёт аккаунт, а вы видите, откуда он пришёл.', [
+    {'label': 'Аналитика', 'href': url_for('applicants_dashboard'), 'icon': 'graph-up-arrow', 'variant': 'light'},
+    {'label': 'Новый источник', 'href': '#new-source', 'icon': 'plus-lg', 'attrs': {'data-ap-open-new': ''}},
+], icon='qr-code') }}
+
+<div class="cc-stats">
+    {{ ui.stat_card('Активных источников', totals.active, 'qr-code', meta='из ' ~ rows|length) }}
+    {{ ui.stat_card('Сканов QR', totals.scans, 'phone', tone='info', meta='повтор в течение 30 минут не считается') }}
+    {{ ui.stat_card('Регистраций по QR', totals.registrations, 'person-plus', tone='success', meta=('конверсия ' ~ ('%.0f'|format(totals.conv)) ~ '%') if totals.conv is not none else None) }}
+    {{ ui.stat_card('Поступили', totals.enrolled, 'mortarboard', tone='warning', meta='пришли по QR') }}
+</div>
+
+{% if rows %}
+<section class="cc-card">
+    <div class="cc-table-toolbar">
+        <h2 class="cc-card__title me-auto">{{ rows|length }} {{ rows|length|plural('источник', 'источника', 'источников') }}</h2>
+        <div class="cc-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="form-control form-control-sm" type="search" placeholder="Поиск по названию или коду" aria-label="Поиск по названию или коду" data-table-search="#apSources">
+        </div>
+    </div>
+    <div class="cc-table-wrap">
+        <table class="cc-table ap-src-table" id="apSources" data-sortable>
+            <thead><tr>
+                <th class="ap-qr-col"><span class="visually-hidden">QR-код</span></th>
+                <th data-sort="text">Источник</th>
+                <th class="text-end" data-sort="num">Сканы</th>
+                <th class="text-end" data-sort="num">Регистрации</th>
+                <th class="text-end d-none d-md-table-cell" data-sort="num">Конверсия</th>
+                <th class="text-end d-none d-lg-table-cell" data-sort="num">Поступили</th>
+                <th class="text-end d-none d-xl-table-cell" data-sort="num">Коины</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for r in rows %}
+                <tr id="src-{{ r.code }}" class="{{ 'is-off' if not r.active }}">
+                    <td class="ap-qr-col">
+                        <button type="button" class="ap-qr-thumb" data-ap-qr="{{ r.url }}" data-ap-qr-open data-code="{{ r.code }}" data-title="{{ r.title }}" aria-label="Открыть QR-код {{ r.code }}"></button>
+                    </td>
+                    <td data-value="{{ r.title }}">
+                        <div class="cc-cell-main">{{ r.title }}</div>
+                        <div class="cc-cell-sub ap-src-meta">
+                            <code>{{ r.code }}</code>
+                            <span><i class="bi bi-{{ r.channel_icon }}" aria-hidden="true"></i>{{ r.channel_label }}</span>
+                            {% if not r.active %}{{ ui.badge('inactive') }}{% endif %}
+                            {% if r.week %}<span class="ap-tag ap-tag--success">+{{ r.week }} за 7 дней</span>{% endif %}
+                        </div>
+                        {% if r.note %}<div class="cc-cell-sub ap-src-note">{{ r.note }}</div>{% endif %}
+                    </td>
+                    <td class="text-end cc-num" data-value="{{ r.scans }}">{{ r.scans|num }}<div class="cc-cell-sub">{{ r.last_scan|ago if r.last_scan else '' }}</div></td>
+                    <td class="text-end cc-num" data-value="{{ r.registrations }}"><a href="{{ url_for('applicants_leads', source=r.code) }}"><b>{{ r.registrations|num }}</b></a>{% if r.complete %}<div class="cc-cell-sub">{{ r.complete }} с профилем</div>{% endif %}</td>
+                    <td class="text-end cc-num d-none d-md-table-cell" data-value="{{ r.conv if r.conv is not none else -1 }}">{{ ('%.0f'|format(r.conv) ~ '%') if r.conv is not none else '—' }}</td>
+                    <td class="text-end cc-num d-none d-lg-table-cell" data-value="{{ r.enrolled }}">{{ r.enrolled }}</td>
+                    <td class="text-end cc-num d-none d-xl-table-cell" data-value="{{ r.welcome }}">{{ ('+' ~ r.welcome) if r.welcome else '—' }}</td>
+                    <td class="cc-actions">
+                        <div class="ap-row-actions">
+                            {{ ui.button('QR-код', icon='qr-code', variant='light', size='sm', icon_only=True, attrs={'data-ap-qr-open': '', 'data-ap-qr-url': r.url, 'data-code': r.code, 'data-title': r.title}) }}
+                            {{ ui.button('Скопировать ссылку', icon='link-45deg', variant='light', size='sm', icon_only=True, attrs={'data-copy': r.url, 'data-copy-message': 'Ссылка скопирована'}) }}
+                            {{ ui.button('Плакат', href=url_for('applicant_source_poster', code=r.code), icon='printer', variant='light', size='sm', icon_only=True, attrs={'target': '_blank', 'rel': 'noopener'}) }}
+                            {{ ui.button('Изменить', href=url_for('applicant_source_edit', code=r.code), icon='pencil', variant='light', size='sm', icon_only=True) }}
+                            {{ ui.confirm_button(url_for('applicant_source_toggle', code=r.code), 'Выключить' if r.active else 'Включить',
+                                ('Выключить источник «' ~ r.title ~ '»? Регистрация по QR продолжит работать, но без приветственных коинов.') if r.active else ('Включить источник «' ~ r.title ~ '»?'),
+                                variant='light', icon='pause-circle' if r.active else 'play-circle', icon_only=True, ok='Выключить' if r.active else 'Включить', fields={'next': request.path ~ '#src-' ~ r.code}) }}
+                            {% if not r.registrations and not r.counter %}
+                            {{ ui.confirm_button(url_for('applicant_source_delete', code=r.code), 'Удалить', 'Удалить источник «' ~ r.title ~ '»? Напечатанные QR-коды продолжат открывать регистрацию, но без привязки к источнику.', icon_only=True) }}
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            <tr data-table-empty class="is-hidden"><td colspan="8" class="cc-table-empty">Ничего не найдено</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+{% else %}
+<section class="cc-card">
+    {{ ui.empty_state('qr-code', 'QR-источников ещё нет', 'Создайте первый источник ниже — например, «Стенд в ТРЦ» — и распечатайте плакат с QR-кодом.') }}
+</section>
+{% endif %}
+
+<section class="cc-card ap-new-source" id="new-source">
+    <div class="cc-card__head">
+        <div><h2 class="cc-card__title"><i class="bi bi-plus-square" aria-hidden="true"></i>Новый QR-источник</h2>
+        <p class="cc-card__sub">Код попадёт в ссылку {{ join_base }}/<b>КОД</b> и в профиль абитуриента (поле «источник»)</p></div>
+    </div>
+    <div class="cc-card__body">
+        <form method="post" action="{{ url_for('applicant_source_create') }}" class="row g-3" data-ap-source-form>
+            {{ ui.csrf_field() }}
+            <div class="col-md-4">
+                <label class="form-label cc-required" for="apSrcCode">Код</label>
+                <div class="input-group">
+                    <input class="form-control text-uppercase ap-code-input" id="apSrcCode" name="code" value="{{ suggested }}" required pattern="[A-Za-z0-9]{3,24}" maxlength="24" autocomplete="off" aria-describedby="apSrcCodeHelp" data-ap-code>
+                    <button type="button" class="btn btn-light" data-ap-gen-code aria-label="Придумать другой код" title="Придумать другой код"><i class="bi bi-shuffle" aria-hidden="true"></i></button>
+                </div>
+                <div class="form-text" id="apSrcCodeHelp">3–24 латинские буквы и цифры. Потом не меняется.</div>
+            </div>
+            <div class="col-md-8">{{ ui.field('title', 'Название', value='', required=True, placeholder='Например: Стенд в ТРЦ «Keruen City»', attrs={'maxlength': 120}, classes='') }}</div>
+            <div class="col-md-4">{{ ui.field('channel', 'Канал', 'select', value='stand', options=channels, classes='') }}</div>
+            <div class="col-md-4">{{ ui.field('welcomeCoins', 'Приветственные коины', 'number', value=0, attrs={'min': 0, 'max': max_welcome, 'step': 1}, help='Начисляются при регистрации, если источник включён', classes='') }}</div>
+            <div class="col-md-4 d-flex align-items-end">{{ ui.field('active', 'Включён', 'switch', value=True, classes='mb-2') }}</div>
+            <div class="col-12">{{ ui.field('note', 'Заметка', value='', placeholder='Где стоит, кто отвечает, сроки кампании', attrs={'maxlength': 500}, classes='') }}</div>
+            <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
+                {{ ui.button('Создать источник', type='submit', icon='qr-code', attrs={'data-loading': 'Создаём…'}) }}
+                <span class="cc-subtle small">QR-код появится в таблице сразу после создания.</span>
+            </div>
+        </form>
+    </div>
+</section>
+
+{# Большой QR: скачивание PNG/SVG, плакат #}
+<div class="modal fade" id="apQrModal" tabindex="-1" aria-labelledby="apQrTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="apQrTitle" data-ap-qr-title>QR-код</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body text-center">
+                <div class="ap-qr-big" data-ap-qr-big></div>
+                <p class="ap-qr-url"><a href="#" target="_blank" rel="noopener" data-ap-qr-link></a></p>
+                <p class="cc-subtle small mb-0">Ссылка с <code>?preview=1</code> не считается сканом — ею удобно проверять страницу.</p>
+            </div>
+            <div class="modal-footer justify-content-center flex-wrap">
+                <button type="button" class="btn btn-light" data-ap-qr-download="svg"><i class="bi bi-filetype-svg" aria-hidden="true"></i><span>SVG</span></button>
+                <button type="button" class="btn btn-light" data-ap-qr-download="png"><i class="bi bi-filetype-png" aria-hidden="true"></i><span>PNG 1024</span></button>
+                <a class="btn btn-light" href="#" target="_blank" rel="noopener" data-ap-qr-preview><i class="bi bi-eye" aria-hidden="true"></i><span>Открыть</span></a>
+                <a class="btn btn-primary" href="#" target="_blank" rel="noopener" data-ap-qr-poster data-poster-base="{{ url_for('applicant_source_poster', code='CODE') }}"><i class="bi bi-printer" aria-hidden="true"></i><span>Плакат</span></a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}{{ ui.lib('qrcode') }}{{ ui.js('applicants') }}{% endblock %}

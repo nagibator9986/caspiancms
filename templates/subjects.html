@@ -1,93 +1,113 @@
-{% extends "base.html" %}
+{# Дисциплины (PEOPLE): справочник + использование в расписании. Данные: routes_people.subjects_list. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Дисциплины{% endblock %}
+{% block styles %}{{ ui.css('people') }}{% endblock %}
+{% block scripts %}{{ ui.js('people') }}{% endblock %}
 {% block content %}
-<div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="h3">Учебные дисциплины</h2>
-        <button class="btn btn-primary shadow-sm" data-bs-toggle="collapse" data-bs-target="#addSubjectForm">
-            <i class="bi bi-plus-lg"></i> Добавить предмет
-        </button>
-    </div>
+{% call ui.page_header('Дисциплины', 'Справочник для конструктора расписания', icon='book') %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#subjectAdd" aria-expanded="false" aria-controls="subjectAdd"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Добавить</span></button>
+{% endcall %}
 
-    <div class="collapse mb-4" id="addSubjectForm">
-        <div class="card card-body border-0 shadow-sm">
-            <form action="{{ url_for('subject_add') }}" method="POST">
-                <div class="row g-3 align-items-end">
-                    <div class="col-md-9">
-                        <label class="form-label fw-bold">Название новой дисциплины</label>
-                        <input type="text" name="name" class="form-control" placeholder="Например: Программирование на Python" required>
-                    </div>
-                    <div class="col-md-3">
-                        <button type="submit" class="btn btn-success w-100">Сохранить</button>
-                    </div>
+<div class="collapse" id="subjectAdd">
+    {% call ui.card('Новые дисциплины', icon='plus-square', subtitle='можно сразу несколько — по одной на строку; дубли пропускаются') %}
+        <form method="post" action="{{ url_for('subject_add') }}" novalidate>
+            {{ ui.csrf_field() }}
+            {{ ui.field('names', 'Названия', 'textarea', rows=4, required=True, placeholder='Программирование на Python
+Базы данных', attrs={'maxlength': 6000}, id='s-names') }}
+            {{ ui.button('Добавить', type='submit', icon='check2') }}
+        </form>
+    {% endcall %}
+</div>
+
+<div class="cc-stats">
+    {{ ui.stat_card('Дисциплин', stats.total, 'book') }}
+    {{ ui.stat_card('В расписании', stats.used, 'calendar-check', tone='success') }}
+    {{ ui.stat_card('Не используются', stats.unused, 'calendar-x', tone='warning' if stats.unused else 'success', href=url_with(state='unused') if stats.unused else None) }}
+    {{ ui.stat_card('Дубли', stats.duplicates, 'files', tone='danger' if stats.duplicates else 'success', href=url_with(state='duplicates') if stats.duplicates else None, meta='одинаковые названия') }}
+</div>
+
+{{ ui.tabs([
+    {'key': '', 'label': 'Все', 'href': url_with(state=None), 'count': stats.total},
+    {'key': 'unused', 'label': 'Не используются', 'href': url_with(state='unused'), 'count': stats.unused},
+    {'key': 'duplicates', 'label': 'Дубли', 'href': url_with(state='duplicates'), 'count': stats.duplicates},
+], state, pills=True, label='Фильтр дисциплин') }}
+
+{% if missing %}
+<div class="pp-hint pp-hint--warning">
+    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+    <div class="min-w-0">
+        <b>{{ missing|length }} {{ plural(missing|length, 'дисциплина', 'дисциплины', 'дисциплин') }} из расписания нет в справочнике</b> — в конструкторе их не выбрать.
+        <div class="pp-chips mt-2">{% for name, n in missing[:12] %}<span class="cc-chip">{{ name }} <span class="cc-chip__count">{{ n }}</span></span>{% endfor %}{% if missing|length > 12 %}<span class="cc-subtle small">и ещё {{ missing|length - 12 }}</span>{% endif %}</div>
+        <form method="post" action="{{ url_for('subject_add') }}" class="mt-2">
+            {{ ui.csrf_field() }}
+            <textarea name="names" class="d-none" aria-hidden="true" tabindex="-1">{% for name, n in missing %}{{ name }}{{ '\n' if not loop.last }}{% endfor %}</textarea>
+            {{ ui.button('Добавить все в справочник', type='submit', icon='plus-lg', variant='light', size='sm') }}
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if subjects %}
+{% call ui.data_table('subjectsTable', search=True, placeholder='Поиск дисциплины') %}
+<table class="cc-table" id="subjectsTable" data-sortable>
+    <thead>
+        <tr>
+            <th data-sort="text">Название</th>
+            <th data-sort="num" class="text-end">Занятий</th>
+            <th data-sort="num" class="text-end">Групп</th>
+            <th data-sort="num" class="text-end">Преподавателей</th>
+            <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for s in subjects %}
+        <tr>
+            <td><span class="cc-cell-main">{{ s.name or '(без названия)' }}</span>{% if s.duplicate %} <span class="cc-badge cc-badge--danger">дубль</span>{% endif %}</td>
+            <td class="text-end cc-num" data-value="{{ s.lessons }}">{{ s.lessons or '—' }}</td>
+            <td class="text-end cc-num" data-value="{{ s.groups }}">{{ s.groups or '—' }}</td>
+            <td class="text-end cc-num" data-value="{{ s.teachers }}">{{ s.teachers or '—' }}</td>
+            <td class="cc-actions">
+                <div class="pp-row-actions">
+                    <button type="button" class="btn btn-ghost btn-sm cc-btn-icon" data-bs-toggle="modal" data-bs-target="#subjectRename"
+                            data-pp-subject-action="{{ url_for('subject_edit', s_id=s.id) }}" data-pp-subject-name="{{ s.name }}" data-pp-subject-lessons="{{ s.lessons }}"
+                            aria-label="Переименовать {{ s.name }}" title="Переименовать"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                    {{ ui.confirm_button(url_for('subject_delete', s_id=s.id), 'Удалить',
+                                         'Удалить «' ~ s.name ~ '» из справочника?' ~ (' В расписании ' ~ s.lessons ~ ' ' ~ plural(s.lessons, 'занятие', 'занятия', 'занятий') ~ ' с этой дисциплиной — они не изменятся.' if s.lessons else ''),
+                                         variant='ghost', icon='trash', icon_only=True, ok='Удалить', classes='pp-danger-ghost') }}
                 </div>
-            </form>
-        </div>
-    </div>
+            </td>
+        </tr>
+    {% endfor %}
+        <tr data-table-empty class="is-hidden"><td colspan="5" class="cc-table-empty">Ничего не найдено</td></tr>
+    </tbody>
+</table>
+{% endcall %}
+{% else %}
+    {% call ui.card() %}
+        {% if state %}{{ ui.empty_state('check2-circle', 'Таких нет', 'По выбранному фильтру дисциплин нет.', {'label': 'Все дисциплины', 'href': url_for('subjects_list'), 'icon': 'list', 'variant': 'light'}) }}
+        {% else %}{{ ui.empty_state('book', 'Справочник пуст', 'Добавьте дисциплины — они появятся в конструкторе расписания.') }}{% endif %}
+    {% endcall %}
+{% endif %}
 
-    <div class="card border-0 shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th class="ps-4" style="width: 80px;">#</th>
-                        <th>Название дисциплины</th>
-                        <th class="text-end pe-4" style="width: 200px;">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for s in subjects %}
-                    <tr>
-                        <td class="ps-4 text-muted">{{ loop.index }}</td>
-                        <td><span class="fw-semibold">{{ s.name }}</span></td>
-                        <td class="text-end pe-4">
-                            <div class="btn-group shadow-sm">
-                                <button class="btn btn-sm btn-outline-primary" 
-                                        data-bs-toggle="modal" 
-                                        data-bs-target="#editModal{{ s.id }}"
-                                        title="Редактировать">
-                                    ✎
-                                </button>
-                                <form action="{{ url_for('subject_delete', s_id=s.id) }}" method="POST" class="d-inline" onsubmit="return confirm('Удалить предмет?')">
-                                    <button class="btn btn-sm btn-outline-danger" 
-                                            style="border-top-left-radius: 0; border-bottom-left-radius: 0;"
-                                            title="Удалить">
-                                        ✕
-                                    </button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <div class="modal fade" id="editModal{{ s.id }}" tabindex="-1" aria-hidden="true">
-                        <div class="modal-dialog modal-dialog-centered">
-                            <div class="modal-content border-0 shadow">
-                                <form action="{{ url_for('subject_edit', s_id=s.id) }}" method="POST">
-                                    <div class="modal-header bg-light">
-                                        <h5 class="modal-title">Редактировать название</h5>
-                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                    </div>
-                                    <div class="modal-body p-4">
-                                        <label class="form-label fw-bold text-secondary">Название дисциплины</label>
-                                        <input type="text" name="name" class="form-control form-control-lg" value="{{ s.name }}" required>
-                                    </div>
-                                    <div class="modal-footer bg-light border-0">
-                                        <button type="button" class="btn btn-link text-secondary text-decoration-none" data-bs-dismiss="modal">Отмена</button>
-                                        <button type="submit" class="btn btn-primary px-4">Сохранить изменения</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                    {% else %}
-                    <tr>
-                        <td colspan="3" class="text-center py-5 text-muted">
-                            Список дисциплин пуст. Нажмите «Добавить предмет».
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+<div class="modal fade" id="subjectRename" tabindex="-1" aria-labelledby="subjectRenameTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="post" action="#" class="modal-content" novalidate data-pp-subject-form>
+            {{ ui.csrf_field() }}
+            <div class="modal-header">
+                <h2 class="modal-title" id="subjectRenameTitle">Переименовать дисциплину</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                {{ ui.field('name', 'Новое название', required=True, attrs={'maxlength': max_len, 'autocomplete': 'off', 'data-pp-subject-input': ''}, id='s-new-name') }}
+                {{ ui.field('schedules', 'Переименовать и во всех занятиях расписания', 'switch', value=True, help='Без уведомления на каждую пару; изменения попадут в историю расписания.', id='s-sched', classes='mb-0') }}
+                <p class="cc-muted small mt-2 mb-0" data-pp-subject-usage hidden></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
+                {{ ui.button('Сохранить', type='submit', icon='check2', attrs={'data-loading': 'Сохраняем…'}) }}
+            </div>
+        </form>
     </div>
 </div>
 {% endblock %}
