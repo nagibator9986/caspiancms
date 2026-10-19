@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Преподаватели</h2>
+        <button class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#addForm">
+            + Добавить преподавателя
+        </button>
+    </div>
+
+    <!-- Форма добавления -->
+    <div class="collapse mb-4" id="addForm">
+        <div class="card card-body shadow-sm">
+            <form action="{{ url_for('teacher_add') }}" method="POST">
+                <div class="row g-3">
+                    <div class="col-md-12">
+                        <label class="form-label fw-bold">ФИО</label>
+                        <input type="text" name="name" class="form-control" required>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Email (необязательно)</label>
+                        <input type="email" name="email" class="form-control">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Пароль (необязательно)</label>
+                        <input type="password" name="password" class="form-control">
+                    </div>
+
+                    <div class="col-md-12">
+                        <button type="submit" class="btn btn-success w-100">
+                            Сохранить
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Таблица -->
+    <div class="card shadow-sm">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>ФИО</th>
+                    <th>Email</th>
+                    <th class="text-end px-4">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in teachers %}
+                <tr>
+                    <td class="fw-bold px-4">{{ t.name }}</td>
+                    <td>{{ t.email or '—' }}</td>
+                    <td class="text-end px-4">
+                        <a href="{{ url_for('teacher_edit', uid=t.id) }}"
+                           class="btn btn-sm btn-outline-primary me-2">✎</a>
+
+                        <form action="{{ url_for('teacher_delete', uid=t.id) }}"
+                              method="POST" class="d-inline">
+                            <button class="btn btn-sm btn-outline-danger"
+                                    onclick="return confirm('Удалить преподавателя?')">
+                                ✕
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

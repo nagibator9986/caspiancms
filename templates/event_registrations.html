@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Регистрации: {{ event.title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Участники события: {{ event.title }}</h2>
+        <a href="{{ url_for('events') }}" class="btn btn-outline-secondary">Назад к списку</a>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>ФИО Участника</th>
+                        <th>Группа</th>
+                        <th>Телефон</th>
+                        <th>Дата записи</th>
+                        <th class="text-end">Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for reg in registrations %}
+                    <tr>
+                        <td class="fw-bold">{{ reg.name }}</td>
+                        <td><span class="badge border text-dark">{{ reg.groupId }}</span></td>
+                        <td>
+                            {% if reg.phone and reg.phone != 'Не указан' %}
+                                <a href="tel:{{ reg.phone }}" class="text-decoration-none">
+                                    <i class="bi bi-telephone"></i> {{ reg.phone }}
+                                </a>
+                            {% else %}
+                                <span class="text-muted small">Не указан</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-muted">
+                            {% if reg.registeredAt and reg.registeredAt.strftime %}
+                                {{ reg.registeredAt.strftime('%d.%m.%Y %H:%M') }}
+                            {% else %}
+                                {{ reg.registeredAt or '—' }}
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <form action="{{ url_for('delete_event_registration', event_id=event.id, user_id=reg.id) }}" 
+                                  method="POST" onsubmit="return confirm('Вы уверены, что хотите удалить участника?')">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Исключить</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-muted">
+                            На это событие пока нет регистраций.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

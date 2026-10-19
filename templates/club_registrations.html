@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Участники клуба: {{ club.title }}</h2>
+        <a href="{{ url_for('clubs') }}" class="btn btn-outline-secondary btn-sm">Назад к клубам</a>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>ФИО Участника</th>
+                        <th>Группа</th>
+                        <th>Телефон</th> <th>Дата записи</th>
+                        <th class="text-end">Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for reg in registrations %}
+                    <tr>
+                        <td class="fw-bold">{{ reg.name }}</td>
+                        <td><span class="badge border text-dark">{{ reg.groupId }}</span></td>
+                        <td>
+                            {% if reg.phone != '—' %}
+                                <a href="tel:{{ reg.phone }}" class="text-decoration-none">{{ reg.phone }}</a>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-muted">
+                            {% if reg.registeredAt and reg.registeredAt.strftime %}
+                                {{ reg.registeredAt.strftime('%d.%m.%Y %H:%M') }}
+                            {% else %}
+                                {{ reg.registeredAt or '—' }}
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <form action="{{ url_for('delete_club_registration', club_id=club.id, reg_id=reg.id) }}" 
+                                  method="POST" onsubmit="return confirm('Удалить пользователя из списка?')">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Исключить</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-muted">
+                            В этом клубе пока нет зарегистрированных участников.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

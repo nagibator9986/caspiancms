@@ -1,0 +1,275 @@
+
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if event else 'Добавить' }} событие{% endblock %}
+
+{% block content %}
+<style>
+    .event-form-page {
+        padding-bottom: 40px;
+    }
+
+    .event-form-page h2 {
+        font-size: 26px;
+        font-weight: 500;
+        margin-bottom: 25px;
+    }
+
+    .event-form-page .form-label {
+        font-weight: 500;
+        margin-bottom: 8px;
+    }
+
+    .event-form-page .form-control {
+        border-radius: 6px;
+        padding: 9px 12px;
+    }
+
+    .description-input {
+        min-height: 180px;
+        line-height: 1.6;
+        resize: vertical;
+        overflow-y: hidden;
+    }
+
+    .image-section {
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 18px;
+        background: #f8f9fa;
+    }
+
+    .image-preview-container {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 15px;
+    }
+
+    .image-preview-container img {
+        max-width: 320px;
+        max-height: 260px;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+        background: white;
+    }
+
+    .image-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .image-placeholder {
+        color: #6c757d;
+        font-size: 14px;
+        padding: 20px 0;
+    }
+
+    .event-form-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 25px;
+    }
+
+    @media (max-width: 768px) {
+        .event-form-page h2 {
+            font-size: 22px;
+        }
+
+        .image-preview-container img {
+            max-width: 100%;
+        }
+    }
+</style>
+
+<div class="event-form-page">
+    <h2>{{ 'Редактировать' if event else 'Добавить' }} событие</h2>
+
+    <form method="POST" enctype="multipart/form-data" id="eventForm">
+        <div class="mb-3">
+            <label for="eventTitle" class="form-label">Название</label>
+            <input
+                type="text"
+                id="eventTitle"
+                name="title"
+                class="form-control"
+                value="{{ event.title if event else '' }}"
+                required
+            >
+        </div>
+
+        <div class="mb-3">
+            <label for="eventDescription" class="form-label">Описание</label>
+            <textarea
+                id="eventDescription"
+                name="description"
+                class="form-control description-input"
+                rows="7"
+            >{{ event.description if event else '' }}</textarea>
+        </div>
+
+        <div class="mb-3">
+            <label for="eventDate" class="form-label">Дата проведения</label>
+            <input
+                type="date"
+                id="eventDate"
+                name="date"
+                class="form-control"
+                value="{{ event.date_html if event else '' }}"
+                required
+            >
+        </div>
+
+        <div class="mb-4">
+            <label class="form-label">Изображение</label>
+
+            <div class="image-section">
+                <div class="image-preview-container">
+                    <img
+                        id="imagePreview"
+                        src="{{ event.imageUrl if event and event.imageUrl else '' }}"
+                        alt="Изображение события"
+                        style="{{ '' if event and event.imageUrl else 'display:none;' }}"
+                    >
+
+                    <div
+                        id="imagePlaceholder"
+                        class="image-placeholder"
+                        style="{{ 'display:none;' if event and event.imageUrl else '' }}"
+                    >
+                        Изображение не выбрано
+                    </div>
+
+                    <div class="image-actions">
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            id="chooseImageBtn"
+                        >
+                            {{ 'Заменить изображение' if event and event.imageUrl else 'Выбрать изображение' }}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="btn btn-outline-danger btn-sm"
+                            id="removeImageBtn"
+                            style="{{ '' if event and event.imageUrl else 'display:none;' }}"
+                        >
+                            Удалить изображение
+                        </button>
+                    </div>
+                </div>
+
+                <input
+                    type="file"
+                    id="eventImage"
+                    name="image"
+                    accept="image/*"
+                    class="form-control"
+                    style="display:none;"
+                >
+
+                <input
+                    type="hidden"
+                    id="removeImage"
+                    name="remove_image"
+                    value="0"
+                >
+
+                <small class="text-muted">
+                    Поддерживаются JPG, PNG, WEBP и другие форматы изображений.
+                </small>
+            </div>
+        </div>
+
+        <div class="event-form-actions">
+            <button type="submit" class="btn btn-primary">
+                Сохранить
+            </button>
+
+            <a href="/events" class="btn btn-outline-secondary">
+                Отмена
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const description = document.getElementById("eventDescription");
+    const imageInput = document.getElementById("eventImage");
+    const imagePreview = document.getElementById("imagePreview");
+    const imagePlaceholder = document.getElementById("imagePlaceholder");
+    const chooseImageBtn = document.getElementById("chooseImageBtn");
+    const removeImageBtn = document.getElementById("removeImageBtn");
+    const removeImageField = document.getElementById("removeImage");
+
+    const originalImage = imagePreview.getAttribute("src");
+    let objectUrl = null;
+
+    function autoResize() {
+        description.style.height = "auto";
+        description.style.height = Math.max(
+            180,
+            description.scrollHeight + 2
+        ) + "px";
+    }
+
+    description.addEventListener("input", autoResize);
+    autoResize();
+
+    function clearObjectUrl() {
+        if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
+        }
+    }
+
+    chooseImageBtn.addEventListener("click", function () {
+        imageInput.click();
+    });
+
+    imageInput.addEventListener("change", function () {
+        const file = imageInput.files[0];
+
+        if (!file) return;
+
+        if (!file.type.startsWith("image/")) {
+            alert("Выберите файл изображения.");
+            imageInput.value = "";
+            return;
+        }
+
+        clearObjectUrl();
+        objectUrl = URL.createObjectURL(file);
+
+        imagePreview.src = objectUrl;
+        imagePreview.style.display = "block";
+        imagePlaceholder.style.display = "none";
+        removeImageBtn.style.display = "inline-block";
+        removeImageField.value = "0";
+        chooseImageBtn.textContent = "Заменить изображение";
+    });
+
+    removeImageBtn.addEventListener("click", function () {
+        clearObjectUrl();
+
+        imageInput.value = "";
+        imagePreview.removeAttribute("src");
+        imagePreview.style.display = "none";
+
+        imagePlaceholder.style.display = "block";
+        removeImageBtn.style.display = "none";
+
+        removeImageField.value = originalImage ? "1" : "0";
+        chooseImageBtn.textContent = "Выбрать изображение";
+    });
+
+    window.addEventListener("pagehide", clearObjectUrl);
+});
+</script>
+{% endblock %}

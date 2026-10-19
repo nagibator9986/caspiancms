@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if poll else 'Добавить' }} опросник{% endblock %}
+
+{% block content %}
+<div class="container-lg">
+    <h1 class="mb-4">{{ 'Редактировать' if poll else 'Добавить' }} опросник</h1>
+
+    <form id="poll-main-form" method="POST" enctype="multipart/form-data" class="needs-validation" novalidate>
+        <!-- Основная информация -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Основная информация</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Заголовок <span class="text-danger">*</span></label>
+                    <input type="text" name="title" class="form-control" 
+                           value="{{ poll.title if poll else '' }}" required>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Описание (опционально)</label>
+                    <textarea name="description" class="form-control" rows="3" placeholder="Введите описание опроса...">{{ poll.description if poll else '' }}</textarea>
+                </div>
+
+                <!-- Варианты ответов -->
+                <div class="mb-3">
+                    <label class="form-label">Варианты ответов <span class="text-danger">*</span></label>
+                    {% if poll %}
+                    <p class="text-muted">Варианты ответов редактируются ниже.</p>
+                    {% else %}
+                    <div id="options-container">
+                        <div class="input-group mb-2 option-group">
+                            <input type="text" name="options" class="form-control" placeholder="Вариант ответа 1" required>
+                            <button type="button" class="btn btn-outline-danger remove-option" style="display: none;">
+                                <i class="bi bi-dash-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-outline-success" id="add-option">
+                        <i class="bi bi-plus-lg"></i> Добавить вариант
+                    </button>
+                    {% endif %}
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Целевая аудитория <span class="text-danger">*</span></label>
+                        <select name="target_audience" class="form-select" required>
+                            <option value="all" {{ 'selected' if poll and poll.target_audience == 'all' else '' }}>
+                                Для всех
+                            </option>
+                            <option value="students" {{ 'selected' if poll and poll.target_audience == 'students' else '' }}>
+                                Только для студентов
+                            </option>
+                            <option value="teachers" {{ 'selected' if poll and poll.target_audience == 'teachers' else '' }}>
+                                Только для преподавателей
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Тип опроса <span class="text-danger">*</span></label>
+                        <select name="poll_type" class="form-select" required>
+                            <option value="multiple" {{ 'selected' if poll and poll.poll_type == 'multiple' or not poll else '' }}>
+                                Несколько вариантов
+                            </option>
+                            <option value="single" {{ 'selected' if poll and poll.poll_type == 'single' else '' }}>
+                                Один вариант
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="is_anonymous" id="is_anonymous"
+                                   {{ 'checked' if poll and poll.get('is_anonymous', True) else '' }}>
+                            <label class="form-check-label" for="is_anonymous">
+                                Анонимное голосование
+                            </label>
+                            <small class="text-muted d-block mt-2">Если включено, голоса не будут привязаны к пользователям</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Изображение -->
+        <div class="card mb-4">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0">Изображение опроса (опционально)</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Загрузить изображение</label>
+                    <input type="file" name="image" id="poll-image-input" class="form-control" accept="image/*">
+                    <div id="poll-image-preview" class="mt-3" style="display: none;">
+                        <img id="poll-image-preview-img" src="#" alt="Превью изображения" class="img-thumbnail" style="max-width: 200px;">
+                        <p class="mt-2 text-muted"><small>Выбранное изображение. Оно будет загружено при сохранении.</small></p>
+                    </div>
+                    {% if poll and poll.imageUrl %}
+                        <div class="mt-3" id="poll-current-image">
+                            <img src="{{ poll.imageUrl }}" alt="Текущее изображение" class="img-thumbnail" style="max-width: 200px;">
+                            <p class="mt-2 text-muted"><small>Текущее изображение. Загрузите новое, чтобы заменить.</small></p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">Время завершения опроса</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Конец опроса <span class="text-danger">*</span></label>
+                    <input type="datetime-local" name="endTime" class="form-control" required
+                           value="{% if poll and poll.endTime %}{{ poll.endTime.strftime('%Y-%m-%dT%H:%M') if poll.endTime.strftime else '' }}{% endif %}">
+                    <small class="text-muted">После этого времени опросник будет завершен и участники смогут видеть только результаты</small>
+                </div>
+            </div>
+        </div>
+
+        {% if poll %}
+        </form>
+
+        <!-- Варианты ответов -->
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Варианты ответов</h5>
+                <span class="badge bg-light text-dark">{{ poll.get('answers', [])|length }} вариантов</span>
+            </div>
+            <div class="card-body">
+                {% if poll.get('answers') %}
+                <div class="list-group mb-3">
+                    {% for answer in poll.answers %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-0">{{ answer.text }}</h6>
+                            <small class="text-muted">Голосов: {{ answer.get('votes', 0) }}</small>
+                        </div>
+                        <form method="POST" action="{{ url_for('poll_delete_answer', poll_id=poll.id, answer_id=answer.id) }}"
+                              style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-outline-danger"
+                                    onclick="return confirm('Удалить этот вариант?')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted">Варианты ответов пока не добавлены</p>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('poll_add_answer', poll_id=poll.id) }}" class="mt-3">
+                    <div class="input-group">
+                        <input type="text" name="answer" class="form-control" placeholder="Введите новый вариант ответа" required>
+                        <button type="submit" class="btn btn-outline-success">
+                            <i class="bi bi-plus-lg"></i> Добавить
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Кнопки -->
+        <div class="d-flex gap-2">
+            <button type="submit" form="poll-main-form" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> {{ 'Обновить' if poll else 'Создать' }}
+            </button>
+            <a href="{{ url_for('polls') }}" class="btn btn-secondary">
+                <i class="bi bi-x-lg"></i> Отмена
+            </a>
+            {% if poll %}
+            <a href="{{ url_for('poll_results', poll_id=poll.id) }}" class="btn btn-info" style="margin-left: auto;">
+                <i class="bi bi-graph-up"></i> Результаты
+            </a>
+            {% endif %}
+        </div>
+        {% if not poll %}
+    </form>
+        {% endif %}
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+<script>
+    // Валидация формы
+    document.querySelectorAll('form.needs-validation').forEach(form => {
+        form.addEventListener('submit', event => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        });
+    });
+
+    // Динамическое управление вариантами ответов
+    {% if not poll %}
+    let optionCount = 1;
+
+    document.getElementById('add-option').addEventListener('click', function() {
+        optionCount++;
+        const container = document.getElementById('options-container');
+        const newOption = document.createElement('div');
+        newOption.className = 'input-group mb-2 option-group';
+        newOption.innerHTML = `
+            <input type="text" name="options" class="form-control" placeholder="Вариант ответа ${optionCount}" required>
+            <button type="button" class="btn btn-outline-danger remove-option">
+                <i class="bi bi-dash-lg"></i>
+            </button>
+        `;
+        container.appendChild(newOption);
+        updateRemoveButtons();
+    });
+
+    document.getElementById('options-container').addEventListener('click', function(e) {
+        if (e.target.classList.contains('remove-option') || e.target.parentElement.classList.contains('remove-option')) {
+            e.target.closest('.option-group').remove();
+            optionCount--;
+            updateRemoveButtons();
+            updatePlaceholders();
+        }
+    });
+
+    function updateRemoveButtons() {
+        const options = document.querySelectorAll('.option-group');
+        options.forEach((option, index) => {
+            const removeBtn = option.querySelector('.remove-option');
+            if (options.length > 1) {
+                removeBtn.style.display = 'inline-block';
+            } else {
+                removeBtn.style.display = 'none';
+            }
+        });
+    }
+
+    function updatePlaceholders() {
+        const options = document.querySelectorAll('.option-group input');
+        options.forEach((input, index) => {
+            input.placeholder = `Вариант ответа ${index + 1}`;
+        });
+    }
+    {% endif %}
+
+    // Image preview for poll form
+    const imageInput = document.getElementById('poll-image-input');
+    const previewWrapper = document.getElementById('poll-image-preview');
+    const previewImg = document.getElementById('poll-image-preview-img');
+    const currentImage = document.getElementById('poll-current-image');
+
+    if (imageInput) {
+        imageInput.addEventListener('change', function() {
+            const file = this.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewImg.src = e.target.result;
+                    previewWrapper.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+                if (currentImage) {
+                    currentImage.style.display = 'none';
+                }
+            } else {
+                previewImg.src = '#';
+                previewWrapper.style.display = 'none';
+                if (currentImage) {
+                    currentImage.style.display = 'block';
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

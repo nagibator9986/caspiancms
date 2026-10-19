@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+
+{% block title %}Администрация{% endblock %}
+
+{% block head %}
+<style>
+.admin-card {
+    background: white;
+    border-radius: 15px;
+    
+    transition: all 0.3s ease;
+    overflow: hidden;
+    position: relative;
+    
+    width: 280px; /* Фиксированная ширина */
+    height: 380px; /* Фиксированная высота */
+    margin: 0 auto;
+}
+
+.admin-card:hover {
+    transform: translateY(-3px);
+    
+}
+
+.admin-photo {
+    width: 180px;
+    height: 240px; /* Выше, чем шире, для вертикального овала */
+    object-fit: cover;
+    background: #f8f9fa;
+    border-radius: 35%; /* Овальная форма */
+    margin: 20px auto 10px;
+    display: block;
+    
+}
+
+.admin-info {
+    padding: 10px 20px 20px;
+    text-align: center;
+    background: white;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+}
+
+.admin-name {
+    font-size: 1rem; /* Поменьше */
+    font-weight: bold;
+    color: #333; /* Черный текст */
+    margin-bottom: 5px;
+}
+
+.admin-position {
+    color: #ff6b35; /* Оранжевый цвет */
+    font-size: 0.9rem;
+    font-weight: bold; /* Жирный */
+    margin-bottom: 0;
+}
+
+.admin-actions {
+    display: none; /* Скрыть кнопки на карточке */
+}
+
+.sortable-ghost {
+    opacity: 0.4;
+    transform: rotate(5deg) scale(0.95);
+}
+
+.sortable-chosen {
+    opacity: 0.8;
+    transform: rotate(2deg) scale(1.05);
+    box-shadow: 0 15px 35px rgba(0,0,0,0.3);
+}
+
+.drag-handle {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    cursor: grab;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 1.4rem;
+    background: rgba(0,0,0,0.3);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 10;
+}
+
+.drag-handle:hover {
+    background: rgba(0,0,0,0.5);
+    color: white;
+    transform: scale(1.1);
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+    transform: scale(1.2);
+}
+
+#save-order-btn {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    z-index: 1000;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    display: none;
+    border-radius: 15px;
+    padding: 12px 24px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+#save-order-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 80px 20px;
+    color: #666;
+    background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
+    border-radius: 20px;
+    margin: 40px 0;
+}
+
+.empty-state i {
+    font-size: 5rem;
+    margin-bottom: 25px;
+    opacity: 0.6;
+    color: #a0aec0;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person-lines-fill me-2"></i>Администрация</h2>
+    <a href="{{ url_for('administration_add') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle me-2"></i>Добавить человека
+    </a>
+</div>
+
+{% if admins %}
+<div id="admins-container" class="row g-4">
+    {% for admin in admins %}
+    <div class="col-lg-3 col-md-4 col-sm-6" data-id="{{ admin.id }}">
+        <div class="admin-card" onclick="showAdminDetails('{{ admin|tojson|forceescape }}')" style="cursor: pointer;">
+            <div class="drag-handle">
+                <i class="bi bi-grip-vertical"></i>
+            </div>
+            {% if admin.image %}
+            <img src="{{ admin.image }}" alt="{{ admin.name }}" class="admin-photo">
+            {% else %}
+            <div class="admin-photo d-flex align-items-center justify-content-center">
+                <i class="bi bi-person-circle text-white" style="font-size: 4rem;"></i>
+            </div>
+            {% endif %}
+            <div class="admin-info">
+                <div class="admin-name">{{ admin.name }}</div>
+                <div class="admin-position">{{ admin.position }}</div>
+                <div class="admin-actions">
+                    <a href="{{ url_for('administration_edit', admin_id=admin.id) }}" class="btn btn-outline-primary btn-admin" title="Редактировать" onclick="event.stopPropagation()">
+                        <i class="bi bi-pencil-square"></i> Редактировать
+                    </a>
+                    <form method="POST" action="{{ url_for('administration_delete', admin_id=admin.id) }}" class="d-inline"
+                          onsubmit="return confirm('Удалить {{ admin.name }}?'); event.stopPropagation();">
+                        <button type="submit" class="btn btn-outline-danger btn-admin" title="Удалить">
+                            <i class="bi bi-trash3"></i> Удалить
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<button id="save-order-btn" class="btn btn-success btn-lg">
+    <i class="bi bi-check-circle me-2"></i>Сохранить порядок
+</button>
+{% else %}
+<div class="empty-state">
+    <i class="bi bi-people"></i>
+    <h4>Нет членов администрации</h4>
+    <p>Добавьте первого человека в администрацию</p>
+    <a href="{{ url_for('administration_add') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle me-2"></i>Добавить
+    </a>
+</div>
+{% endif %}
+
+<!-- Модальное окно для деталей -->
+<div class="modal fade" id="adminDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered border-0">
+        <div class="modal-content shadow border-0">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-person-vcard me-2"></i>Карточка члена администрации</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0" id="adminDetailContent">
+                <!-- Содержимое будет заполнено JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('admins-container');
+    const saveBtn = document.getElementById('save-order-btn');
+    let orderChanged = false;
+
+    if (container) {
+        new Sortable(container, {
+            handle: '.drag-handle',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            onEnd: function() {
+                orderChanged = true;
+                saveBtn.style.display = 'block';
+            }
+        });
+    }
+
+    saveBtn.addEventListener('click', function() {
+        const cards = container.querySelectorAll('[data-id]');
+        const order = Array.from(cards).map(card => card.getAttribute('data-id'));
+
+        fetch('{{ url_for("administration_update_order") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ order: order })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                saveBtn.style.display = 'none';
+                orderChanged = false;
+
+                // Показываем уведомление
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-success alert-dismissible fade show position-fixed';
+                alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+                alert.innerHTML = `
+                    <i class="bi bi-check-circle me-2"></i>Порядок сохранен!
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                `;
+                document.body.appendChild(alert);
+
+                setTimeout(() => {
+                    alert.remove();
+                }, 3000);
+            } else {
+                throw new Error(data.error || 'Ошибка сохранения');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            const alert = document.createElement('div');
+            alert.className = 'alert alert-danger alert-dismissible fade show position-fixed';
+            alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            alert.innerHTML = `
+                <i class="bi bi-exclamation-triangle me-2"></i>Ошибка: ${error.message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(alert);
+
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        });
+    });
+
+    // Предупреждение при уходе со страницы без сохранения
+    window.addEventListener('beforeunload', function(e) {
+        if (orderChanged) {
+            e.preventDefault();
+            e.returnValue = 'У вас есть несохраненные изменения порядка. Вы уверены, что хотите уйти?';
+        }
+    });
+});
+
+// Функция для отображения деталей администратора
+function showAdminDetails(adminJson) {
+    const admin = JSON.parse(adminJson);
+    const content = document.getElementById('adminDetailContent');
+    
+    content.innerHTML = `
+        <div class="p-4 text-center">
+            ${admin.image ? 
+                `<img src="${admin.image}" alt="${admin.name}" class="rounded-circle mb-3" style="width: 120px; height: 120px; object-fit: cover; border: 4px solid #e9ecef;">` :
+                `<div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center mb-3" style="width: 120px; height: 120px; border: 4px solid #e9ecef;">
+                    <i class="bi bi-person-circle text-muted" style="font-size: 3rem;"></i>
+                </div>`
+            }
+            <h4 class="fw-bold text-dark mb-2">${admin.name}</h4>
+            <p class="text-muted mb-4">${admin.position}</p>
+            <div class="d-flex justify-content-center gap-3">
+                <a href="{{ url_for('administration_edit', admin_id='') }}/${admin.id}" class="btn btn-primary">
+                    <i class="bi bi-pencil-square me-2"></i>Редактировать
+                </a>
+                <button class="btn btn-danger" onclick="deleteAdmin('${admin.id}', '${admin.name}')">
+                    <i class="bi bi-trash3 me-2"></i>Удалить
+                </button>
+            </div>
+        </div>
+    `;
+    
+    const modal = new bootstrap.Modal(document.getElementById('adminDetailModal'));
+    modal.show();
+}
+
+function deleteAdmin(id, name) {
+    if (confirm(`Удалить ${name}?`)) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = `{{ url_for('administration_delete', admin_id='') }}/${id}`;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+{% endblock %}

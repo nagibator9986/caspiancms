@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if news else 'Добавить' }} новость{% endblock %}
+{% block content %}
+<h1>{{ 'Редактировать' if news else 'Добавить' }} новость</h1>
+<form method="POST" enctype="multipart/form-data">
+    <div class="mb-3">
+        <label class="form-label">Название</label>
+        <input type="text" name="title" class="form-control" value="{{ news.title if news else '' }}" required>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Содержание</label>
+        <textarea name="content" class="form-control">{{ news.content if news else '' }}</textarea>
+    </div>
+    <div class="mb-3">
+    <label class="form-label">Категория</label>
+    <select name="category" class="form-select" required>
+        <option value="" disabled {{ 'selected' if not club else '' }}>Выберите категорию</option>
+        
+        <option value="academic" {{ 'selected' if club and club.category == 'academic' else '' }}>
+            Академичесике
+        </option>
+        <option value="sports" {{ 'selected' if club and club.category == 'sports' else '' }}>
+            Спортивные
+        </option>
+        <option value="cultural" {{ 'selected' if club and club.category == 'cultural' else '' }}>
+            Культурные
+        </option>
+    </select>
+</div>
+    <div class="mb-3">
+        <label class="form-label">Целевая аудитория</label>
+        <select name="target_audience" class="form-select" required>
+            <option value="all" {{ 'selected' if news and news.target_audience == 'all' else '' }}>
+                Для всех
+            </option>
+            <option value="students" {{ 'selected' if news and news.target_audience == 'students' else '' }}>
+                Только для студентов
+            </option>
+            <option value="teachers" {{ 'selected' if news and news.target_audience == 'teachers' else '' }}>
+                Только для преподавателей
+            </option>
+        </select>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Изображение</label>
+        <input type="file" name="image" class="form-control">
+        {% if news.imageUrl %}
+            <img src="{{ news.imageUrl }}" alt="Current image" style="max-width: 200px; margin-top: 10px;">
+        {% endif %}
+    </div>
+    <button type="submit" class="btn btn-primary">Сохранить</button>
+</form>
+{% endblock %}

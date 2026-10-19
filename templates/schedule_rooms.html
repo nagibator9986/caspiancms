@@ -1,0 +1,604 @@
+{% extends "base.html" %}
+{% block title %}Аудиторный фонд{% endblock %}
+
+{% block head %}
+<style>
+    /* ==================== ОСНОВНЫЕ СТИЛИ ==================== */
+    .page-header {
+        background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .page-header h1 { margin: 0; font-weight: 700; }
+    .page-header .stats { margin-top: 0.5rem; opacity: 0.9; font-size: 0.95rem; }
+
+    /* Панель фильтров */
+    .filter-panel {
+        background: #fff;
+        padding: 1rem 1.25rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        margin-bottom: 1.5rem;
+        border: 1px solid #E5E7EB;
+    }
+
+    /* Карточка аудитории */
+    .room-card {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        margin-bottom: 1.25rem;
+        overflow: hidden;
+        border: 1px solid #E5E7EB;
+        page-break-inside: avoid;
+    }
+
+    .room-header {
+        background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+        padding: 1rem 1.25rem;
+        border-bottom: 2px solid #FCA5A5;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .room-name {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #991B1B;
+        margin: 0;
+    }
+
+    .room-meta {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        font-size: 0.85rem;
+        color: #6B7280;
+    }
+
+    .room-meta .meta-item i { color: #DC2626; }
+
+    .room-body { padding: 1rem; }
+
+    /* Сетка дней недели */
+    .days-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 0.75rem;
+    }
+
+    @media (max-width: 1200px) {
+        .days-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+        .days-grid { grid-template-columns: 1fr; }
+    }
+
+    .day-column {
+        background: #F9FAFB;
+        border-radius: 8px;
+        padding: 0.75rem;
+        border: 1px solid #E5E7EB;
+    }
+
+    .day-column.today {
+        background: #FEF3C7;
+        border-color: #F59E0B;
+    }
+
+    .day-title {
+        font-weight: 700;
+        text-align: center;
+        margin-bottom: 0.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #E5E7EB;
+        font-size: 0.9rem;
+        color: #374151;
+    }
+
+    .day-column.today .day-title {
+        color: #92400E;
+    }
+
+    .day-column.today .day-title::after {
+        content: " (сегодня)";
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    /* Карточка занятия */
+    .lesson-item {
+        background: white;
+        border-left: 3px solid #6B7280;
+        padding: 0.5rem 0.6rem;
+        border-radius: 4px;
+        margin-bottom: 0.4rem;
+        font-size: 0.82rem;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+
+    .lesson-item.numerator { border-left-color: #2563EB; background: #EFF6FF; }
+    .lesson-item.denominator { border-left-color: #D97706; background: #FFFBEB; }
+    .lesson-item.always { border-left-color: #059669; background: #F0FDF4; }
+
+    .lesson-time {
+        font-weight: 700;
+        color: #DC2626;
+        font-size: 0.85rem;
+    }
+
+    .lesson-subject { font-weight: 600; margin: 0.2rem 0; color: #1F2937; }
+    .lesson-group { color: #4F46E5; font-weight: 600; font-size: 0.78rem; }
+    .lesson-teacher { color: #6B7280; font-size: 0.76rem; font-style: italic; }
+
+    .week-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 8px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        margin-left: 4px;
+    }
+    .week-badge.numerator { background: #DBEAFE; color: #1E40AF; }
+    .week-badge.denominator { background: #FEF3C7; color: #92400E; }
+
+    .empty-day { color: #9CA3AF; text-align: center; padding: 1rem 0; font-size: 0.8rem; }
+
+    /* ==================== ТАБЛИЧНЫЙ ВИД ==================== */
+    .table-view {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #E5E7EB;
+    }
+
+    .schedule-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+    }
+
+    .schedule-table thead th {
+        background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%);
+        color: white;
+        padding: 0.75rem;
+        text-align: center;
+        font-weight: 600;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+
+    .schedule-table thead th.today-col { background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); }
+
+    .schedule-table tbody td {
+        padding: 0.5rem;
+        border: 1px solid #E5E7EB;
+        vertical-align: top;
+        min-width: 140px;
+    }
+
+    .schedule-table .room-cell {
+        background: #FEF2F2;
+        font-weight: 700;
+        color: #991B1B;
+        text-align: center;
+        position: sticky;
+        left: 0;
+        z-index: 5;
+        min-width: 100px;
+    }
+
+    .schedule-table .lesson-mini {
+        background: #F9FAFB;
+        padding: 0.4rem;
+        border-radius: 4px;
+        margin-bottom: 0.3rem;
+        border-left: 3px solid #6B7280;
+        font-size: 0.78rem;
+    }
+
+    .schedule-table .lesson-mini.numerator { border-left-color: #2563EB; background: #EFF6FF; }
+    .schedule-table .lesson-mini.denominator { border-left-color: #D97706; background: #FFFBEB; }
+    .schedule-table .lesson-mini.always { border-left-color: #059669; background: #F0FDF4; }
+
+    /* ==================== КОНФЛИКТЫ ==================== */
+    .conflicts-block {
+        background: #FEF2F2;
+        border: 2px solid #FECACA;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .conflicts-block h5 { color: #991B1B; margin-bottom: 0.75rem; }
+
+    .conflict-item {
+        background: white;
+        padding: 0.6rem 0.85rem;
+        border-radius: 6px;
+        margin-bottom: 0.4rem;
+        border-left: 4px solid #DC2626;
+        font-size: 0.85rem;
+    }
+
+    /* ==================== ПЕЧАТЬ ==================== */
+    @media print {
+        @page { size: A4 landscape; margin: 1cm; }
+
+        body { background: white !important; }
+        .navbar, .filter-panel, .no-print, .alert, footer, .page-header .btn-group { display: none !important; }
+
+        .page-header {
+            background: white !important;
+            color: black !important;
+            box-shadow: none !important;
+            border: 2px solid #DC2626;
+            padding: 0.75rem 1rem !important;
+            margin-bottom: 0.75rem !important;
+        }
+        .page-header h1 { color: #991B1B !important; font-size: 1.2rem !important; }
+        .page-header .stats { color: #374151 !important; font-size: 0.8rem !important; }
+
+        .room-card {
+            box-shadow: none !important;
+            border: 1px solid #999 !important;
+            margin-bottom: 0.5rem !important;
+            page-break-inside: avoid;
+        }
+
+        .room-header {
+            background: #FEE2E2 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            padding: 0.5rem 0.75rem !important;
+        }
+
+        .room-name { font-size: 1.1rem !important; }
+
+        .lesson-item, .lesson-mini {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            font-size: 0.7rem !important;
+            padding: 0.3rem !important;
+        }
+
+        .schedule-table { font-size: 0.7rem !important; }
+        .schedule-table thead th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .schedule-table .room-cell { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+        .days-grid { gap: 0.25rem !important; }
+        .day-column { padding: 0.4rem !important; }
+        .day-title { font-size: 0.8rem !important; margin-bottom: 0.3rem !important; }
+
+        .lesson-time { font-size: 0.72rem !important; }
+        .lesson-subject { font-size: 0.7rem !important; }
+        .lesson-group, .lesson-teacher { font-size: 0.65rem !important; }
+    }
+
+    .week-info {
+        display: inline-block;
+        padding: 6px 12px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 20px;
+        font-weight: 600;
+        margin-left: 0.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+            <h1><i class="bi bi-door-open-fill me-2"></i>Аудиторный фонд</h1>
+            <div class="stats">
+                <i class="bi bi-grid-3x3 me-1"></i> Аудиторий: <strong>{{ rooms_count }}</strong>
+                <span class="mx-2">•</span>
+                <i class="bi bi-journal me-1"></i> Занятий: <strong>{{ total_lessons }}</strong>
+                <span class="mx-2">•</span>
+                <i class="bi bi-clock me-1"></i> Обновлено: {{ update_time }}
+                <span class="week-info">
+                    <i class="bi bi-calendar-week me-1"></i>
+                    {{ 'Числитель' if is_even_week else 'Знаменатель' }}
+                </span>
+            </div>
+        </div>
+        <div class="btn-group no-print" role="group">
+            <button class="btn btn-light" onclick="window.print()">
+                <i class="bi bi-printer-fill"></i> Печать
+            </button>
+            <div class="btn-group" role="group">
+                <button class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown">
+                    <i class="bi bi-download"></i> Экспорт
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='xlsx', room=selected_room) }}">
+                            <i class="bi bi-file-earmark-excel text-success me-2"></i>Excel (XLSX)
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='csv', room=selected_room) }}">
+                            <i class="bi bi-filetype-csv text-info me-2"></i>CSV
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('schedule_rooms_export', format='pdf', room=selected_room) }}">
+                            <i class="bi bi-file-earmark-pdf text-danger me-2"></i>PDF
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Фильтры -->
+<div class="filter-panel no-print">
+    <form method="GET" action="{{ url_for('schedule_rooms') }}" class="row g-2 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label small fw-bold mb-1">
+                <i class="bi bi-door-open me-1"></i>Аудитория
+            </label>
+            <select name="room" class="form-select form-select-sm">
+                <option value="">— Все аудитории —</option>
+                {% for room in all_rooms %}
+                    <option value="{{ room }}" {% if selected_room == room %}selected{% endif %}>{{ room }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small fw-bold mb-1">
+                <i class="bi bi-calendar-day me-1"></i>День
+            </label>
+            <select name="day" class="form-select form-select-sm">
+                <option value="">Все дни</option>
+                {% for i in range(6) %}
+                    <option value="{{ i }}" {% if selected_day == i|string %}selected{% endif %}>
+                        {{ day_names[i] }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small fw-bold mb-1">
+                <i class="bi bi-calendar-week me-1"></i>Тип недели
+            </label>
+            <select name="week_type" class="form-select form-select-sm">
+                <option value="">Все</option>
+                <option value="always" {% if selected_week_type == 'always' %}selected{% endif %}>Всегда</option>
+                <option value="numerator" {% if selected_week_type == 'numerator' %}selected{% endif %}>Числитель</option>
+                <option value="denominator" {% if selected_week_type == 'denominator' %}selected{% endif %}>Знаменатель</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small fw-bold mb-1">
+                <i class="bi bi-eye me-1"></i>Вид
+            </label>
+            <select name="view" class="form-select form-select-sm" onchange="this.form.submit()">
+                <option value="cards" {% if view_mode == 'cards' %}selected{% endif %}>Карточки</option>
+                <option value="table" {% if view_mode == 'table' %}selected{% endif %}>Таблица</option>
+            </select>
+        </div>
+        <div class="col-md-2 d-flex gap-1">
+            <button type="submit" class="btn btn-danger btn-sm flex-grow-1">
+                <i class="bi bi-funnel"></i> Применить
+            </button>
+            <a href="{{ url_for('schedule_rooms') }}" class="btn btn-outline-secondary btn-sm" title="Сбросить">
+                <i class="bi bi-x-circle"></i>
+            </a>
+        </div>
+    </form>
+</div>
+
+<!-- Конфликты аудиторий -->
+{% if conflicts %}
+<div class="conflicts-block no-print">
+    <h5>
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        Обнаружены конфликты аудиторий ({{ conflicts|length }})
+    </h5>
+    <p class="small text-muted mb-2">Несколько занятий назначены в одну аудиторию в одно время для разных групп.</p>
+    {% for c in conflicts %}
+    <div class="conflict-item">
+        <strong>{{ c.room }}</strong> • {{ c.day_name }}, {{ c.time }}
+        <div class="small text-muted mt-1">
+            {% for l in c.lessons %}
+                <span class="badge bg-secondary">{{ l.groupId }} — {{ l.subject }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Если данных нет -->
+{% if not rooms_data %}
+<div class="alert alert-info text-center py-4">
+    <i class="bi bi-info-circle fs-1 d-block mb-2"></i>
+    <h5>Нет занятий с указанной аудиторией</h5>
+    <p class="mb-0">Возможно, в расписании не заполнено поле «Аудитория», или фильтры скрыли все записи.</p>
+</div>
+{% endif %}
+
+<!-- ==================== ТАБЛИЧНЫЙ ВИД ==================== -->
+{% if view_mode == 'table' and rooms_data %}
+<div class="table-view">
+    <div class="table-responsive">
+        <table class="schedule-table">
+            <thead>
+                <tr>
+                    <th style="min-width: 100px;">Аудитория</th>
+                    {% for i in range(6) %}
+                        <th class="{{ 'today-col' if i == today_index }}">{{ day_names[i] }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for room, info in rooms_data.items() %}
+                <tr>
+                    <td class="room-cell">{{ room }}</td>
+                    {% for day_idx in range(6) %}
+                        <td>
+                            {% set lessons = info.days.get(day_idx, []) %}
+                            {% if lessons %}
+                                {% for lesson in lessons %}
+                                    {% set wt = lesson.get('week_type', 'always') %}
+                                    <div class="lesson-mini {{ wt }}">
+                                        <div class="lesson-time">{{ lesson.time }}</div>
+                                        <div class="lesson-subject">{{ lesson.subject }}</div>
+                                        <div class="lesson-group">{{ lesson.groupId }}</div>
+                                        {% if lesson.teacher_name %}
+                                            <div class="lesson-teacher">{{ lesson.teacher_name }}</div>
+                                        {% endif %}
+                                        {% if wt == 'numerator' %}
+                                            <span class="week-badge numerator">Ч</span>
+                                        {% elif wt == 'denominator' %}
+                                            <span class="week-badge denominator">З</span>
+                                        {% endif %}
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="empty-day">—</div>
+                            {% endif %}
+                        </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ==================== КАРТОЧНЫЙ ВИД ==================== -->
+{% if view_mode == 'cards' and rooms_data %}
+{% for room, info in rooms_data.items() %}
+<div class="room-card">
+    <div class="room-header">
+        <div>
+            <h2 class="room-name">
+                <i class="bi bi-door-open-fill"></i> {{ room }}
+            </h2>
+            <div class="room-meta">
+                <span class="meta-item">
+                    <i class="bi bi-journal-text"></i> {{ info.total_lessons }} занят.
+                </span>
+                <span class="meta-item">
+                    <i class="bi bi-people"></i> {{ info.groups|length }} групп
+                </span>
+                <span class="meta-item">
+                    <i class="bi bi-person-badge"></i> {{ info.teachers|length }} препод.
+                </span>
+            </div>
+        </div>
+        <div class="no-print">
+            <a href="{{ url_for('schedule_rooms', room=room) }}"
+               class="btn btn-sm btn-outline-danger" title="Только эта аудитория">
+                <i class="bi bi-zoom-in"></i>
+            </a>
+            <a href="{{ url_for('schedule_rooms_export', format='xlsx', room=room) }}"
+               class="btn btn-sm btn-outline-success" title="Excel">
+                <i class="bi bi-file-earmark-excel"></i>
+            </a>
+        </div>
+    </div>
+
+    <div class="room-body">
+        <div class="days-grid">
+            {% for day_idx in range(6) %}
+                <div class="day-column {{ 'today' if day_idx == today_index }}">
+                    <div class="day-title">{{ day_names[day_idx] }}</div>
+                    {% set lessons = info.days.get(day_idx, []) %}
+                    {% if lessons %}
+                        {% for lesson in lessons %}
+                            {% set wt = lesson.get('week_type', 'always') %}
+                            <div class="lesson-item {{ wt }}">
+                                <div class="lesson-time">
+                                    <i class="bi bi-clock"></i> {{ lesson.time }}
+                                    {% if wt == 'numerator' %}
+                                        <span class="week-badge numerator">Ч</span>
+                                    {% elif wt == 'denominator' %}
+                                        <span class="week-badge denominator">З</span>
+                                    {% endif %}
+                                </div>
+                                <div class="lesson-subject">{{ lesson.subject }}</div>
+                                <div class="lesson-group">
+                                    <i class="bi bi-people-fill"></i> {{ lesson.groupId }}
+                                </div>
+                                {% if lesson.teacher_name %}
+                                    <div class="lesson-teacher">
+                                        <i class="bi bi-person"></i> {{ lesson.teacher_name }}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="empty-day">—</div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+
+        {% if info.groups or info.teachers %}
+        <div class="mt-2 pt-2 border-top small text-muted no-print">
+            {% if info.groups %}
+                <div class="mb-1">
+                    <strong><i class="bi bi-collection"></i> Группы:</strong>
+                    {% for g in info.groups %}
+                        <span class="badge bg-light text-dark border">{{ g }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if info.teachers %}
+                <div>
+                    <strong><i class="bi bi-person-workspace"></i> Преподаватели:</strong>
+                    {% for t in info.teachers %}
+                        <span class="badge bg-light text-dark border">{{ t }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Подсветка занятия в текущее время на странице
+    (function highlightCurrentLesson() {
+        const now = new Date();
+        const hours = String(now.getHours()).padStart(2, '0');
+        const mins = String(now.getMinutes()).padStart(2, '0');
+        const currentTime = `${hours}:${mins}`;
+
+        document.querySelectorAll('.lesson-item, .lesson-mini').forEach(item => {
+            const timeEl = item.querySelector('.lesson-time');
+            if (!timeEl) return;
+            // ожидаем формат HH.MM-HH.MM или HH:MM-HH:MM
+            const m = timeEl.textContent.match(/(\d{1,2})[.:](\d{2})\s*[-–]\s*(\d{1,2})[.:](\d{2})/);
+            if (!m) return;
+            const start = `${m[1].padStart(2,'0')}:${m[2]}`;
+            const end   = `${m[3].padStart(2,'0')}:${m[4]}`;
+            if (currentTime >= start && currentTime <= end) {
+                item.style.boxShadow = '0 0 0 2px #DC2626';
+                item.style.transform = 'scale(1.02)';
+            }
+        });
+    })();
+</script>
+{% endblock %}

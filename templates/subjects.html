@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="h3">Учебные дисциплины</h2>
+        <button class="btn btn-primary shadow-sm" data-bs-toggle="collapse" data-bs-target="#addSubjectForm">
+            <i class="bi bi-plus-lg"></i> Добавить предмет
+        </button>
+    </div>
+
+    <div class="collapse mb-4" id="addSubjectForm">
+        <div class="card card-body border-0 shadow-sm">
+            <form action="{{ url_for('subject_add') }}" method="POST">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-9">
+                        <label class="form-label fw-bold">Название новой дисциплины</label>
+                        <input type="text" name="name" class="form-control" placeholder="Например: Программирование на Python" required>
+                    </div>
+                    <div class="col-md-3">
+                        <button type="submit" class="btn btn-success w-100">Сохранить</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4" style="width: 80px;">#</th>
+                        <th>Название дисциплины</th>
+                        <th class="text-end pe-4" style="width: 200px;">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in subjects %}
+                    <tr>
+                        <td class="ps-4 text-muted">{{ loop.index }}</td>
+                        <td><span class="fw-semibold">{{ s.name }}</span></td>
+                        <td class="text-end pe-4">
+                            <div class="btn-group shadow-sm">
+                                <button class="btn btn-sm btn-outline-primary" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#editModal{{ s.id }}"
+                                        title="Редактировать">
+                                    ✎
+                                </button>
+                                <form action="{{ url_for('subject_delete', s_id=s.id) }}" method="POST" class="d-inline" onsubmit="return confirm('Удалить предмет?')">
+                                    <button class="btn btn-sm btn-outline-danger" 
+                                            style="border-top-left-radius: 0; border-bottom-left-radius: 0;"
+                                            title="Удалить">
+                                        ✕
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <div class="modal fade" id="editModal{{ s.id }}" tabindex="-1" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered">
+                            <div class="modal-content border-0 shadow">
+                                <form action="{{ url_for('subject_edit', s_id=s.id) }}" method="POST">
+                                    <div class="modal-header bg-light">
+                                        <h5 class="modal-title">Редактировать название</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                    </div>
+                                    <div class="modal-body p-4">
+                                        <label class="form-label fw-bold text-secondary">Название дисциплины</label>
+                                        <input type="text" name="name" class="form-control form-control-lg" value="{{ s.name }}" required>
+                                    </div>
+                                    <div class="modal-footer bg-light border-0">
+                                        <button type="button" class="btn btn-link text-secondary text-decoration-none" data-bs-dismiss="modal">Отмена</button>
+                                        <button type="submit" class="btn btn-primary px-4">Сохранить изменения</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <tr>
+                        <td colspan="3" class="text-center py-5 text-muted">
+                            Список дисциплин пуст. Нажмите «Добавить предмет».
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

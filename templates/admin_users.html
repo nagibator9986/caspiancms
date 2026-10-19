@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
+<div class="container-fluid py-4 px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="bi bi-person-badge-fill me-2 text-primary"></i>База пользователей</h2>
+        <button class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#addUserModal">
+            <i class="bi bi-person-plus-fill me-1"></i> Новый пользователь
+        </button>
+    </div>
+
+    <div class="accordion" id="usersAccordion">
+        {% for section_name, members in grouped_users.items() %}
+        <div class="accordion-item mb-3 border-0 shadow-sm rounded-3 overflow-hidden">
+            <h2 class="accordion-header">
+                <button class="accordion-button {% if not loop.first %}collapsed{% endif %} bg-white text-dark" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}">
+                    <i class="bi bi-folder2-open me-2 text-primary"></i>
+                    <strong>{{ section_name }}</strong>
+                    <span class="ms-2 badge bg-secondary rounded-pill small">{{ members|length }}</span>
+                </button>
+            </h2>
+            <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}" data-bs-parent="#usersAccordion">
+                <div class="accordion-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light small text-uppercase text-muted">
+                                <tr>
+                                    <th class="ps-4">ФИО / Почта</th>
+                                    <th>Телефон</th>
+                                    <th>Курс</th>
+                                    <th>Создан / Обновлен</th>
+                                    <th class="text-end px-4">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in members %}
+                                <tr style="cursor: pointer;" onclick="showFullDetails('{{ user|tojson|forceescape }}')">
+                                    <td class="ps-4">
+                                        <div class="fw-bold text-dark">{{ user.name }}</div>
+                                        <div class="small text-muted">{{ user.email }}</div>
+                                    </td>
+                                    <td>{{ user.phone or '-' }}</td>
+                                    <td><span class="badge bg-light text-dark border px-3">{{ user.course or '?' }} курс</span></td>
+                                    <td class="small text-muted">
+                                        <div><i class="bi bi-clock-history me-1"></i>{{ user.created_str }}</div>
+                                        <div style="font-size: 0.75rem;"><i class="bi bi-pencil-square me-1"></i>{{ user.updated_str }}</div>
+                                    </td>
+                                    <td class="text-end px-4" onclick="event.stopPropagation()">
+                                        <div class="d-flex justify-content-end gap-2">
+                                            <!-- Редактировать -->
+                                            <button class="btn btn-sm btn-light border shadow-sm"
+                                                    title="Редактировать"
+                                                    onclick="editUser('{{ user.id }}', '{{ user.name }}', '{{ user.role }}', '{{ user.group }}', '{{ user.phone }}', '{{ user.course }}', '{{ user.email }}')">
+                                                <i class="bi bi-pencil text-primary"></i>
+                                            </button>
+
+                                            <!-- Сброс пароля -->
+                                            <form action="{{ url_for('admin_reset_password', user_id=user.id) }}" method="POST" class="d-inline">
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-light border shadow-sm"
+                                                        title="Сбросить пароль"
+                                                        onclick="return confirm('Сбросить пароль для {{ user.name|e }}?')">
+                                                    <i class="bi bi-key-fill text-warning"></i>
+                                                </button>
+                                            </form>
+
+                                            <!-- Удалить -->
+                                            <a href="{{ url_for('admin_delete_user', user_id=user.id) }}"
+                                               class="btn btn-sm btn-light border shadow-sm"
+                                               onclick="return confirm('Вы уверены, что хотите удалить пользователя {{ user.name|e }}?')">
+                                                <i class="bi bi-trash3 text-danger"></i>
+                                            </a>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog border-0">
+        <div class="modal-content shadow border-0">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-person-vcard me-2"></i>Карточка пользователя</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0" id="detailContent"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editUserModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered border-0">
+        <form id="editUserForm" method="POST" class="modal-content shadow border-0">
+            <div class="modal-header bg-white">
+                <h5 class="modal-title fw-bold">Редактирование профиля</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">ФИО</label>
+                        <input type="text" name="name" id="edit_name" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Email (ID)</label>
+                        <input type="text" id="edit_email" class="form-control bg-light" readonly disabled>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Телефон</label>
+                        <input type="text" name="phone" id="edit_phone" class="form-control">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">Роль</label>
+                        <select name="role" id="edit_role" class="form-select">
+                            <option value="student">student</option>
+                            <option value="club">club</option>
+                            <option value="admin">admin</option>
+                            <option value="teacher">teacher</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">Группа</label>
+                        <select name="group" id="edit_group" class="form-select">
+                            <option value="-">Без группы</option>
+                            {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">Курс</label>
+                        <input type="text" name="course" id="edit_course" class="form-control">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0">
+                <button type="submit" class="btn btn-primary w-100 py-2">Сохранить изменения</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="addUserModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered border-0">
+        <form action="{{ url_for('admin_add_user') }}" method="POST" class="modal-content shadow border-0">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold"><i class="bi bi-person-plus-fill me-2"></i>Новый пользователь</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">ФИО</label>
+                        <input type="text" name="name" class="form-control" placeholder="Иванов Иван Иванович" required>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">Email</label>
+                        <input type="email" name="email" class="form-control" placeholder="example@mail.com" required>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">Пароль</label>
+                        <input type="password" name="password" class="form-control" placeholder="Минимум 6 символов" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Телефон</label>
+                        <input type="text" name="phone" class="form-control" placeholder="+7...">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Курс</label>
+                        <input type="text" name="course" class="form-control" placeholder="1">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Роль</label>
+                        <select name="role" class="form-select">
+                            <option value="student" selected>student</option>
+                            <option value="club">club</option>
+                            <option value="admin">admin</option>
+                            <option value="teacher">teacher</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Группа</label>
+                        <select name="group" class="form-select">
+                            <option value="-">Без группы</option>
+                            {% for g in groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0 bg-light">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" class="btn btn-primary px-4">Создать аккаунт</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showFullDetails(userJson) {
+    const user = JSON.parse(userJson);
+    const content = `
+        <div class="list-group list-group-flush">
+            <div class="list-group-item d-flex justify-content-between py-3">
+                <span class="text-muted small">ФИО:</span>
+                <strong class="text-primary">${user.name}</strong>
+            </div>
+            <div class="list-group-item d-flex justify-content-between py-3">
+                <span class="text-muted small">Email:</span>
+                <strong>${user.email}</strong>
+            </div>
+            <div class="list-group-item d-flex justify-content-between py-3">
+                <span class="text-muted small">Телефон:</span>
+                <strong>${user.phone || '-'}</strong>
+            </div>
+            <div class="list-group-item d-flex justify-content-between py-3">
+                <span class="text-muted small">Роль:</span>
+                <span class="badge bg-info text-white">${user.role}</span>
+            </div>
+            <div class="list-group-item d-flex justify-content-between py-3">
+                <span class="text-muted small">Группа:</span>
+                <strong>${user.group}</strong>
+            </div>
+            <div class="list-group-item bg-light small">
+                <strong><i class="bi bi-calendar-check me-2"></i>Создан:</strong>
+                <span class="float-end">${user.created_str}</span>
+            </div>
+        </div>`;
+    document.getElementById('detailContent').innerHTML = content;
+    new bootstrap.Modal(document.getElementById('detailModal')).show();
+}
+
+function editUser(id, name, role, group, phone, course, email) {
+    const form = document.getElementById('editUserForm');
+    form.action = "/admin/users/edit/" + id;
+
+    document.getElementById('edit_name').value = name;
+    document.getElementById('edit_email').value = email;
+    document.getElementById('edit_role').value = role;
+    document.getElementById('edit_group').value = group;
+    document.getElementById('edit_phone').value = phone;
+    document.getElementById('edit_course').value = course;
+
+    new bootstrap.Modal(document.getElementById('editUserModal')).show();
+}
+</script>
+
+<style>
+    .accordion-button:not(.collapsed) { background-color: #f8f9fa; color: #0d6efd; box-shadow: none; }
+    .table-hover tbody tr:hover { background-color: rgba(13, 110, 253, 0.03); }
+    .btn-light:hover { background-color: #fff; box-shadow: 0 .125rem .25rem rgba(0,0,0,.075)!important; }
+</style>
+{% endblock %}

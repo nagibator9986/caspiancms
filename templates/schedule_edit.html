@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Редактировать занятие{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow border-0">
+                <div class="card-header bg-primary text-white py-3">
+                    <h4 class="mb-0"><i class="bi bi-pencil-square me-2"></i>Редактировать занятие</h4>
+                </div>
+                <div class="card-body p-4">
+                    <form method="POST" class="row g-3 needs-validation" novalidate>
+                        
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Группа <span class="text-danger">*</span></label>
+                            <select name="groupId" class="form-select" required>
+                                {% for group in available_groups %}
+                                    <option value="{{ group }}" {% if item.groupId == group %}selected{% endif %}>{{ group }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Тип недели <span class="text-danger">*</span></label>
+                            <select name="week_type" class="form-select" required>
+                                <option value="always" {% if item.week_type == 'always' %}selected{% endif %}>Еженедельно</option>
+                                <option value="numerator" {% if item.week_type == 'numerator' %}selected{% endif %}>Числитель</option>
+                                <option value="denominator" {% if item.week_type == 'denominator' %}selected{% endif %}>Знаменатель</option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Дата <span class="text-danger">*</span></label>
+                            <input type="date" name="date" id="dateInput" class="form-control" value="{{ item.date }}" required>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Время <span class="text-danger">*</span></label>
+                            <select name="time" id="timeSelect" class="form-select" required>
+                                </select>
+                            <input type="hidden" id="initialTime" value="{{ item.time }}">
+                        </div>
+
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold">Предмет <span class="text-danger">*</span></label>
+                            <select name="subject" class="form-select" required>
+                                {% for sname in available_subjects %}
+                                    <option value="{{ sname }}" {% if item.subject == sname %}selected{% endif %}>{{ sname }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-md-8">
+                            <label class="form-label fw-bold">Преподаватель</label>
+                            <select name="teacher" class="form-select">
+                                <option value="">Без преподавателя</option>
+                                {% for teacher_id, teacher_name in available_teachers.items() %}
+                                    <option value="{{ teacher_id }}" {% if item.teacher == teacher_id %}selected{% endif %}>{{ teacher_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Аудитория</label>
+                            <input type="text" name="room" class="form-control" value="{{ item.room }}">
+                        </div>
+
+                        <div class="col-12 text-end mt-5 border-top pt-4">
+                            <a href="/schedule" class="btn btn-light btn-lg px-4 me-2">Отмена</a>
+                            <button type="submit" class="btn btn-primary btn-lg px-5 shadow">Сохранить изменения</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const callSchedule = {{ call_schedule|tojson|safe }};
+const dateInput = document.getElementById('dateInput');
+const timeSelect = document.getElementById('timeSelect');
+const initialTime = document.getElementById('initialTime').value;
+
+function updateTimes() {
+    const selectedDate = new Date(dateInput.value);
+    const dayOfWeek = selectedDate.getDay(); // 0 - Вск, 1 - Пн...
+    
+    // В JS 1 - Понедельник. В вашем словаре "monday"
+    const scheduleKey = (dayOfWeek === 1) ? "monday" : "other";
+    const options = callSchedule[scheduleKey];
+
+    const currentVal = timeSelect.value || initialTime;
+    timeSelect.innerHTML = '<option value="" disabled>Выберите время...</option>';
+
+    options.forEach(timeStr => {
+        const opt = document.createElement('option');
+        opt.value = timeStr;
+        opt.textContent = timeStr;
+        if (timeStr === currentVal) opt.selected = true;
+        timeSelect.appendChild(opt);
+    });
+}
+
+// Слушатель изменения даты
+dateInput.addEventListener('change', updateTimes);
+
+// Инициализация при загрузке
+document.addEventListener('DOMContentLoaded', () => {
+    updateTimes();
+    
+    // Валидация Bootstrap
+    var forms = document.querySelectorAll('.needs-validation')
+    Array.prototype.slice.call(forms).forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            if (!form.checkValidity()) {
+                event.preventDefault()
+                event.stopPropagation()
+            }
+            form.classList.add('was-validated')
+        }, false)
+    })
+});
+</script>
+{% endblock %}

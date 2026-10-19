@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-primary text-white py-3">
+                    <h5 class="mb-0">Редактирование преподавателя</h5>
+                </div>
+
+                <div class="card-body p-4">
+                    <form method="POST">
+
+                        <!-- ФИО -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">ФИО</label>
+                            <input type="text"
+                                   name="name"
+                                   class="form-control"
+                                   value="{{ teacher.name }}"
+                                   required>
+                        </div>
+
+                        {% if teacher.email %}
+                        <hr>
+                        <h6 class="text-muted">Данные учетной записи</h6>
+
+                        <!-- Email -->
+                        <div class="mb-3">
+                            <label>Email</label>
+                            <input type="email"
+                                   name="email"
+                                   class="form-control"
+                                   value="{{ teacher.email }}"
+                                   required>
+                        </div>
+
+                        <!-- Пароль -->
+                        <div class="mb-3">
+                            <label>Новый пароль</label>
+                            <input type="password"
+                                   name="password"
+                                   class="form-control"
+                                   placeholder="Оставьте пустым, если не менять">
+                        </div>
+
+                        {% else %}
+                        <hr>
+                        <h6 class="text-muted">Создать учетную запись</h6>
+
+                        <div class="mb-3">
+                            <label>Email</label>
+                            <input type="email" name="email" class="form-control">
+                        </div>
+
+                        <div class="mb-3">
+                            <label>Пароль</label>
+                            <input type="password" name="password" class="form-control">
+                        </div>
+                        {% endif %}
+
+                        <div class="d-flex justify-content-between pt-3 border-top">
+                            <a href="{{ url_for('teachers_list') }}"
+                               class="btn btn-outline-secondary">
+                                Отмена
+                            </a>
+                            <button type="submit" class="btn btn-primary">
+                                Сохранить
+                            </button>
+                        </div>
+
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

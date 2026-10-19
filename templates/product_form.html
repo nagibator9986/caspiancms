@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if product else 'Добавить' }} товар{% endblock %}
+{% block content %}
+<h1>{{ 'Редактировать' if product else 'Добавить' }} товар</h1>
+<form method="POST" enctype="multipart/form-data">
+    <div class="mb-3">
+        <label class="form-label">Название</label>
+        <input type="text" name="name" class="form-control" value="{{ product.name if product else '' }}" required>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Базовая цена</label>
+        <input type="number" name="price" step="0.01" min="0" class="form-control" value="{{ product.price if product else '' }}" required>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">URL</label>
+        <input type="url" name="url" class="form-control" value="{{ product.url if product else '' }}" placeholder="https://...">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Изображение</label>
+        <input type="file" name="image" class="form-control">
+        {% if product and product.imageUrl %}
+            <div class="mt-2">
+                <img src="{{ product.imageUrl }}" alt="Current image" style="max-width: 220px; max-height: 140px;">
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Фильтры товара (варианты с группировкой) -->
+    <div class="mb-4">
+        <h4>Варианты товара (цвета, размеры и т.д.)</h4>
+        <p class="text-muted">Добавьте типы фильтров и их значения</p>
+        
+        <div id="filters-container">
+            {% if product and product.variants %}
+                {% for filter in product.variants %}
+                <div class="filter-group mb-3 p-3 border rounded bg-light">
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold">Тип фильтра</label>
+                            <input type="text" class="form-control filter-name" 
+                                   placeholder="Например: Цвет, Размер, Материал" 
+                                   value="{{ filter.filterName }}">
+                        </div>
+                    </div>
+
+                    <!-- Варианты для этого фильтра -->
+                    <div class="options-container mb-2">
+                        <label class="form-label fw-bold">Значения:</label>
+                        {% for option in filter.options %}
+                        <div class="option-row mb-2 p-2 border rounded bg-white">
+                            <div class="row">
+                                <div class="col-md-7">
+                                    <input type="text" class="form-control option-name" 
+                                           placeholder="Например: Красный, M, Хлопок" 
+                                           value="{{ option.name }}">
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="number" class="form-control option-price" step="0.01" min="0" 
+                                           placeholder="Цена" value="{{ option.price }}">
+                                </div>
+                                <div class="col-md-2">
+                                    <button type="button" class="btn btn-danger btn-sm w-100 delete-option">Удалить</button>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-10">
+                            <button type="button" class="btn btn-sm btn-info add-option w-100">+ Добавить значение</button>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-sm btn-danger delete-filter w-100">Удалить фильтр</button>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+
+        <button type="button" class="btn btn-secondary mt-2" id="add-filter-btn">+ Добавить фильтр</button>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Сохранить</button>
+</form>
+
+<script>
+// Кнопка добавления нового фильтра
+document.getElementById('add-filter-btn').addEventListener('click', function() {
+    const container = document.getElementById('filters-container');
+    const filterGroup = document.createElement('div');
+    filterGroup.className = 'filter-group mb-3 p-3 border rounded bg-light';
+    filterGroup.innerHTML = `
+        <div class="row mb-3">
+            <div class="col-md-8">
+                <label class="form-label fw-bold">Тип фильтра</label>
+                <input type="text" class="form-control filter-name" 
+                       placeholder="Например: Цвет, Размер, Материал">
+            </div>
+        </div>
+
+        <div class="options-container mb-2">
+            <label class="form-label fw-bold">Значения:</label>
+        </div>
+
+        <div class="row">
+            <div class="col-md-10">
+                <button type="button" class="btn btn-sm btn-info add-option w-100">+ Добавить значение</button>
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-sm btn-danger delete-filter w-100">Удалить фильтр</button>
+            </div>
+        </div>
+    `;
+    container.appendChild(filterGroup);
+    attachFilterListeners();
+});
+
+// Делегирование событий для добавления значений фильтра
+document.addEventListener('click', function(e) {
+    // Добавить значение к фильтру
+    if (e.target.classList.contains('add-option')) {
+        const optionsContainer = e.target.closest('.filter-group').querySelector('.options-container');
+        const optionRow = document.createElement('div');
+        optionRow.className = 'option-row mb-2 p-2 border rounded bg-white';
+        optionRow.innerHTML = `
+            <div class="row">
+                <div class="col-md-7">
+                    <input type="text" class="form-control option-name" 
+                           placeholder="Например: Красный, M, Хлопок">
+                </div>
+                <div class="col-md-3">
+                    <input type="number" class="form-control option-price" step="0.01" min="0" 
+                           placeholder="Цена">
+                </div>
+                <div class="col-md-2">
+                    <button type="button" class="btn btn-danger btn-sm w-100 delete-option">Удалить</button>
+                </div>
+            </div>
+        `;
+        optionsContainer.appendChild(optionRow);
+    }
+
+    // Удалить значение
+    if (e.target.classList.contains('delete-option')) {
+        e.target.closest('.option-row').remove();
+    }
+
+    // Удалить весь фильтр
+    if (e.target.classList.contains('delete-filter')) {
+        e.target.closest('.filter-group').remove();
+    }
+});
+
+function attachFilterListeners() {
+    // Здесь можно добавить дополнительные обработчики если нужно
+}
+
+// Собрать данные перед отправкой формы
+document.querySelector('form').addEventListener('submit', function(e) {
+    const filters = [];
+    
+    document.querySelectorAll('.filter-group').forEach((filterGroup) => {
+        const filterName = filterGroup.querySelector('.filter-name').value.trim();
+        
+        if (!filterName) return;
+        
+        const options = [];
+        filterGroup.querySelectorAll('.option-row').forEach((optionRow) => {
+            const optionName = optionRow.querySelector('.option-name').value.trim();
+            const optionPrice = parseFloat(optionRow.querySelector('.option-price').value) || 0;
+            
+            if (optionName) {
+                options.push({
+                    name: optionName,
+                    price: optionPrice
+                });
+            }
+        });
+        
+        if (options.length > 0) {
+            filters.push({
+                filterName: filterName,
+                options: options
+            });
+        }
+    });
+    
+    // Добавляем скрытое поле с JSON
+    let hiddenInput = document.querySelector('input[name="variants_json"]');
+    if (!hiddenInput) {
+        hiddenInput = document.createElement('input');
+        hiddenInput.type = 'hidden';
+        hiddenInput.name = 'variants_json';
+        this.appendChild(hiddenInput);
+    }
+    hiddenInput.value = JSON.stringify(filters);
+});
+
+// Инициализировать слушателей при загрузке
+attachFilterListeners();
+</script>
+{% endblock %}

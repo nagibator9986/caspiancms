@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}{{ poll.title }} - Опрос{% endblock %}
+
+{% block content %}
+<style>
+    .timer-display {
+        font-size: 3em;
+        font-weight: bold;
+        text-align: center;
+        padding: 30px;
+        border-radius: 15px;
+        margin: 20px 0;
+        font-variant-numeric: tabular-nums;
+    }
+    
+    .timer-active {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    
+    .timer-warning {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+    }
+    
+    .timer-expired {
+        background: #dc3545;
+        color: white;
+    }
+    
+    .timer-label {
+        font-size: 0.6em;
+        opacity: 0.9;
+        margin-top: 10px;
+    }
+    
+    .poll-card {
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        border: none;
+    }
+    
+    .option-item {
+        cursor: pointer;
+        transition: all 0.3s ease;
+        padding: 15px;
+        border-radius: 8px;
+        border: 2px solid #e9ecef;
+        margin-bottom: 10px;
+    }
+    
+    .option-item:hover {
+        border-color: #667eea;
+        background-color: #f8f9ff;
+    }
+    
+    .option-item input[type="radio"]:checked ~ label,
+    .option-item input[type="checkbox"]:checked ~ label {
+        color: #667eea;
+        font-weight: bold;
+    }
+    
+    .option-item input[type="radio"]:checked,
+    .option-item input[type="checkbox"]:checked {
+        accent-color: #667eea;
+    }
+</style>
+
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Информация об опросе -->
+            <div class="card poll-card mb-4 border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h2 class="mb-0">{{ poll.title }}</h2>
+                </div>
+                {% if poll.imageUrl %}
+                <img src="{{ poll.imageUrl }}" alt="Изображение опроса" class="card-img-top" style="height: 250px; object-fit: cover;">
+                {% endif %}
+                <div class="card-body">
+                    <div class="row text-muted mb-3">
+                        <div class="col-md-6">
+                            <small><i class="bi bi-clock"></i>
+                            Завершение:
+                            {% if poll.endTime %}
+                                {% if poll.endTime.strftime %}
+                                    {{ poll.endTime.strftime('%d.%m.%Y %H:%M') }}
+                                {% else %}
+                                    {{ poll.endTime }}
+                                {% endif %}
+                            {% else %}
+                                Не указано
+                            {% endif %}
+                            </small>
+                        </div>
+                        <div class="col-md-6">
+                            <small><i class="bi bi-people"></i> 
+                            {% if poll.target_audience == 'all' %}
+                                Для всех
+                            {% elif poll.target_audience == 'students' %}
+                                Для студентов
+                            {% elif poll.target_audience == 'teachers' %}
+                                Для преподавателей
+                            {% endif %}
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Таймер -->
+            {% if poll.endTime %}
+            <div class="timer-display timer-active" id="timerDisplay">
+                <div id="timerValue">--:--:--</div>
+                <div class="timer-label">до конца опроса</div>
+            </div>
+            {% endif %}
+
+            <!-- Форма голосования -->
+            {% if not user_response %}
+            <form method="POST" action="{{ url_for('poll_submit', poll_id=poll.id) }}" class="card poll-card border-success">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">Выберите вариант</h5>
+                </div>
+                <div class="card-body">
+                    {% if answers|length == 0 %}
+                    <p class="alert alert-warning">Варианты ответов не готовы</p>
+                    {% else %}
+                    
+                    {% if poll.poll_type == 'single' %}
+                    <!-- Радио кнопки (один вариант) -->
+                    <div class="list-group">
+                        {% for answer in answers %}
+                        <div class="option-item">
+                            <input class="form-check-input me-2" type="radio" name="answer" 
+                                   id="answer_{{ answer.id }}" value="{{ answer.id }}" required>
+                            <label class="form-check-label w-100" for="answer_{{ answer.id }}">
+                                <strong>{{ answer.text }}</strong>
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <!-- Чекбоксы (несколько вариантов) -->
+                    <div class="list-group">
+                        {% for answer in answers %}
+                        <div class="option-item">
+                            <input class="form-check-input me-2" type="checkbox" name="answer" 
+                                   id="answer_{{ answer.id }}" value="{{ answer.id }}">
+                            <label class="form-check-label w-100" for="answer_{{ answer.id }}">
+                                <strong>{{ answer.text }}</strong>
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    
+                    {% endif %}
+                </div>
+                <div class="card-footer d-flex gap-2">
+                    <button type="submit" class="btn btn-success btn-lg" style="flex: 1;" id="submitBtn">
+                        <i class="bi bi-check-circle"></i> Проголосовать
+                    </button>
+                    <a href="/dashboard" class="btn btn-secondary btn-lg">
+                        <i class="bi bi-x-circle"></i> Отмена
+                    </a>
+                </div>
+            </form>
+            {% else %}
+            <!-- Уже проголосовал -->
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle"></i>
+                <strong>Вы уже проголосовали!</strong><br>
+                Смотрите <a href="{{ url_for('poll_results', poll_id=poll.id) }}" class="alert-link">результаты опроса</a>
+            </div>
+            <div class="text-center">
+                <a href="{{ url_for('poll_results', poll_id=poll.id) }}" class="btn btn-primary">
+                    <i class="bi bi-graph-up"></i> Смотреть результаты
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+<script>
+    // Таймер обратного отсчета
+    function updateTimer() {
+        const endTimeStr = "{{ poll.endTime.isoformat() if poll.endTime and poll.endTime.isoformat else '' }}";
+        if (!endTimeStr) return;
+
+        const endTime = new Date(endTimeStr.replace('Z', '+00:00'));
+        const timerDisplay = document.getElementById('timerDisplay');
+        const submitBtn = document.getElementById('submitBtn');
+        
+        if (!timerDisplay) return;
+
+        function tick() {
+            const now = new Date();
+            const diff = endTime - now;
+
+            if (diff <= 0) {
+                timerDisplay.textContent = '00:00:00';
+                timerDisplay.className = 'timer-display timer-expired';
+                timerDisplay.innerHTML += '<div class="timer-label">Время вышло</div>';
+                if (submitBtn) submitBtn.disabled = true;
+                return;
+            }
+
+            const hours = Math.floor(diff / 3600000);
+            const minutes = Math.floor((diff % 3600000) / 60000);
+            const seconds = Math.floor((diff % 60000) / 1000);
+
+            const formattedTime = String(hours).padStart(2, '0') + ':' + 
+                                 String(minutes).padStart(2, '0') + ':' + 
+                                 String(seconds).padStart(2, '0');
+            
+            document.getElementById('timerValue').textContent = formattedTime;
+
+            // Меняем цвет при приближении к концу
+            if (diff < 300000) { // менее 5 минут
+                timerDisplay.className = 'timer-display timer-warning';
+            }
+
+            setTimeout(tick, 1000);
+        }
+
+        tick();
+    }
+
+    // Запускаем таймер при загрузке страницы
+    document.addEventListener('DOMContentLoaded', updateTimer);
+</script>
+{% endblock %}

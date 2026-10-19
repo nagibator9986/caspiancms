@@ -1,0 +1,371 @@
+
+{% extends "base.html" %}
+{% block title %}События{% endblock %}
+
+{% block content %}
+<style>
+    .events-page {
+        padding-bottom: 40px;
+    }
+
+    .events-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 22px;
+        flex-wrap: wrap;
+    }
+
+    .events-header h2 {
+        font-size: 25px;
+        font-weight: 500;
+        margin: 0;
+    }
+
+    .events-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .events-table thead {
+        background: #212529;
+        color: white;
+    }
+
+    .events-table th {
+        padding: 15px 10px;
+        font-size: 14px;
+        font-weight: 600;
+        text-align: left;
+    }
+
+    .events-table td {
+        padding: 13px 10px;
+        vertical-align: middle;
+        border-bottom: 1px solid #dee2e6;
+        font-size: 14px;
+    }
+
+    .events-table tbody tr:hover {
+        background: #f8f9fa;
+    }
+
+    .event-image {
+        width: 70px;
+        height: 55px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid #dee2e6;
+        cursor: pointer;
+    }
+
+    .event-no-image {
+        width: 70px;
+        height: 55px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        color: #6c757d;
+        font-size: 11px;
+        background: #f8f9fa;
+    }
+
+    .event-name {
+        font-weight: 600;
+        color: #212529;
+        line-height: 1.5;
+    }
+
+    .event-date {
+        white-space: nowrap;
+        font-weight: 500;
+    }
+
+    .event-actions {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .event-actions .btn {
+        font-size: 12px;
+        white-space: nowrap;
+    }
+
+    .event-actions form {
+        margin: 0;
+    }
+
+    .events-count {
+        margin-top: 15px;
+        color: #6c757d;
+        font-size: 14px;
+    }
+
+    .image-preview {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        z-index: 9999;
+        justify-content: center;
+        align-items: center;
+        padding: 30px;
+        cursor: pointer;
+    }
+
+    .image-preview.active {
+        display: flex;
+    }
+
+    .image-preview img {
+        max-width: 95%;
+        max-height: 90vh;
+        object-fit: contain;
+        border-radius: 8px;
+    }
+
+    .image-preview-close {
+        position: absolute;
+        top: 20px;
+        right: 30px;
+        font-size: 35px;
+        color: white;
+        cursor: pointer;
+        background: none;
+        border: none;
+    }
+
+    @media (max-width: 768px) {
+        .events-header h2 {
+            font-size: 21px;
+        }
+
+        .events-table {
+            min-width: 850px;
+        }
+    }
+</style>
+
+<div class="events-page">
+    <div class="events-header">
+        <h2>Управление событиями</h2>
+
+        <a href="/events/add" class="btn btn-success">
+            + Добавить событие
+        </a>
+    </div>
+
+    <div class="table-responsive">
+        <table class="events-table">
+            <thead>
+                <tr>
+                    <th>Изображение</th>
+                    <th style="width: 42%;">Название</th>
+                    <th>Дата проведения</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+
+            <tbody id="eventsBody">
+                {% for event in events %}
+                <tr
+                    class="event-row"
+                    data-date="{{ event.date | string | e }}"
+                >
+                    <td>
+                        {% if event.imageUrl %}
+                            <img
+                                src="{{ event.imageUrl }}"
+                                alt="{{ event.title }}"
+                                class="event-image"
+                                loading="lazy"
+                                onclick="openImage(this.src)"
+                                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                            >
+                            <div class="event-no-image" style="display: none;">
+                                Нет фото
+                            </div>
+                        {% else %}
+                            <div class="event-no-image">
+                                Нет фото
+                            </div>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        <div class="event-name">
+                            {{ event.title }}
+                        </div>
+                    </td>
+
+                    <td class="event-date">
+                        {{ event.date }}
+                    </td>
+
+                    <td>
+                        <div class="event-actions">
+                            <a
+                                href="/events/edit/{{ event.id }}"
+                                class="btn btn-outline-primary btn-sm"
+                            >
+                                Редактировать
+                            </a>
+
+                            <a
+                                href="/events/registrations/{{ event.id }}"
+                                class="btn btn-outline-info btn-sm"
+                            >
+                                Регистрации
+                            </a>
+
+                            <form
+                                method="POST"
+                                action="/events/delete/{{ event.id }}"
+                                onsubmit="return confirm('Вы уверены, что хотите удалить это событие?');"
+                            >
+                                <button
+                                    type="submit"
+                                    class="btn btn-outline-danger btn-sm"
+                                >
+                                    Удалить
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-4">
+                        Нет событий
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="events-count">
+        Всего событий: {{ events | length }}
+    </div>
+</div>
+
+<div class="image-preview" id="imagePreview" onclick="closeImage()">
+    <button
+        type="button"
+        class="image-preview-close"
+        aria-label="Закрыть"
+        onclick="closeImage()"
+    >
+        &times;
+    </button>
+
+    <img id="previewImage" alt="Изображение события">
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const tbody = document.getElementById("eventsBody");
+
+    const rows = Array.from(
+        tbody.querySelectorAll(".event-row")
+    );
+
+    function parseDate(value) {
+        if (!value) return null;
+
+        value = String(value).trim();
+
+        let year, month, day;
+        let match;
+
+        match = value.match(
+            /^(\d{4})-(\d{1,2})-(\d{1,2})/
+        );
+
+        if (match) {
+            year = Number(match[1]);
+            month = Number(match[2]);
+            day = Number(match[3]);
+        } else {
+            match = value.match(
+                /^(\d{1,2})\.(\d{1,2})\.(\d{4})/
+            );
+
+            if (!match) return null;
+
+            day = Number(match[1]);
+            month = Number(match[2]);
+            year = Number(match[3]);
+        }
+
+        const date = new Date(year, month - 1, day);
+
+        if (
+            date.getFullYear() !== year ||
+            date.getMonth() !== month - 1 ||
+            date.getDate() !== day
+        ) {
+            return null;
+        }
+
+        return date;
+    }
+
+    rows.forEach(row => {
+        const rawDate = row.dataset.date;
+        const parsedDate = parseDate(rawDate);
+        const dateCell = row.querySelector(".event-date");
+
+        if (parsedDate) {
+            dateCell.textContent = [
+                String(parsedDate.getDate()).padStart(2, "0"),
+                String(parsedDate.getMonth() + 1).padStart(2, "0"),
+                parsedDate.getFullYear()
+            ].join(".");
+        } else {
+            dateCell.textContent = rawDate || "Не указана";
+        }
+    });
+
+    rows.sort((a, b) => {
+        const dateA = parseDate(a.dataset.date);
+        const dateB = parseDate(b.dataset.date);
+
+        if (!dateA && !dateB) return 0;
+        if (!dateA) return 1;
+        if (!dateB) return -1;
+
+        return dateA - dateB;
+    });
+
+    rows.forEach(row => tbody.appendChild(row));
+});
+
+function openImage(src) {
+    const preview = document.getElementById("imagePreview");
+    const image = document.getElementById("previewImage");
+
+    image.src = src;
+    preview.classList.add("active");
+}
+
+function closeImage() {
+    const preview = document.getElementById("imagePreview");
+    const image = document.getElementById("previewImage");
+
+    preview.classList.remove("active");
+    image.removeAttribute("src");
+}
+
+document.addEventListener("keydown", function(event) {
+    if (event.key === "Escape") {
+        closeImage();
+    }
+});
+</script>
+{% endblock %}

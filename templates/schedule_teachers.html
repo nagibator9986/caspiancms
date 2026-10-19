@@ -1,0 +1,1048 @@
+{% extends "base.html" %}
+
+{% block title %}Расписание преподавателей{% endblock %}
+
+{% block head %}
+<style>
+    .schedule-page {
+        padding-bottom: 40px;
+    }
+
+    /* Header */
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 2px solid #e5e7eb;
+    }
+
+    .page-header h1 {
+        font-size: 24px;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 0;
+    }
+
+    .header-badges {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 8px;
+    }
+
+    .week-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 13px;
+    }
+
+    .week-badge.numerator {
+        background: #dbeafe;
+        color: #1d4ed8;
+        border: 1px solid #93c5fd;
+    }
+
+    .week-badge.denominator {
+        background: #fef3c7;
+        color: #d97706;
+        border: 1px solid #fcd34d;
+    }
+
+    .stat-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 12px;
+        background: #f3f4f6;
+        border-radius: 6px;
+        font-size: 12px;
+        color: #6b7280;
+    }
+
+    .stat-badge strong {
+        color: #7c3aed;
+    }
+
+    .stat-badge.teacher-color strong {
+        color: #059669;
+    }
+
+    /* Filter Panel */
+    .filter-panel {
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 15px rgba(5, 150, 105, 0.2);
+    }
+
+    .filter-panel-title {
+        color: white;
+        font-weight: 600;
+        margin-bottom: 16px;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .filter-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: flex-end;
+    }
+
+    .filter-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .filter-group label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: rgba(255,255,255,0.9);
+        font-weight: 600;
+    }
+
+    .filter-group select,
+    .filter-group input {
+        padding: 10px 14px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 8px;
+        font-size: 13px;
+        min-width: 200px;
+        background: rgba(255,255,255,0.95);
+        color: #1f2937;
+        transition: all 0.2s;
+    }
+
+    .filter-group select:focus,
+    .filter-group input:focus {
+        outline: none;
+        border-color: white;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.2);
+    }
+
+    /* Legend */
+    .legend {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        background: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #6b7280;
+    }
+
+    .legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        border: 2px solid;
+    }
+
+    .legend-color.numerator {
+        background: #dbeafe;
+        border-color: #3b82f6;
+    }
+
+    .legend-color.denominator {
+        background: #fef3c7;
+        border-color: #f59e0b;
+    }
+
+    .legend-color.always {
+        background: #d1fae5;
+        border-color: #10b981;
+    }
+
+    /* Teacher Cards View */
+    .teachers-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: 20px;
+    }
+
+    .teacher-card {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        border: 1px solid #e5e7eb;
+        transition: all 0.2s;
+    }
+
+    .teacher-card:hover {
+        box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+        transform: translateY(-2px);
+    }
+
+    .teacher-card-header {
+        background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+        color: white;
+        padding: 16px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .teacher-name {
+        font-weight: 700;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .teacher-name .avatar {
+        width: 36px;
+        height: 36px;
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 14px;
+    }
+
+    .teacher-stats {
+        display: flex;
+        gap: 12px;
+    }
+
+    .teacher-stat {
+        text-align: center;
+        padding: 4px 10px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 6px;
+    }
+
+    .teacher-stat-value {
+        font-weight: 700;
+        font-size: 16px;
+    }
+
+    .teacher-stat-label {
+        font-size: 10px;
+        opacity: 0.8;
+        text-transform: uppercase;
+    }
+
+    .teacher-card-body {
+        padding: 0;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    /* Day sections in teacher card */
+    .day-section {
+        border-bottom: 1px solid #f3f4f6;
+    }
+
+    .day-section:last-child {
+        border-bottom: none;
+    }
+
+    .day-header {
+        background: #f9fafb;
+        padding: 10px 16px;
+        font-weight: 600;
+        font-size: 13px;
+        color: #374151;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-left: 4px solid #6366f1;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+
+    .day-header.today {
+        background: #eef2ff;
+        border-left-color: #4f46e5;
+        color: #4f46e5;
+    }
+
+    .day-lessons-count {
+        background: #e5e7eb;
+        color: #4b5563;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+
+    .day-header.today .day-lessons-count {
+        background: #c7d2fe;
+        color: #4338ca;
+    }
+
+    /* Lessons list */
+    .lessons-list {
+        padding: 8px 12px;
+    }
+
+    .lesson-item {
+        padding: 12px 14px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border-left: 4px solid;
+        font-size: 13px;
+        transition: all 0.15s;
+    }
+
+    .lesson-item:last-child {
+        margin-bottom: 0;
+    }
+
+    .lesson-item:hover {
+        transform: translateX(3px);
+    }
+
+    .lesson-item.always {
+        background: #ecfdf5;
+        border-color: #10b981;
+    }
+
+    .lesson-item.numerator {
+        background: #eff6ff;
+        border-color: #3b82f6;
+    }
+
+    .lesson-item.denominator {
+        background: #fffbeb;
+        border-color: #f59e0b;
+    }
+
+    .lesson-item.current-week {
+        box-shadow: inset 0 0 0 2px currentColor;
+    }
+
+    .lesson-time {
+        font-size: 11px;
+        font-weight: 700;
+        color: #6b7280;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .lesson-time .week-mark {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+
+    .lesson-time .week-mark.num {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .lesson-time .week-mark.den {
+        background: #fef3c7;
+        color: #d97706;
+    }
+
+    .lesson-subject {
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 4px;
+        line-height: 1.3;
+    }
+
+    .lesson-meta {
+        font-size: 11px;
+        color: #6b7280;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .lesson-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .lesson-meta-item i {
+        font-size: 12px;
+        opacity: 0.7;
+    }
+
+    .group-badge {
+        background: #e0e7ff;
+        color: #4338ca;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 11px;
+    }
+
+    /* Table View */
+    .table-container {
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .table-scroll {
+        overflow-x: auto;
+        max-height: calc(100vh - 320px);
+        overflow-y: auto;
+    }
+
+    .schedule-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 1000px;
+    }
+
+    .schedule-table thead {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+    }
+
+    .schedule-table th {
+        background: #059669;
+        color: #fff;
+        padding: 14px 12px;
+        text-align: left;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+    }
+
+    .schedule-table th.sticky-col {
+        position: sticky;
+        left: 0;
+        z-index: 25;
+        background: #047857;
+    }
+
+    .schedule-table th.day-header-cell {
+        text-align: center;
+        min-width: 160px;
+    }
+
+    .schedule-table th.day-header-cell.today {
+        background: #4f46e5;
+    }
+
+    .schedule-table tbody tr {
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    .schedule-table tbody tr:hover {
+        background: #f0fdf4;
+    }
+
+    .schedule-table tbody tr:nth-child(even) {
+        background: #fafafa;
+    }
+
+    .schedule-table tbody tr:nth-child(even):hover {
+        background: #ecfdf5;
+    }
+
+    .schedule-table td {
+        padding: 10px 12px;
+        vertical-align: top;
+        font-size: 13px;
+        border-right: 1px solid #f3f4f6;
+    }
+
+    .schedule-table td.sticky-col {
+        position: sticky;
+        left: 0;
+        z-index: 10;
+        background: #fff;
+        border-right: 2px solid #e5e7eb;
+        font-weight: 600;
+    }
+
+    .schedule-table tbody tr:nth-child(even) td.sticky-col {
+        background: #fafafa;
+    }
+
+    .schedule-table tbody tr:hover td.sticky-col {
+        background: #ecfdf5;
+    }
+
+    .teacher-cell {
+        min-width: 200px;
+    }
+
+    .teacher-cell-name {
+        font-weight: 700;
+        font-size: 14px;
+        color: #059669;
+        margin-bottom: 2px;
+    }
+
+    .teacher-cell-count {
+        font-size: 11px;
+        color: #9ca3af;
+        font-weight: 400;
+    }
+
+    .day-cell {
+        min-width: 160px;
+    }
+
+    .no-lessons {
+        color: #d1d5db;
+        font-size: 12px;
+        text-align: center;
+        padding: 8px;
+    }
+
+    /* View Toggle */
+    .view-toggle {
+        display: flex;
+        background: #f3f4f6;
+        border-radius: 8px;
+        padding: 4px;
+        gap: 4px;
+    }
+
+    .view-toggle-btn {
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #6b7280;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .view-toggle-btn:hover {
+        color: #374151;
+    }
+
+    .view-toggle-btn.active {
+        background: white;
+        color: #059669;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+
+    .empty-state i {
+        font-size: 48px;
+        color: #d1d5db;
+        margin-bottom: 16px;
+    }
+
+    .empty-state h3 {
+        font-size: 18px;
+        color: #6b7280;
+        margin-bottom: 8px;
+    }
+
+    .empty-state p {
+        color: #9ca3af;
+    }
+
+    /* Export Dropdown */
+    .export-dropdown .dropdown-menu {
+        min-width: 180px;
+    }
+
+    .export-dropdown .dropdown-item i {
+        width: 20px;
+    }
+
+    /* Print */
+    @media print {
+        .filter-panel, .page-header .btn, .export-dropdown, .view-toggle {
+            display: none !important;
+        }
+
+        .teachers-grid {
+            display: block;
+        }
+
+        .teacher-card {
+            break-inside: avoid;
+            margin-bottom: 20px;
+        }
+
+        .teacher-card-body {
+            max-height: none;
+        }
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .page-header {
+            flex-direction: column;
+        }
+
+        .filter-grid {
+            flex-direction: column;
+        }
+
+        .filter-group {
+            width: 100%;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            width: 100%;
+        }
+
+        .teachers-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="schedule-page">
+    <!-- Header -->
+    <div class="page-header">
+        <div>
+            <h1>👨‍🏫 Расписание преподавателей</h1>
+            <div class="header-badges">
+                <span class="week-badge {{ 'numerator' if is_even_week else 'denominator' }}">
+                    <i class="bi bi-clock"></i>
+                    Сейчас: {{ 'ЧИСЛИТЕЛЬ' if is_even_week else 'ЗНАМЕНАТЕЛЬ' }}
+                </span>
+                <span class="stat-badge teacher-color">
+                    <strong>{{ teachers_count }}</strong> преподавателей
+                </span>
+                <span class="stat-badge">
+                    <strong>{{ total_lessons }}</strong> занятий
+                </span>
+                <span class="stat-badge">
+                    <i class="bi bi-arrow-repeat"></i> {{ update_time }}
+                </span>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <!-- View Toggle -->
+            <div class="view-toggle">
+                <button class="view-toggle-btn {{ 'active' if view_mode != 'table' }}" onclick="setViewMode('cards')">
+                    <i class="bi bi-grid-3x3-gap"></i> Карточки
+                </button>
+                <button class="view-toggle-btn {{ 'active' if view_mode == 'table' }}" onclick="setViewMode('table')">
+                    <i class="bi bi-table"></i> Таблица
+                </button>
+            </div>
+
+            <!-- Export Dropdown -->
+            <div class="dropdown export-dropdown">
+                <button class="btn btn-success dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i class="bi bi-download me-1"></i> Экспорт
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('schedule_teachers_export', format='xlsx') }}">
+                            <i class="bi bi-file-earmark-excel text-success"></i> Excel (.xlsx)
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="{{ url_for('schedule_teachers_export', format='csv') }}">
+                            <i class="bi bi-filetype-csv text-primary"></i> CSV (.csv)
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item" href="javascript:window.print()">
+                            <i class="bi bi-printer"></i> Печать
+                        </a>
+                    </li>
+                </ul>
+            </div>
+
+            <a href="{{ url_for('schedule') }}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-1"></i> Назад
+            </a>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-panel">
+        <div class="filter-panel-title">
+            <i class="bi bi-funnel"></i> Фильтры
+        </div>
+        <div class="filter-grid">
+            <div class="filter-group">
+                <label>Преподаватель</label>
+                <select id="filterTeacher" onchange="applyFilters()">
+                    <option value="">Все преподаватели</option>
+                    {% for tid, tname in all_teachers.items() %}
+                    <option value="{{ tid }}" {{ 'selected' if request.args.get('teacher') == tid }}>{{ tname }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>День недели</label>
+                <select id="filterDay" onchange="applyFilters()">
+                    <option value="">Все дни</option>
+                    {% for idx, day in enumerate(day_names) %}
+                    <option value="{{ idx }}" {{ 'selected' if request.args.get('day') == (idx|string) }}>{{ day }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>Тип недели</label>
+                <select id="filterWeekType" onchange="applyFilters()">
+                    <option value="">Показать всё</option>
+                    <option value="current" {{ 'selected' if request.args.get('week_type') == 'current' }}>Только текущая</option>
+                    <option value="numerator" {{ 'selected' if request.args.get('week_type') == 'numerator' }}>Только числитель</option>
+                    <option value="denominator" {{ 'selected' if request.args.get('week_type') == 'denominator' }}>Только знаменатель</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>Поиск</label>
+                <input type="text" id="searchInput" placeholder="Имя, предмет, группа..." oninput="filterContent()">
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+        <div class="legend-item">
+            <div class="legend-color always"></div>
+            <span>Всегда</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color numerator"></div>
+            <span>Числитель</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color denominator"></div>
+            <span>Знаменатель</span>
+        </div>
+        <div class="legend-item ms-auto">
+            {% if is_even_week %}
+            <strong class="text-primary">▶ Сейчас идёт ЧИСЛИТЕЛЬ</strong>
+            {% else %}
+            <strong style="color: #d97706;">▶ Сейчас идёт ЗНАМЕНАТЕЛЬ</strong>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if teachers_data %}
+        <!-- Cards View -->
+        <div id="cardsView" class="{{ 'd-none' if view_mode == 'table' else '' }}">
+            <div class="teachers-grid">
+                {% for teacher_id, teacher_info in teachers_data.items() %}
+                <div class="teacher-card" data-teacher="{{ teacher_info.name|lower }}" data-teacher-id="{{ teacher_id }}">
+                    <div class="teacher-card-header">
+                        <div class="teacher-name">
+                            <span class="avatar">{{ teacher_info.name[:1] }}</span>
+                            {{ teacher_info.name }}
+                        </div>
+                        <div class="teacher-stats">
+                            <div class="teacher-stat">
+                                <div class="teacher-stat-value">{{ teacher_info.total_lessons }}</div>
+                                <div class="teacher-stat-label">Пар</div>
+                            </div>
+                            <div class="teacher-stat">
+                                <div class="teacher-stat-value">{{ teacher_info.groups|length }}</div>
+                                <div class="teacher-stat-label">Групп</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="teacher-card-body">
+                        {% for day_idx in range(6) %}
+                            {% set day_lessons = teacher_info.days.get(day_idx, []) %}
+                            {% if day_lessons %}
+                            <div class="day-section">
+                                <div class="day-header {{ 'today' if day_idx == today_index }}">
+                                    {{ day_names[day_idx] }}
+                                    {% if day_idx == today_index %}<small>(сегодня)</small>{% endif %}
+                                    <span class="day-lessons-count">{{ day_lessons|length }}</span>
+                                </div>
+                                <div class="lessons-list">
+                                    {% for lesson in day_lessons|sort(attribute='time') %}
+                                    {% set week_type = lesson.week_type|default('always') %}
+                                    {% set is_current = (week_type == 'always') or (is_even_week and week_type == 'numerator') or (not is_even_week and week_type == 'denominator') %}
+                                    <div class="lesson-item {{ week_type }} {{ 'current-week' if is_current }}"
+                                         data-subject="{{ lesson.subject|lower }}"
+                                         data-group="{{ lesson.groupId|lower }}"
+                                         data-week-type="{{ week_type }}">
+                                        <div class="lesson-time">
+                                            {{ lesson.time }}
+                                            {% if week_type != 'always' %}
+                                            <span class="week-mark {{ 'num' if week_type == 'numerator' else 'den' }}">
+                                                {{ 'Ч' if week_type == 'numerator' else 'З' }}
+                                            </span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="lesson-subject">{{ lesson.subject }}</div>
+                                        <div class="lesson-meta">
+                                            <span class="lesson-meta-item">
+                                                <span class="group-badge">{{ lesson.groupId }}</span>
+                                            </span>
+                                            {% if lesson.room %}
+                                            <span class="lesson-meta-item">
+                                                <i class="bi bi-geo-alt"></i> {{ lesson.room }}
+                                            </span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Table View -->
+        <div id="tableView" class="{{ '' if view_mode == 'table' else 'd-none' }}">
+            <div class="table-container">
+                <div class="table-scroll">
+                    <table class="schedule-table">
+                        <thead>
+                            <tr>
+                                <th class="sticky-col">Преподаватель</th>
+                                {% for day in day_names %}
+                                <th class="day-header-cell {{ 'today' if loop.index0 == today_index }}">
+                                    {{ day }}
+                                    {% if loop.index0 == today_index %}
+                                    <br><small style="font-weight: 400; opacity: 0.7;">сегодня</small>
+                                    {% endif %}
+                                </th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for teacher_id, teacher_info in teachers_data.items() %}
+                            <tr class="teacher-row" data-teacher="{{ teacher_info.name|lower }}" data-teacher-id="{{ teacher_id }}">
+                                <td class="sticky-col teacher-cell">
+                                    <div class="teacher-cell-name">{{ teacher_info.name }}</div>
+                                    <div class="teacher-cell-count">{{ teacher_info.total_lessons }} пар · {{ teacher_info.groups|length }} групп</div>
+                                </td>
+                                {% for day_idx in range(6) %}
+                                <td class="day-cell">
+                                    {% set day_lessons = teacher_info.days.get(day_idx, []) %}
+                                    {% if day_lessons %}
+                                        {% for lesson in day_lessons|sort(attribute='time') %}
+                                        {% set week_type = lesson.week_type|default('always') %}
+                                        {% set is_current = (week_type == 'always') or (is_even_week and week_type == 'numerator') or (not is_even_week and week_type == 'denominator') %}
+                                        <div class="lesson-item {{ week_type }} {{ 'current-week' if is_current }}"
+                                             data-subject="{{ lesson.subject|lower }}"
+                                             data-group="{{ lesson.groupId|lower }}"
+                                             data-week-type="{{ week_type }}">
+                                            <div class="lesson-time">
+                                                {{ lesson.time }}
+                                                {% if week_type != 'always' %}
+                                                <span class="week-mark {{ 'num' if week_type == 'numerator' else 'den' }}">
+                                                    {{ 'Ч' if week_type == 'numerator' else 'З' }}
+                                                </span>
+                                                {% endif %}
+                                            </div>
+                                            <div class="lesson-subject">{{ lesson.subject }}</div>
+                                            <div class="lesson-meta">
+                                                <span class="group-badge">{{ lesson.groupId }}</span>
+                                                {% if lesson.room %} · {{ lesson.room }}{% endif %}
+                                            </div>
+                                        </div>
+                                        {% endfor %}
+                                    {% else %}
+                                        <div class="no-lessons">—</div>
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <i class="bi bi-person-x"></i>
+            <h3>Расписание не найдено</h3>
+            <p>Нет занятий, назначенных преподавателям, или преподаватели не указаны в расписании</p>
+            <a href="{{ url_for('schedule') }}" class="btn btn-primary mt-3">
+                <i class="bi bi-arrow-left me-1"></i> К расписанию групп
+            </a>
+        </div>
+    {% endif %}
+</div>
+
+<script>
+// View mode toggle
+function setViewMode(mode) {
+    const cardsView = document.getElementById('cardsView');
+    const tableView = document.getElementById('tableView');
+    const buttons = document.querySelectorAll('.view-toggle-btn');
+    
+    if (mode === 'table') {
+        cardsView.classList.add('d-none');
+        tableView.classList.remove('d-none');
+        buttons[0].classList.remove('active');
+        buttons[1].classList.add('active');
+    } else {
+        cardsView.classList.remove('d-none');
+        tableView.classList.add('d-none');
+        buttons[0].classList.add('active');
+        buttons[1].classList.remove('active');
+    }
+    
+    localStorage.setItem('teacherScheduleViewMode', mode);
+}
+
+// Apply filters
+function applyFilters() {
+    const teacher = document.getElementById('filterTeacher').value;
+    const day = document.getElementById('filterDay').value;
+    const weekType = document.getElementById('filterWeekType').value;
+    
+    const params = new URLSearchParams();
+    
+    if (teacher) params.set('teacher', teacher);
+    if (day) params.set('day', day);
+    if (weekType) params.set('week_type', weekType);
+    
+    // Preserve view mode
+    const viewMode = localStorage.getItem('teacherScheduleViewMode');
+    if (viewMode) params.set('view', viewMode);
+    
+    window.location.search = params.toString();
+}
+
+// Client-side search
+function filterContent() {
+    const searchText = document.getElementById('searchInput').value.toLowerCase().trim();
+    
+    // Filter cards
+    document.querySelectorAll('.teacher-card').forEach(card => {
+        const teacherName = card.dataset.teacher || '';
+        const lessons = card.querySelectorAll('.lesson-item');
+        let hasMatch = teacherName.includes(searchText);
+        
+        lessons.forEach(lesson => {
+            const subject = lesson.dataset.subject || '';
+            const group = lesson.dataset.group || '';
+            
+            if (searchText) {
+                if (subject.includes(searchText) || group.includes(searchText) || teacherName.includes(searchText)) {
+                    lesson.style.display = '';
+                    hasMatch = true;
+                } else {
+                    lesson.style.display = 'none';
+                }
+            } else {
+                lesson.style.display = '';
+            }
+        });
+        
+        card.style.display = hasMatch ? '' : 'none';
+    });
+    
+    // Filter table rows
+    document.querySelectorAll('.teacher-row').forEach(row => {
+        const teacherName = row.dataset.teacher || '';
+        const lessons = row.querySelectorAll('.lesson-item');
+        let hasMatch = teacherName.includes(searchText);
+        
+        lessons.forEach(lesson => {
+            const subject = lesson.dataset.subject || '';
+            const group = lesson.dataset.group || '';
+            
+            if (searchText) {
+                if (subject.includes(searchText) || group.includes(searchText) || teacherName.includes(searchText)) {
+                    lesson.style.display = '';
+                    hasMatch = true;
+                } else {
+                    lesson.style.display = 'none';
+                }
+            } else {
+                lesson.style.display = '';
+            }
+        });
+        
+        row.style.display = hasMatch ? '' : 'none';
+    });
+}
+
+// Week type filter (client-side enhancement)
+document.addEventListener('DOMContentLoaded', function() {
+    // Restore view mode
+    const savedViewMode = localStorage.getItem('teacherScheduleViewMode');
+    const urlViewMode = new URLSearchParams(window.location.search).get('view');
+    const viewMode = urlViewMode || savedViewMode || 'cards';
+    setViewMode(viewMode);
+    
+    // Apply week type filter
+    const weekTypeFilter = document.getElementById('filterWeekType');
+    if (weekTypeFilter && weekTypeFilter.value) {
+        const filterValue = weekTypeFilter.value;
+        
+        document.querySelectorAll('.lesson-item').forEach(item => {
+            const type = item.dataset.weekType;
+            let show = true;
+            
+            if (filterValue === 'current') {
+                show = item.classList.contains('current-week');
+            } else if (filterValue === 'numerator') {
+                show = (type === 'numerator' || type === 'always');
+            } else if (filterValue === 'denominator') {
+                show = (type === 'denominator' || type === 'always');
+            }
+            
+            item.style.display = show ? '' : 'none';
+        });
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Активные опросники{% endblock %}
+
+{% block content %}
+<style>
+    .poll-card {
+        background: white;
+        border-radius: 15px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+        border: 2px solid transparent;
+    }
+    
+    .poll-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        border-color: #667eea;
+    }
+    
+    .poll-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        min-height: 100px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    
+    .poll-title {
+        font-size: 1.3em;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    
+    .poll-description {
+        font-size: 0.9em;
+        opacity: 0.95;
+    }
+    
+    .poll-body {
+        padding: 20px;
+    }
+    
+    .poll-stats {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 15px;
+        font-size: 0.9em;
+        color: #6c757d;
+    }
+    
+    .stat-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    
+    .poll-footer {
+        padding: 15px 20px;
+        background: #f8f9fa;
+        border-top: 1px solid #e9ecef;
+        text-align: center;
+    }
+    
+    .vote-link {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 10px 30px;
+        border-radius: 8px;
+        text-decoration: none;
+        display: inline-block;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    
+    .vote-link:hover {
+        transform: scale(1.05);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        text-decoration: none;
+        color: white;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+    }
+    
+    .empty-icon {
+        font-size: 4em;
+        color: #dee2e6;
+        margin-bottom: 20px;
+    }
+</style>
+
+<div class="container-lg py-5">
+    <div class="mb-5">
+        <h1 class="mb-2"><i class="bi bi-chat-dots"></i> Активные опросники</h1>
+        <p class="text-muted">Участвуйте в опросах и помогайте нам узнать ваше мнение</p>
+    </div>
+
+    {% if polls|length == 0 %}
+    <div class="card empty-state border-0" style="background: #f8f9fa;">
+        <div class="card-body">
+            <div class="empty-icon">
+                <i class="bi bi-inbox"></i>
+            </div>
+            <h4 class="text-muted">Нет активных опросников</h4>
+            <p class="text-muted mb-0">Сейчас нет открытых для голосования опросников. Проверьте позже!</p>
+        </div>
+    </div>
+    {% else %}
+    <div class="row g-4">
+        {% for poll in polls %}
+        <div class="col-md-6 col-lg-4">
+            <div class="poll-card">
+                {% if poll.imageUrl %}
+                <div style="height: 180px; overflow: hidden; background: #f0f0f0;">
+                    <img src="{{ poll.imageUrl }}" alt="{{ poll.title }}" style="width: 100%; height: 100%; object-fit: cover;">
+                </div>
+                {% endif %}
+                <div class="poll-header">
+                    <div class="poll-title">{{ poll.title }}</div>
+                </div>
+                
+                <div class="poll-body">
+                    <div class="poll-stats">
+                        <div class="stat-item">
+                            <i class="bi bi-chat-dots"></i>
+                            <span>{{ poll.total_votes }} голос{{ 'ов' if poll.total_votes % 10 == 0 or poll.total_votes % 10 >= 5 else ('а' if poll.total_votes % 10 > 1 else '') }}</span>
+                        </div>
+                        <div class="stat-item">
+                            <i class="bi bi-clock"></i>
+                            <span>
+                                {% if poll.endTime %}
+                                    {% if poll.endTime.strftime %}
+                                        {{ poll.endTime.strftime('%H:%M') }}
+                                    {% else %}
+                                        --:--
+                                    {% endif %}
+                                {% else %}
+                                    ∞
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    {% if poll.target_audience != 'all' %}
+                    <div class="mb-3">
+                        {% if poll.target_audience == 'students' %}
+                        <span class="badge bg-primary">Для студентов</span>
+                        {% elif poll.target_audience == 'teachers' %}
+                        <span class="badge bg-warning text-dark">Для преподавателей</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div class="poll-footer">
+                    <a href="{{ url_for('poll_vote', poll_id=poll.id) }}" class="vote-link">
+                        <i class="bi bi-check-circle me-2"></i>Проголосовать
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+{% endblock %}

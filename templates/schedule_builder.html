@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+    <form method="POST" id="scheduleForm">
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-primary text-white py-3 d-flex justify-content-between align-items-center">
+                <h4 class="mb-0">Конструктор расписания</h4>
+                <div class="col-md-4">
+                    <select name="groupId" class="form-select" required>
+                        <option value="" disabled {{ 'selected' if not preselected_group }}>Выберите группу...</option>
+                        {% for group in available_groups %}
+                            <option value="{{ group }}" {% if group == preselected_group %}selected{% endif %}>{{ group }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            
+            <div class="card-body p-4" id="daysContainer">
+                <div class="day-block border rounded p-3 mb-4 bg-light position-relative shadow-sm">
+                    <button type="button" class="btn-close position-absolute top-0 end-0 m-2 remove-day" style="display:none;"></button>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">День недели</label>
+                            <select name="day_of_week" class="form-select border-primary day-selector" required>
+                                <option value="0">Понедельник</option>
+                                <option value="1">Вторник</option>
+                                <option value="2">Среда</option>
+                                <option value="3">Четверг</option>
+                                <option value="4">Пятница</option>
+                                <option value="5">Суббота</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="lessons-list">
+                        <div class="lesson-row row g-2 mb-2 pb-2 border-bottom align-items-end">
+                            <input type="hidden" name="lesson_day_rel" value="0" class="day-rel-input">
+                            
+                            <div class="col-md-3">
+                                <label class="small text-muted fw-bold">Время звонков</label>
+                                <select name="time" class="form-select time-select" required>
+                                    </select>
+                            </div>
+
+                            <div class="col-md-3">
+                                <label class="small text-muted fw-bold">Преподаватель</label>
+                                <select name="teacher" class="form-select" required>
+                                    <option value="" selected disabled>Выбор...</option>
+                                    {% for teacher_id, teacher_name in available_teachers.items() %}
+                                        <option value="{{ teacher_id }}">{{ teacher_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <div class="col-md-3">
+                                <label class="small text-muted fw-bold">Дисциплина</label>
+                                <select name="subject" class="form-select" required>
+                                    <option value="" selected disabled>Выбор предмета...</option>
+                                    {% for sname in available_subjects %}
+                                        <option value="{{ sname }}">{{ sname }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <div class="col-md-1">
+                                <label class="small text-muted fw-bold">Каб.</label>
+                                <input type="text" name="room" class="form-control" placeholder="101">
+                            </div>
+
+                            <div class="col-md-1">
+                                <label class="small text-muted fw-bold">Неделя</label>
+                                <select name="week_type" class="form-select px-1">
+                                    <option value="always">Всегда</option>
+                                    <option value="numerator">Числ.</option>
+                                    <option value="denominator">Знам.</option>
+                                </select>
+                            </div>
+                            
+                            <div class="col-md-1 text-end">
+                                <button type="button" class="btn btn-outline-danger btn-sm border-0" onclick="removeLesson(this)">✕</button>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-link text-decoration-none p-0 mt-2 add-lesson-btn" onclick="addLesson(this)">
+                        + Добавить занятие
+                    </button>
+                </div>
+            </div>
+
+            <div class="card-footer bg-white py-3 border-top">
+                <button type="button" class="btn btn-outline-success" onclick="addDay()">+ Добавить день</button>
+                <div class="float-end">
+                    <a href="/schedule" class="btn btn-light me-2">Отмена</a>
+                    <button type="submit" class="btn btn-primary px-5 shadow">Сохранить всё</button>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+// Данные о звонках из Python
+const callSchedule = {{ call_schedule|tojson }};
+
+// Функция обновления выпадающего списка времени
+function updateTimeOptions(dayBlock) {
+    const dayValue = dayBlock.querySelector('.day-selector').value;
+    const timeSelects = dayBlock.querySelectorAll('.time-select');
+    
+    // "0" — Понедельник
+    const scheduleKey = (dayValue === "0") ? "monday" : "other";
+    const options = callSchedule[scheduleKey];
+
+    timeSelects.forEach(select => {
+        const previousValue = select.value;
+        select.innerHTML = '<option value="" disabled selected>Выберите время...</option>';
+        
+        options.forEach(timeStr => {
+            const opt = document.createElement('option');
+            opt.value = timeStr;
+            opt.textContent = timeStr;
+            if(timeStr === previousValue) opt.selected = true;
+            select.appendChild(opt);
+        });
+    });
+}
+
+// Переиндексация и настройка кнопок
+function reindex() {
+    const blocks = document.querySelectorAll('.day-block');
+    blocks.forEach((block, dIndex) => {
+        block.querySelectorAll('.day-rel-input').forEach(input => { 
+            input.value = dIndex; 
+        });
+        
+        // Обновляем звонки для этого дня
+        updateTimeOptions(block);
+
+        const removeBtn = block.querySelector('.remove-day');
+        removeBtn.style.display = blocks.length > 1 ? 'block' : 'none';
+    });
+}
+
+// Добавить занятие
+function addLesson(btn) {
+    const dayBlock = btn.closest('.day-block');
+    const list = dayBlock.querySelector('.lessons-list');
+    const newRow = list.querySelector('.lesson-row').cloneNode(true);
+    
+    // Очистка полей
+    newRow.querySelectorAll('input').forEach(i => { if(i.type !== 'hidden') i.value = ''; });
+    newRow.querySelectorAll('select').forEach(s => s.selectedIndex = 0);
+    
+    list.appendChild(newRow);
+    updateTimeOptions(dayBlock); // Обновляем время в новой строке
+    reindex();
+}
+
+// Удалить занятие
+function removeLesson(btn) {
+    const list = btn.closest('.lessons-list');
+    if (list.querySelectorAll('.lesson-row').length > 1) {
+        btn.closest('.lesson-row').remove();
+    } else {
+        alert("В дне должно быть минимум одно занятие");
+    }
+}
+
+// Добавить день
+function addDay() {
+    const container = document.getElementById('daysContainer');
+    const firstDay = document.querySelector('.day-block');
+    const newDay = firstDay.cloneNode(true);
+    
+    // Сброс данных
+    newDay.querySelectorAll('input:not([type="hidden"])').forEach(i => i.value = '');
+    newDay.querySelectorAll('select').forEach(s => s.selectedIndex = 0);
+    
+    const list = newDay.querySelector('.lessons-list');
+    while (list.children.length > 1) { list.removeChild(list.lastChild); }
+    
+    container.appendChild(newDay);
+    reindex();
+}
+
+// Слушатель изменения дня недели
+document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('day-selector')) {
+        updateTimeOptions(e.target.closest('.day-block'));
+    }
+});
+
+// Слушатель удаления дня
+document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-day')) {
+        if(confirm('Удалить этот день?')) {
+            e.target.closest('.day-block').remove();
+            reindex();
+        }
+    }
+});
+
+// Инициализация при загрузке
+reindex();
+</script>
+{% endblock %}

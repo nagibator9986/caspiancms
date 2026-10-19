@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if club else 'Добавить' }} клуб{% endblock %}
+{% block content %}
+<h1>{{ 'Редактировать' if club else 'Добавить' }} клуб</h1>
+<form method="POST" enctype="multipart/form-data">
+    <div class="mb-3">
+        <label class="form-label">Название</label>
+        <input type="text" name="title" class="form-control" value="{{ club.title if club else '' }}" required>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Описание</label>
+        <textarea name="description" class="form-control">{{ club.description if club else '' }}</textarea>
+    </div>
+  <div class="mb-3">
+    <label class="form-label">Категория</label>
+    <select name="category" class="form-select" required>
+        <option value="" disabled {{ 'selected' if not club else '' }}>Выберите категорию</option>
+        
+        <option value="physical" {{ 'selected' if club and club.category == 'physical' else '' }}>
+            Физкультура
+        </option>
+        <option value="creative" {{ 'selected' if club and club.category == 'creative' else '' }}>
+            Творчество
+        </option>
+        <option value="tech" {{ 'selected' if club and club.category == 'tech' else '' }}>
+            Технологии
+        </option>
+        <option value="community" {{ 'selected' if club and club.category == 'community' else '' }}>
+            Сообщество
+        </option>
+    </select>
+</div>
+    <div class="mb-3">
+        <label class="form-label">Время встречи</label>
+        <input type="text" name="meetingTime" class="form-control" value="{{ club.meetingTime if club else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Местоположение</label>
+        <input type="text" name="location" class="form-control" value="{{ club.location if club else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Куратор</label>
+        <input type="text" name="curator" class="form-control" value="{{ club.curator if club else '' }}">
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Изображение</label>
+        <input type="file" name="image" class="form-control">
+        {% if club.imageUrl %}
+            <img src="{{ club.imageUrl }}" alt="Current image" style="max-width: 200px; margin-top: 10px;">
+        {% endif %}
+    </div>
+    <button type="submit" class="btn btn-primary">Сохранить</button>
+</form>
+{% endblock %}

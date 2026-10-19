@@ -1,0 +1,1101 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+    /* ==================== ОСНОВНЫЕ ПЕРЕМЕННЫЕ ==================== */
+    :root {
+        --numerator-bg: #cfe2ff;
+        --numerator-border: #0d6efd;
+        --numerator-text: #084298;
+
+        --denominator-bg: #fff3cd;
+        --denominator-border: #ffc107;
+        --denominator-text: #664d03;
+
+        --always-bg: #f8f9fa;
+        --always-border: #6c757d;
+        --always-text: #495057;
+    }
+
+    /* ==================== ФИЛЬТРЫ ==================== */
+    .filters-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3);
+    }
+
+    .filters-title {
+        color: white;
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+
+    .filter-group label {
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.8rem;
+        font-weight: 500;
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    .filter-select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.95);
+        font-size: 0.9rem;
+        color: #1f2937;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .filter-select:hover {
+        border-color: rgba(255, 255, 255, 0.6);
+    }
+
+    .filter-select:focus {
+        outline: none;
+        border-color: white;
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.3);
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 16px;
+    }
+
+    .btn-filter {
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: 2px solid transparent;
+        text-decoration: none;
+    }
+
+    .btn-filter-primary {
+        background: white;
+        color: #4f46e5;
+    }
+
+    .btn-filter-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        color: #4f46e5;
+    }
+
+    .btn-filter-secondary {
+        background: transparent;
+        color: white;
+        border-color: rgba(255, 255, 255, 0.5);
+    }
+
+    .btn-filter-secondary:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: white;
+        color: white;
+    }
+
+    /* ==================== СТАТИСТИКА ==================== */
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+
+    .stat-card {
+        background: white;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        border-left: 4px solid #6c757d;
+        text-align: center;
+    }
+
+    .stat-card.numerator { border-left-color: var(--numerator-border); }
+    .stat-card.denominator { border-left-color: var(--denominator-border); }
+    .stat-card.groups { border-left-color: #198754; }
+    .stat-card.lessons { border-left-color: #0dcaf0; }
+
+    .stat-value {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #212529;
+    }
+
+    .stat-label {
+        font-size: 0.8rem;
+        color: #6c757d;
+        margin-top: 2px;
+    }
+
+    /* ==================== ЛЕГЕНДА ==================== */
+    .legend-card {
+        background: white;
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-bottom: 20px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        align-items: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .legend-title {
+        font-weight: 600;
+        color: #374151;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9rem;
+    }
+
+    .legend-badge {
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.8rem;
+    }
+
+    .legend-badge.numerator {
+        background: var(--numerator-bg);
+        color: var(--numerator-text);
+        border: 2px solid var(--numerator-border);
+    }
+
+    .legend-badge.denominator {
+        background: var(--denominator-bg);
+        color: var(--denominator-text);
+        border: 2px solid var(--denominator-border);
+    }
+
+    .legend-badge.always {
+        background: var(--always-bg);
+        color: var(--always-text);
+        border: 2px solid var(--always-border);
+    }
+
+    .current-week-badge {
+        margin-left: auto;
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.95rem;
+    }
+
+    .current-week-badge.numerator {
+        background: var(--numerator-bg);
+        color: var(--numerator-text);
+        border: 3px solid var(--numerator-border);
+    }
+
+    /* Редактирование: по умолчанию скрываем элементы управления редактированием */
+    .edit-controls { display: none !important; }
+    .editing-enabled .edit-controls { display: inline-flex !important; align-items: center; gap: 6px; }
+
+    .current-week-badge.denominator {
+        background: var(--denominator-bg);
+        color: var(--denominator-text);
+        border: 3px solid var(--denominator-border);
+    }
+
+    /* ==================== ГРУППЫ И РАСПИСАНИЕ ==================== */
+    .btn-toggle {
+        transition: transform 0.2s;
+        display: inline-block;
+    }
+
+    .collapsed .btn-toggle {
+        transform: rotate(-90deg);
+    }
+
+    .group-clickable {
+        cursor: pointer;
+        flex-grow: 1;
+        display: flex;
+        align-items: center;
+    }
+
+    .group-header {
+        background: linear-gradient(135deg, #212529 0%, #343a40 100%);
+        color: white;
+    }
+
+    .day-header {
+        background-color: #e9ecef;
+        font-weight: bold;
+        color: #0d6efd;
+        border-left: 4px solid #0d6efd !important;
+    }
+
+    /* ==================== ТИПЫ НЕДЕЛИ В ТАБЛИЦЕ ==================== */
+    .week-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+    }
+
+    .week-badge.numerator {
+        background: var(--numerator-bg);
+        color: var(--numerator-text);
+        border: 2px solid var(--numerator-border);
+    }
+
+    .week-badge.denominator {
+        background: var(--denominator-bg);
+        color: var(--denominator-text);
+        border: 2px solid var(--denominator-border);
+    }
+
+    .week-badge.always {
+        background: var(--always-bg);
+        color: var(--always-text);
+        border: 2px solid var(--always-border);
+    }
+
+    /* ==================== СТРОКИ РАСПИСАНИЯ С ЦВЕТАМИ ==================== */
+    tr.lesson-row {
+        transition: all 0.2s;
+    }
+
+    tr.lesson-row.numerator {
+        background: linear-gradient(90deg, var(--numerator-bg) 0%, rgba(207, 226, 255, 0.3) 100%);
+        border-left: 4px solid var(--numerator-border);
+    }
+
+    tr.lesson-row.denominator {
+        background: linear-gradient(90deg, var(--denominator-bg) 0%, rgba(255, 243, 205, 0.3) 100%);
+        border-left: 4px solid var(--denominator-border);
+    }
+
+    tr.lesson-row.always {
+        background: white;
+        border-left: 4px solid var(--always-border);
+    }
+
+    tr.lesson-row:hover {
+        transform: scale(1.005);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    /* Подсветка активной недели */
+    tr.lesson-row.current-week {
+        position: relative;
+    }
+
+    tr.lesson-row.current-week::after {
+        content: '●';
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #198754;
+        font-size: 0.8rem;
+    }
+
+    /* ==================== ПЕЧАТЬ ==================== */
+    .schedule-container {
+        background-color: #fff;
+        font-family: "Times New Roman", serif;
+        color: #000;
+        max-width: 900px;
+        margin: 20px auto;
+        padding: 40px;
+        border: 1px solid #ccc;
+    }
+
+    .main-table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 2px solid #000;
+    }
+
+    .main-table th, .main-table td {
+        border: 1px solid #000;
+        padding: 5px;
+        text-align: center;
+        vertical-align: middle;
+        line-height: 1.2;
+    }
+
+    .vertical-day {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        font-weight: bold;
+        text-transform: capitalize;
+        width: 30px;
+        background-color: #fff;
+    }
+
+    .time-cell { width: 100px; font-size: 0.9rem; }
+    .room-cell { width: 60px; }
+    .subject-cell { text-align: center; padding: 10px 5px; }
+    .subject-title { font-weight: normal; display: block; margin-bottom: 2px; }
+    .teacher-title { font-size: 0.85rem; }
+
+    /* Цвета для печати */
+    .print-week-indicator {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-left: 8px;
+    }
+
+    .print-week-indicator.numerator {
+        background: #cfe2ff;
+        color: #084298;
+    }
+
+    .print-week-indicator.denominator {
+        background: #fff3cd;
+        color: #664d03;
+    }
+
+    .admin-tools {
+        margin-bottom: 20px;
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+    }
+
+    /* ==================== ПУСТОЕ СОСТОЯНИЕ ==================== */
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        background: white;
+        border-radius: 16px;
+        margin: 20px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+
+    .empty-state-icon {
+        font-size: 4rem;
+        margin-bottom: 16px;
+    }
+
+    .empty-state h3 {
+        color: #374151;
+        margin-bottom: 8px;
+    }
+
+    .empty-state p {
+        color: #6b7280;
+        margin-bottom: 20px;
+    }
+
+    /* ==================== АДАПТИВНОСТЬ ==================== */
+    @media (max-width: 768px) {
+        .filters-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .stats-row {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .legend-card {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .current-week-badge {
+            margin-left: 0;
+            margin-top: 12px;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* ==================== ПЕЧАТЬ ==================== */
+    @media print {
+        .no-print, nav, footer, .navbar, .btn, .admin-tools, .filters-card, .stats-row, .legend-card, .alert {
+            display: none !important;
+        }
+
+        .schedule-container {
+            border: none !important;
+            margin: 0 !important;
+            padding: 20px !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            box-shadow: none !important;
+            page-break-after: always;
+        }
+
+        body {
+            background: white !important;
+            margin: 0;
+            padding: 0;
+        }
+
+        .schedule-print-area {
+            display: block !important;
+        }
+
+        /* Сохраняем цвета при печати */
+        .print-week-indicator {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+    }
+</style>
+
+<div class="container-fluid px-4 no-print">
+    <!-- ==================== ЗАГОЛОВОК ==================== -->
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-2 flex-wrap gap-3">
+        <div>
+            <h1 class="h3 mb-0">📅 Редактор расписания</h1>
+            <small class="text-muted">Управление расписанием групп</small>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+            <a href="{{ url_for('schedule_logs') }}" class="btn btn-outline-info">
+                <strong>📋 История</strong>
+            </a>
+            <span class="edit-controls">
+                <a href="{{ url_for('schedule_builder') }}" class="btn btn-success shadow-sm">
+                    <strong>+ Конструктор</strong>
+                </a>
+            </span>
+            <button id="toggle-edit" type="button" class="btn btn-outline-secondary">Показать редактирование</button>
+            <button id="toggle-collapse" type="button" class="btn btn-outline-secondary">Развернуть все</button>
+        </div>
+    </div>
+
+    <!-- ==================== ФИЛЬТРЫ ==================== -->
+    <div class="filters-card">
+        <div class="filters-title">
+            🔍 Фильтры и поиск
+        </div>
+
+        <form id="filterForm" method="GET" action="{{ url_for('schedule') }}">
+            <div class="filters-grid">
+                <!-- Группа -->
+                <div class="filter-group">
+                    <label>Группа</label>
+                    <select name="group" id="groupFilter" class="filter-select">
+                        <option value="">— Все группы —</option>
+                        {% for group in all_groups %}
+                        <option value="{{ group }}" {% if group == selected_group %}selected{% endif %}>
+                            {{ group }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Курс -->
+                <div class="filter-group">
+                    <label>Курс</label>
+                    <select name="course" id="courseFilter" class="filter-select">
+                        <option value="">— Все курсы —</option>
+                        {% for c in (available_courses or []) %}
+                            <option value="{{ c }}" {% if request.args.get('course') == (c|string) %}selected{% endif %}>{{ c }} курс</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Направление -->
+                <div class="filter-group">
+                    <label>Направление</label>
+                    <select name="major" id="majorFilter" class="filter-select">
+                        <option value="">— Все —</option>
+                    {% for m in (available_majors or []) %}
+                        <option value="{{ m }}" {% if request.args.get('major') == m %}selected{% endif %}>{{ m }}</option>
+                    {% endfor %}
+                    </select>
+                </div>
+
+                <!-- День недели -->
+                <div class="filter-group">
+                    <label>День недели</label>
+                    <select name="day" id="dayFilter" class="filter-select">
+                        <option value="">— Все дни —</option>
+                        <option value="0" {% if request.args.get('day') == '0' %}selected{% endif %}>Понедельник</option>
+                        <option value="1" {% if request.args.get('day') == '1' %}selected{% endif %}>Вторник</option>
+                        <option value="2" {% if request.args.get('day') == '2' %}selected{% endif %}>Среда</option>
+                        <option value="3" {% if request.args.get('day') == '3' %}selected{% endif %}>Четверг</option>
+                        <option value="4" {% if request.args.get('day') == '4' %}selected{% endif %}>Пятница</option>
+                        <option value="5" {% if request.args.get('day') == '5' %}selected{% endif %}>Суббота</option>
+                    </select>
+                </div>
+
+                <!-- Тип недели -->
+                <div class="filter-group">
+                    <label>Тип недели</label>
+                    <select name="week_type" id="weekTypeFilter" class="filter-select">
+                        <option value="">— Все —</option>
+                        <option value="numerator" {% if request.args.get('week_type') == 'numerator' %}selected{% endif %}>
+                            🔵 Числитель
+                        </option>
+                        <option value="denominator" {% if request.args.get('week_type') == 'denominator' %}selected{% endif %}>
+                            🟡 Знаменатель
+                        </option>
+                        <option value="always" {% if request.args.get('week_type') == 'always' %}selected{% endif %}>
+                            ⚪ Всегда
+                        </option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="filters-actions">
+                <button type="submit" class="btn-filter btn-filter-primary">
+                    🔍 Применить
+                </button>
+                <a href="{{ url_for('schedule') }}" class="btn-filter btn-filter-secondary">
+                    ✕ Сбросить
+                </a>
+            </div>
+        </form>
+    </div>
+
+    <!-- ==================== СТАТИСТИКА ==================== -->
+    <div class="stats-row">
+        <div class="stat-card groups">
+            <div class="stat-value">{{ all_groups|length }}</div>
+            <div class="stat-label">Групп</div>
+        </div>
+        <div class="stat-card lessons">
+            <div class="stat-value">{{ schedule|length }}</div>
+            <div class="stat-label">Занятий</div>
+        </div>
+        <div class="stat-card numerator">
+            <div class="stat-value">{{ schedule|selectattr('week_type', 'equalto', 'numerator')|list|length }}</div>
+            <div class="stat-label">Числитель</div>
+        </div>
+        <div class="stat-card denominator">
+            <div class="stat-value">{{ schedule|selectattr('week_type', 'equalto', 'denominator')|list|length }}</div>
+            <div class="stat-label">Знаменатель</div>
+        </div>
+    </div>
+
+    <!-- ==================== ЛЕГЕНДА ==================== -->
+    <div class="legend-card">
+        <span class="legend-title">Легенда:</span>
+
+        <div class="legend-item">
+            <span class="legend-badge numerator">Ч</span>
+            <span>Числитель (нечётная)</span>
+        </div>
+
+        <div class="legend-item">
+            <span class="legend-badge denominator">З</span>
+            <span>Знаменатель (чётная)</span>
+        </div>
+
+        <div class="legend-item">
+            <span class="legend-badge always">В</span>
+            <span>Каждую неделю</span>
+        </div>
+
+        <div class="current-week-badge {% if is_even_week %}numerator{% else %}denominator{% endif %}">
+            📆 Сейчас: <strong>{% if is_even_week %}Числитель{% else %}Знаменатель{% endif %}</strong>
+        </div>
+    </div>
+
+    <!-- ==================== НЕДАВНИЕ ИЗМЕНЕНИЯ ==================== -->
+    {% if recent_logs %}
+    <div class="alert alert-light border border-info mb-4" style="background-color: #f0f7ff;">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="d-flex align-items-center" style="cursor: pointer;" onclick="toggleRecentLogs()">
+                <span id="recentLogsToggle" style="font-size: 18px; margin-right: 10px; transition: transform 0.2s; transform: rotate(-90deg);">▼</span>
+                <h5 class="mb-0">📝 Недавние изменения</h5>
+            </div>
+            <a href="{{ url_for('schedule_logs') }}" class="btn btn-sm btn-outline-info">Все изменения →</a>
+        </div>
+        <div id="recentLogsContent" class="timeline" style="max-height: 400px; overflow-y: auto; display: none;">
+            {% for log in recent_logs[:10] %}
+            <div class="d-flex mb-3 pb-3 border-bottom" style="{% if loop.last %}border-bottom: none !important;{% endif %}">
+                <div class="me-3">
+                    {% if log.action == 'create' %}
+                        <span class="badge bg-success p-2">✅</span>
+                    {% elif log.action == 'update' %}
+                        <span class="badge bg-warning p-2">✏️</span>
+                    {% elif log.action == 'delete' %}
+                        <span class="badge bg-danger p-2">🗑️</span>
+                    {% endif %}
+                </div>
+                <div style="flex-grow: 1;">
+                    <small>
+                        <strong>
+                            {% if log.action == 'create' %}Создано
+                            {% elif log.action == 'update' %}Изменено
+                            {% elif log.action == 'delete' %}Удалено
+                            {% endif %}
+                        </strong>
+                        занятие в группе <strong>{{ log.group_id or '-' }}</strong>
+                    </small><br>
+
+                    {% if log.day_name %}
+                        <small class="text-muted">
+                            <strong>День:</strong> {{ log.day_name }}
+                        </small><br>
+                    {% endif %}
+
+                    {% if log.action == 'update' %}
+                        {% set changes = [] %}
+                        {% if log.old_data.get('subject') != log.new_data.get('subject') %}
+                            {% set _ = changes.append('Предмет: ' ~ (log.old_data.get('subject', '-') or '-') ~ ' → ' ~ (log.new_data.get('subject', '-') or '-')) %}
+                        {% endif %}
+                        {% if log.old_data.get('teacher') != log.new_data.get('teacher') %}
+                            {% set old_teacher = get_teacher_name(log.old_data.get('teacher')) or '-' %}
+                            {% set new_teacher = get_teacher_name(log.new_data.get('teacher')) or '-' %}
+                            {% set _ = changes.append('Преподаватель: ' ~ old_teacher ~ ' → ' ~ new_teacher) %}
+                        {% endif %}
+                        {% if log.old_data.get('room') != log.new_data.get('room') %}
+                            {% set _ = changes.append('Кабинет: ' ~ (log.old_data.get('room', '-') or '-') ~ ' → ' ~ (log.new_data.get('room', '-') or '-')) %}
+                        {% endif %}
+                        {% if log.old_data.get('time') != log.new_data.get('time') %}
+                            {% set _ = changes.append('Время: ' ~ (log.old_data.get('time', '-') or '-') ~ ' → ' ~ (log.new_data.get('time', '-') or '-')) %}
+                        {% endif %}
+                        {% if log.old_data.get('week_type') != log.new_data.get('week_type') %}
+                            {% set old_wt = 'Числитель' if log.old_data.get('week_type') == 'numerator' else ('Знаменатель' if log.old_data.get('week_type') == 'denominator' else 'Всегда') %}
+                            {% set new_wt = 'Числитель' if log.new_data.get('week_type') == 'numerator' else ('Знаменатель' if log.new_data.get('week_type') == 'denominator' else 'Всегда') %}
+                            {% set _ = changes.append('Неделя: ' ~ old_wt ~ ' → ' ~ new_wt) %}
+                        {% endif %}
+
+                        {% if changes %}
+                            <small class="text-danger">
+                                <strong>Изменено:</strong><br>
+                                {% for change in changes %}
+                                    • {{ change }}<br>
+                                {% endfor %}
+                            </small>
+                        {% else %}
+                            <small class="text-muted"><em>Видимых изменений не обнаружено</em></small>
+                        {% endif %}
+                    {% else %}
+                        <small class="text-muted">
+                            {% if log.action == 'create' and log.new_data %}
+                                {{ log.new_data.get('subject', '-') }}
+                                {% if log.new_data.get('teacher') %}
+                                    ({{ get_teacher_name(log.new_data.teacher) }})
+                                {% endif %}
+                                {% if log.new_data.get('week_type') and log.new_data.get('week_type') != 'always' %}
+                                    <span class="week-badge {{ log.new_data.get('week_type') }}" style="font-size: 0.7rem; padding: 2px 6px;">
+                                        {% if log.new_data.get('week_type') == 'numerator' %}Ч{% else %}З{% endif %}
+                                    </span>
+                                {% endif %}
+                            {% elif log.action == 'delete' and log.old_data %}
+                                {{ log.old_data.get('subject', '-') }}
+                                {% if log.old_data.get('teacher') %}
+                                    ({{ get_teacher_name(log.old_data.teacher) }})
+                                {% endif %}
+                            {% endif %}
+                        </small>
+                    {% endif %}
+
+                    <br><small class="text-muted">{{ log.changed_by_name }} · {{ log.changed_at.strftime('%d.%m %H:%M') if log.changed_at else 'неизвестно' }}</small>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ==================== РАСПИСАНИЕ ==================== -->
+    {% if not schedule %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📅</div>
+            {% if selected_group %}
+                <h3>Расписание не найдено</h3>
+                <p>Для группы "{{ selected_group }}" пока нет занятий{% if request.args.get('day') or request.args.get('week_type') %} с выбранными фильтрами{% endif %}</p>
+                <a href="{{ url_for('schedule_builder', groupId=selected_group) }}" class="btn btn-success">
+                    + Создать расписание для {{ selected_group }}
+                </a>
+            {% else %}
+                <h3>Выберите группу</h3>
+                <p>Используйте фильтры выше, чтобы выбрать группу для просмотра</p>
+            {% endif %}
+        </div>
+    {% else %}
+        <!-- Группировка по группам -->
+        {% set grouped = {} %}
+        {% for s in schedule %}
+            {% set _ = grouped.update({s.groupId: grouped.get(s.groupId, []) + [s]}) %}
+        {% endfor %}
+
+        {% for group_id, items in grouped.items()|sort %}
+        <div class="card mb-3 border-0 shadow-sm overflow-hidden">
+            <div class="card-header group-header d-flex justify-content-between align-items-center p-0">
+                <div class="group-clickable px-3 py-3" data-bs-toggle="collapse" data-bs-target="#group-{{ loop.index }}">
+                    <span class="btn-toggle me-2">▼</span>
+                    <span>Группа: <strong>{{ group_id }}</strong></span>
+                    <span class="badge bg-light text-dark ms-2">{{ items|length }} занятий</span>
+                </div>
+                <div class="d-flex gap-2 px-3 edit-controls">
+                    <a href="{{ url_for('schedule_edit_group', group_id=group_id) }}" class="btn btn-sm btn-warning">✎ Редактировать</a>
+                    <form action="{{ url_for('schedule_delete_group', group_id=group_id) }}" method="POST" onsubmit="return confirm('Удалить всё расписание группы {{ group_id }}?')" style="display:inline;">
+                        <button type="submit" class="btn btn-sm btn-danger">🗑 Очистить</button>
+                    </form>
+                </div>
+            </div>
+            <div id="group-{{ loop.index }}" class="collapse">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 120px;">Время</th>
+                            <th>Предмет / Преподаватель</th>
+                            <th style="width: 80px;">Кабинет</th>
+                            <th style="width: 100px;">Неделя</th>
+                            <th style="width: 60px;" class="text-end">⚙️</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% set current_day = namespace(val='') %}
+                        {% for s in items %}
+                            {% if s.day_name != current_day.val %}
+                                <tr class="day-header">
+                                    <td colspan="5" class="py-2 px-3">
+                                        <strong>{{ s.day_name }}</strong>
+                                        {% set day_lessons = items|selectattr('day_name', 'equalto', s.day_name)|list %}
+                                        <span class="badge bg-primary ms-2">{{ day_lessons|length }}</span>
+                                    </td>
+                                </tr>
+                                {% set current_day.val = s.day_name %}
+                            {% endif %}
+
+                            {% set week_type = s.week_type or 'always' %}
+                            {% set is_current = (week_type == 'numerator' and is_even_week) or (week_type == 'denominator' and not is_even_week) or week_type == 'always' %}
+
+                            <tr class="lesson-row {{ week_type }} {% if is_current %}current-week{% endif %}">
+                                <td class="fw-bold">{{ s.time }}</td>
+                                <td>
+                                    <strong>{{ s.subject }}</strong><br>
+                                    <small class="text-muted">{{ get_teacher_name(s.teacher) or s.teacher or '—' }}</small>
+                                </td>
+                                <td>
+                                    {% if s.room %}
+                                        <span class="badge bg-light text-dark">{{ s.room }}</span>
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if week_type == 'numerator' %}
+                                        <span class="week-badge numerator">🔵 Числ.</span>
+                                    {% elif week_type == 'denominator' %}
+                                        <span class="week-badge denominator">🟡 Знам.</span>
+                                    {% else %}
+                                        <span class="week-badge always">⚪ Всегда</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end edit-controls">
+                                    <a href="/schedule/edit/{{ s.id }}" class="btn btn-sm btn-outline-primary" title="Редактировать">✎</a>
+                                    <form action="/schedule/delete/{{ s.id }}" method="POST" onsubmit="return confirm('Удалить это занятие?')" style="display:inline;">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить">🗑</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+
+<!-- ==================== ИНСТРУМЕНТЫ ПЕЧАТИ ==================== -->
+<div class="container mt-4 no-print">
+    <div class="admin-tools d-flex justify-content-between align-items-center shadow-sm">
+        <div>
+            <h4 class="mb-0">🖨️ Печать документов</h4>
+            <small class="text-muted">Готовые бланки для распечатки (с цветовой маркировкой недель)</small>
+        </div>
+        <div>
+            <button onclick="window.print()" class="btn btn-dark">🖨️ Распечатать бланки</button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== ОБЛАСТЬ ПЕЧАТИ ==================== -->
+<div class="schedule-print-area">
+    {% for group_id, days in grouped_schedule.items()|sort %}
+    <div class="schedule-container shadow-sm">
+        <div style="text-align: center; margin-bottom: 20px;">
+            <h3 style="margin: 0;">Расписание занятий</h3>
+            <p style="margin: 5px 0; font-size: 0.9rem;">
+                {% if is_even_week %}
+                    Текущая неделя: <strong style="color: #084298;">ЧИСЛИТЕЛЬ</strong>
+                {% else %}
+                    Текущая неделя: <strong style="color: #664d03;">ЗНАМЕНАТЕЛЬ</strong>
+                {% endif %}
+            </p>
+        </div>
+
+        <table class="main-table">
+            <thead>
+                <tr>
+                    <th colspan="2">Время</th>
+                    <th>Группа: {{ group_id }}</th>
+                    <th>Ауд.</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for day_name in day_names %}
+                    {% if day_name in days %}
+                        {% set lessons = days[day_name] %}
+                        {% for lesson in lessons %}
+                        <tr>
+                            {% if loop.first %}
+                            <td rowspan="{{ lessons|length }}" class="vertical-day">
+                                {{ day_name }}
+                            </td>
+                            {% endif %}
+                            <td class="time-cell">{{ lesson.time }}</td>
+                            <td class="subject-cell">
+                                <span class="subject-title">
+                                    {{ lesson.subject }}
+                                    {% if lesson.week_type and lesson.week_type != 'always' %}
+                                        <span class="print-week-indicator {{ lesson.week_type }}">
+                                            {% if lesson.week_type == 'numerator' %}Ч{% else %}З{% endif %}
+                                        </span>
+                                    {% endif %}
+                                </span>
+                                <span class="teacher-title"><strong>{{ get_teacher_name(lesson.teacher) or lesson.teacher }}</strong></span>
+                            </td>
+                            <td class="room-cell">{{ lesson.room }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div style="margin-top: 15px; font-size: 0.8rem; color: #666;">
+            <span style="display: inline-block; margin-right: 20px;">
+                <span class="print-week-indicator numerator">Ч</span> — Числитель (нечётная неделя)
+            </span>
+            <span>
+                <span class="print-week-indicator denominator">З</span> — Знаменатель (чётная неделя)
+            </span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="mb-5"></div>
+
+<script>
+// ==================== НЕДАВНИЕ ИЗМЕНЕНИЯ ====================
+function toggleRecentLogs() {
+    const content = document.getElementById('recentLogsContent');
+    const toggle = document.getElementById('recentLogsToggle');
+
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        toggle.style.transform = 'rotate(0deg)';
+        localStorage.setItem('recentLogsVisible', 'true');
+    } else {
+        content.style.display = 'none';
+        toggle.style.transform = 'rotate(-90deg)';
+        localStorage.setItem('recentLogsVisible', 'false');
+    }
+}
+
+// ==================== ФИЛЬТРАЦИЯ ГРУПП ПО КУРСУ И НАПРАВЛЕНИЮ ====================
+const courseFilter = document.getElementById('courseFilter');
+const majorFilter = document.getElementById('majorFilter');
+const groupFilter = document.getElementById('groupFilter');
+
+function filterGroupsInDropdown() {
+    const course = courseFilter ? courseFilter.value : '';
+    const major = majorFilter ? majorFilter.value : '';
+
+    if (!groupFilter) return;
+
+    const options = groupFilter.querySelectorAll('option');
+    options.forEach(option => {
+        if (!option.value) {
+            option.style.display = '';
+            return;
+        }
+
+        const groupName = option.value;
+        let show = true;
+
+        // Фильтр по курсу (вычисляем курс по году поступления в названии)
+        if (course) {
+            const courseMatch = groupName.match(/(\d{2,4})-\d+/);
+            if (!courseMatch) {
+                show = false;
+            } else {
+                let y = parseInt(courseMatch[1], 10);
+                if (y < 100) y += 2000;
+                const now = new Date();
+                const academicStartYear = (now.getMonth() + 1) >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+                let courseNum = academicStartYear - y + 1;
+                if (courseNum < 1) courseNum = 1;
+                if (courseNum > 10) courseNum = 10;
+                if (String(courseNum) !== course) {
+                    show = false;
+                }
+            }
+        }
+
+        // Фильтр по направлению (буквы в начале)
+        if (major) {
+            if (!groupName.toUpperCase().startsWith(major.toUpperCase())) {
+                show = false;
+            }
+        }
+
+        option.style.display = show ? '' : 'none';
+    });
+}
+
+if (courseFilter) courseFilter.addEventListener('change', filterGroupsInDropdown);
+if (majorFilter) majorFilter.addEventListener('change', filterGroupsInDropdown);
+
+// ==================== ИНИЦИАЛИЗАЦИЯ ====================
+document.addEventListener('DOMContentLoaded', function() {
+    // Восстанавливаем состояние логов
+    const isVisible = localStorage.getItem('recentLogsVisible');
+    const content = document.getElementById('recentLogsContent');
+    const toggle = document.getElementById('recentLogsToggle');
+
+    if (content && toggle) {
+        if (isVisible === 'true') {
+            content.style.display = 'block';
+            toggle.style.transform = 'rotate(0deg)';
+        } else {
+            content.style.display = 'none';
+            toggle.style.transform = 'rotate(-90deg)';
+        }
+    }
+
+    // Применяем фильтрацию групп
+    filterGroupsInDropdown();
+
+    // Подсветка текущего дня
+    highlightCurrentDay();
+});
+
+// ==================== ПОДСВЕТКА ТЕКУЩЕГО ДНЯ ====================
+function highlightCurrentDay() {
+    const today = new Date().getDay();
+    const dayIndex = today === 0 ? 6 : today - 1;
+    const dayNames = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+    const currentDayName = dayNames[dayIndex];
+
+    document.querySelectorAll('.day-header td').forEach(td => {
+        if (td.textContent.includes(currentDayName)) {
+            td.parentElement.style.background = 'linear-gradient(90deg, #d1fae5 0%, #ecfdf5 100%)';
+            td.parentElement.style.borderLeftColor = '#10b981';
+        }
+    });
+}
+
+// ==================== ГОРЯЧИЕ КЛАВИШИ ====================
+document.addEventListener('keydown', function(e) {
+    // Ctrl+F - фокус на фильтр группы
+    if (e.ctrlKey && e.key === 'f') {
+        e.preventDefault();
+        if (groupFilter) groupFilter.focus();
+    }
+
+    // Escape - сброс фильтров
+    if (e.key === 'Escape' && document.activeElement.tagName === 'SELECT') {
+        window.location.href = '{{ url_for("schedule") }}';
+    }
+});
+
+// Переключатель редактирования (скрыть/показать элементы редактирования)
+(function() {
+    const init = function() {
+        const toggle = document.getElementById('toggle-edit');
+        if (!toggle) return;
+
+        // Восстановим состояние: если админ на сервере — показываем редактирование по умолчанию,
+        // иначе учитываем значение в localStorage
+        const serverAdmin = {{ is_admin | tojson }};
+        const enabled = (localStorage.getItem('editingEnabled') === 'true') || serverAdmin;
+        if (enabled) {
+            document.body.classList.add('editing-enabled');
+            toggle.textContent = 'Скрыть редактирование';
+        } else {
+            document.body.classList.remove('editing-enabled');
+            toggle.textContent = 'Показать редактирование';
+        }
+
+        toggle.addEventListener('click', function() {
+            const on = document.body.classList.toggle('editing-enabled');
+            localStorage.setItem('editingEnabled', on ? 'true' : 'false');
+            toggle.textContent = on ? 'Скрыть редактирование' : 'Показать редактирование';
+        });
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+
+// Глобальный переключатель для разворачивания/сворачивания всех групп
+(function() {
+    const initCollapse = function() {
+        const btn = document.getElementById('toggle-collapse');
+        if (!btn) return;
+
+        const setAll = function(expand) {
+            const elems = document.querySelectorAll('[id^="group-"]');
+            elems.forEach(el => {
+                if (expand) el.classList.add('show'); else el.classList.remove('show');
+            });
+        };
+
+        // Восстановим состояние (по умолчанию — свернуто)
+        const expanded = localStorage.getItem('groupsExpanded') === 'true';
+        if (expanded) {
+            setAll(true);
+            btn.textContent = 'Свернуть все';
+        } else {
+            setAll(false);
+            btn.textContent = 'Развернуть все';
+        }
+
+        btn.addEventListener('click', function() {
+            const isNowExpanded = localStorage.getItem('groupsExpanded') !== 'true';
+            setAll(isNowExpanded);
+            localStorage.setItem('groupsExpanded', isNowExpanded ? 'true' : 'false');
+            btn.textContent = isNowExpanded ? 'Свернуть все' : 'Развернуть все';
+        });
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initCollapse);
+    } else {
+        initCollapse();
+    }
+})();
+</script>
+{% endblock %}
