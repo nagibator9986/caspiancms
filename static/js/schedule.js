@@ -743,7 +743,7 @@
       if (!page || !probe) return;
       page.style.zoom = '';
       var avail = probe.getBoundingClientRect().height, h = page.getBoundingClientRect().height;
-      if (avail > 0 && h > avail) page.style.zoom = String(Math.max(0.5, Math.floor(avail / h * 985) / 1000));
+      if (avail > 0 && h > avail + 1) page.style.zoom = String(Math.max(0.5, Math.floor(avail / h * 985) / 1000));
     });
   }
   // Предпросмотр на узком экране: листы шириной 210 мм уменьшаются до ширины контента (только экран — см. CSS).

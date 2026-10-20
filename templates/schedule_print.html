@@ -59,7 +59,7 @@
 <div class="sch-sheets" data-sch-sheets>
 {% for s in sheets %}
 {% set lay = s.layout %}
-<section class="sch-sheet sch-sheet--{{ lay.density }}" style="--sch-row: {{ lay.row_mm }}mm" data-rows="{{ lay.rows }}"
+<section class="sch-sheet sch-sheet--{{ lay.density }}{{ ' sch-sheet--fill' if lay.fill }}" style="--sch-row: {{ lay.row_mm }}mm" data-rows="{{ lay.rows }}"
          aria-label="{{ ('Расписание преподавателя ' if is_teacher else 'Расписание группы ') ~ s.name }}">
     <div class="sch-sheet__page">
         <header class="sch-sheet__head">

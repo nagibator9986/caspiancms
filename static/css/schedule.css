@@ -380,21 +380,26 @@ a.sch-line__who:hover { text-decoration: underline; }
 /* /schedule/print и /schedule/print/teacher: лист A4 как старый бумажный бланк. Лист — это бумага: всегда белый,
    текст чёрный (и в тёмной теме — это предпросмотр печати), без бледно-серого; размеры — в мм/pt. Поля 12 мм —
    внутри листа (@page sch-blank без полей — см. «Печать»). Плотность — класс от сервера (sheet_layout):
-   sch-sheet--roomy | normal | compact | dense | tight и высота строки --sch-row. */
+   sch-sheet--roomy | normal | compact | dense | tight и высота строки --sch-row (минимум); sch-sheet--fill — таблица,
+   как в старом бланке, растянута на всю высоту листа: лишняя высота делится между строками. */
 .sch-sheets { display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 4px 0 24px; }
 @media screen { .sch-sheets { zoom: var(--sch-preview, 1); } }   /* узкий экран: schedule.js уменьшает предпросмотр */
 .sch-sheet {
-  position: relative; flex: 0 0 auto; box-sizing: border-box; width: 210mm; min-height: 297mm; padding: 12mm;
+  position: relative; flex: 0 0 auto; display: flex; flex-direction: column; box-sizing: border-box;
+  width: 210mm; height: 297mm; padding: 12mm;
   background: #fff; color: #000; box-shadow: 0 1px 3px rgba(0, 0, 0, .2), 0 10px 30px rgba(0, 0, 0, .12);
-  font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 12pt; line-height: 1.15;
+  font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 13pt; line-height: 1.15;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
+/* содержимое листа — во всю высоту печатной области; --fill: таблица забирает остаток (строки растягиваются) */
+.sch-sheet__page { flex: 1 0 auto; display: flex; flex-direction: column; }
+.sch-sheet--fill .sch-sheet__page > .sch-sheet__table { flex: 1 0 auto; }
 /* мерка печатной области (297 − 2×12 мм): schedule.js ужимает .sch-sheet__page, если содержимое выше */
 .sch-sheet__probe { position: absolute; left: 0; top: 12mm; width: 1px; height: 273mm; visibility: hidden; pointer-events: none; }
 .sch-sheet__head { position: relative; text-align: center; margin-bottom: 4mm; }
-.sch-sheet__title { margin: 0; font-family: inherit; font-size: 17pt; font-weight: 700; line-height: 1.2; letter-spacing: 0; color: #000; }
+.sch-sheet__title { margin: 0; font-family: inherit; font-size: 18pt; font-weight: 700; line-height: 1.2; letter-spacing: 0; color: #000; }
 .sch-sheet__name { margin: 1mm 0 0; font-size: 14pt; font-weight: 700; }
-.sch-sheet__week { margin: 1.2mm 0 0; font-size: 11.5pt; }
+.sch-sheet__week { margin: 1.2mm 0 0; font-size: 12pt; }
 .sch-sheet__week b { letter-spacing: .03em; }
 .sch-sheet__table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #000; color: #000; }
 .sch-sheet__c-day { width: 9mm; }
@@ -429,8 +434,8 @@ a.sch-line__who:hover { text-decoration: underline; }
 /* дата формирования — мелко в правом верхнем углу (не занимает строку) */
 .sch-sheet__stamp { position: absolute; top: 0; right: 0; margin: 0; font-size: 8.5pt; line-height: 1.2; text-align: right; color: #333; }
 /* плотность: мало пар — крупнее и выше; много — мельче и плотнее; с 29 строк дисциплина и ФИО — в одну строку */
-.sch-sheet--roomy { font-size: 13pt; }
-.sch-sheet--roomy .sch-sheet__title { font-size: 18pt; }
+.sch-sheet--roomy { font-size: 14pt; }
+.sch-sheet--roomy .sch-sheet__title { font-size: 19pt; }
 .sch-sheet--roomy .sch-sheet__c-time { width: 27mm; }
 .sch-sheet--roomy .sch-sheet__table td { padding: 1.4mm 2mm; }
 .sch-sheet--roomy .sch-sheet__who { margin-top: .6mm; }
@@ -493,7 +498,7 @@ a.sch-line__who:hover { text-decoration: underline; }
   }
   .sch-print-page .cc-content > :not(.sch-sheets) { display: none !important; }
   .sch-sheets { display: block; padding: 0; page: sch-blank; }
-  .sch-sheet { width: auto; min-height: 0; margin: 0; box-shadow: none; break-inside: avoid; break-after: page; page-break-after: always; }
+  .sch-sheet { width: auto; height: 297mm; margin: 0; box-shadow: none; break-inside: avoid; break-after: page; page-break-after: always; }
   .sch-sheet:last-child { break-after: auto; page-break-after: auto; }
   .sch-sheet__dayrows, .sch-sheet__table tr { break-inside: avoid; page-break-inside: avoid; }
 }

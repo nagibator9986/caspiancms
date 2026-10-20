@@ -832,7 +832,7 @@ class AcceptedConflictsHighlightTest(_ScheduleCase):
 # ==================== БЛАНКИ ДЛЯ ПЕЧАТИ ====================
 
 _MARK_RE = re.compile(r'class="sch-sheet__mark sch-sheet__mark--(numerator|denominator)" title=')
-_SHEET_RE = re.compile(r'<section class="sch-sheet sch-sheet--(\w+)" style="--sch-row: ([\d.]+)mm" data-rows="(\d+)"')
+_SHEET_RE = re.compile(r'<section class="sch-sheet sch-sheet--(\w+)(?: sch-sheet--fill)?" style="--sch-row: ([\d.]+)mm" data-rows="(\d+)"')
 
 
 def _sheets(html):
@@ -866,6 +866,13 @@ class SheetLayoutTest(CmsTestCase):
                 rows.append(float(lay['row_mm']))
         self.assertEqual(rows, sorted(rows, reverse=True), 'чем больше пар, тем ниже строка')
         self.assertLessEqual(rows[0], 19.0, 'мало пар — строки выше, но без растягивания на весь лист')
+
+    def test_table_fills_sheet_from_eight_rows(self):
+        """Как старый бланк: таблица на всю высоту листа; одна-две пары — не растягиваем в пустую рамку."""
+        from cms.routes_schedule import sheet_layout
+        self.assertFalse(sheet_layout(self._by_day((2, 1, 1, 1)))['fill'])
+        self.assertTrue(sheet_layout(self._by_day((2, 2, 2, 2)))['fill'])
+        self.assertTrue(sheet_layout(self._by_day((4, 4, 4, 4, 5)))['fill'])
 
     def test_rows_fit_one_sheet(self):
         from cms.routes_schedule import PRINT_BODY_MM, PRINT_DENSITY, sheet_layout
@@ -1051,3 +1058,6 @@ class PrintDensityTest(_ScheduleCase):
         density, row, n = _sheets(self.get_ok('/schedule/print?group=МАЛО 26-1'))[0]
         self.assertEqual((density, n), ('roomy', 3))
         self.assertEqual(row, 19.0)
+        self.assertNotIn('sch-sheet--fill', self.get_ok('/schedule/print?group=МАЛО 26-1'))
+        self._add('МАЛО 26-1', 12)
+        self.assertIn('class="sch-sheet sch-sheet--roomy sch-sheet--fill"', self.get_ok('/schedule/print?group=МАЛО 26-1'))
