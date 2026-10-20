@@ -121,8 +121,9 @@ class ParityTest(unittest.TestCase):
 
     def test_week_types(self):
         self.assertEqual(norm_week_type(None), ('always', False))
-        self.assertEqual(norm_week_type('Числитель'), ('numerator', False))
-        self.assertEqual(norm_week_type('з'), ('denominator', False))
+        # DATA-7: синонимы приложение не понимает (сравнивает буквально) — unknown, неделя — подсказка
+        self.assertEqual(norm_week_type('Числитель'), ('numerator', True))
+        self.assertEqual(norm_week_type('з'), ('denominator', True))
         self.assertEqual(norm_week_type('odd'), ('always', True))
         self.assertTrue(weeks_overlap('always', 'numerator'))
         self.assertTrue(weeks_overlap('denominator', 'denominator'))
@@ -251,3 +252,29 @@ class SnapshotTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WeekTypeLikeAppTest(unittest.TestCase):
+    """DATA-7: приложение сравнивает week_type буквально (`week_type ?? 'always'`) — всё, кроме None и
+    'always'|'numerator'|'denominator', оно прячет при фильтре недели. CMS отмечает такие значения."""
+
+    @staticmethod
+    def app_visible(raw, numerator_week):
+        t = 'always' if raw is None else str(raw)
+        if t == 'always':
+            return True
+        return t == ('numerator' if numerator_week else 'denominator')
+
+    def test_only_exact_keys_are_known(self):
+        for raw in (None, 'always', 'numerator', 'denominator'):
+            self.assertFalse(norm_week_type(raw)[1], repr(raw))
+        for raw in ('Числитель', 'ч', 'Numerator', '', ' always', 'Always', 'odd', 0):
+            week, unknown = norm_week_type(raw)
+            visible = self.app_visible(raw, True) or self.app_visible(raw, False)
+            self.assertFalse(visible)
+            self.assertTrue(unknown, 'week_type=%r: приложение прячет занятие, а CMS считает его «%s»' % (raw, week))
+        # синоним подсказывает, во что исправить
+        self.assertEqual(norm_week_type('Числитель'), ('numerator', True))
+        self.assertEqual(norm_week_type('з'), ('denominator', True))
+        self.assertEqual(norm_week_type(''), ('always', True))
+        self.assertEqual(norm_week_type('odd'), ('always', True))

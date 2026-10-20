@@ -910,6 +910,9 @@ tr.is-hidden, [data-search].is-hidden, .cc-filter-hidden { display: none !import
 @media (hover: hover) and (pointer: fine) {
   .cc-row-quick { opacity: 0; transition: opacity var(--cc-dur-fast); }
   tr:hover .cc-row-quick, tr:focus-within .cc-row-quick, .cc-row-quick:focus-visible { opacity: 1; }
+  /* любая «строка»: элемент списка, карточка (article), [data-cc-row] — иконку показывает БЛИЖАЙШАЯ строка под курсором
+     (или с фокусом); наведение на внешнюю карточку не раскрывает иконки вложенных строк */
+  :is(li, article, [data-cc-row]):is(:hover, :focus-within) .cc-row-quick:not(:is(tr, li, article, [data-cc-row]):is(:hover, :focus-within) :is(tr, li, article, [data-cc-row]):not(:hover, :focus-within) .cc-row-quick) { opacity: 1; }
 }
 /* колонки по ширине таблицы (классы cc-lt-* ставит app.js по ширине .cc-table-wrap) */
 .cc-lt-1100 .cc-col-xl, .cc-lt-900 .cc-col-lg, .cc-lt-700 .cc-col-md { display: none; }
@@ -930,7 +933,22 @@ tr.is-hidden, [data-search].is-hidden, .cc-filter-hidden { display: none !import
   .cc-table--stack > tbody > tr > td { display: block; padding: 0 !important; border: 0; text-align: left !important; white-space: normal; }
   .cc-table--stack > tbody > tr > td.cc-cell-primary { margin-bottom: 3px; }
   .cc-table--stack > tbody > tr > td.cc-cell-meta { display: inline; font-size: 13px; color: var(--cc-text-muted); }
-  .cc-table--stack > tbody > tr > td.cc-cell-meta + td.cc-cell-meta::before { content: ' · '; color: var(--cc-icon-subtle); }
+  /* пустая ячейка: .cc-cell-empty (на компьютере в ней «—»; из одних пробелов — помечает app.js) или :empty */
+  .cc-table--stack > tbody > tr > td.cc-cell-empty, .cc-table--stack > tbody > tr > td:empty { display: none !important; }
+  /* « · » — между соседними ВИДИМЫМИ мета-ячейками: скрытые (.cc-col-optional, пустые, [hidden], .d-none) между ними
+     пропускаются (до трёх подряд); после блочной ячейки (основной, с подписью) мета начинается с новой строки без « · » */
+  .cc-table--stack > tbody > tr > td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)::before,
+  .cc-table--stack > tbody > tr > td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)::before,
+  .cc-table--stack > tbody > tr > td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none) + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)::before,
+  .cc-table--stack > tbody > tr > td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none) + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td:is(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)
+    + td.cc-cell-meta:not(.cc-col-optional, .cc-cell-empty, :empty, [hidden], .d-none)::before { content: ' · '; color: var(--cc-icon-subtle); }
   .cc-table--stack > tbody > tr > td[data-label] { font-size: 13px; margin-top: 2px; }
   .cc-table--stack > tbody > tr > td[data-label]::before { content: attr(data-label) ': '; color: var(--cc-text-muted); font-weight: 500; }
   .cc-table--stack > tbody > tr > td.cc-actions { position: absolute; top: 6px; right: 4px; width: auto; }

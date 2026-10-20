@@ -701,3 +701,128 @@ class ConflictsInPlaceTest(CmsTestCase):
         self.assertIn('data-sch-dayswitch', html)
         self.assertIn('is-active-day', html)
         self.assertIn('data-sch-next', html)
+
+
+def _orig(l, day):
+    return {'day': day, 'time': l['time'], 'subject': l['subject'], 'teacher': l['teacher'],
+            'room': l['room'], 'week_type': l.get('week_type') or 'always'}
+
+
+def _row(lesson_id, l, day, room):
+    return {'key': lesson_id, 'id': lesson_id, 'day': day, 'time': l['time'], 'subject': l['subject'],
+            'teacher': l['teacher'], 'room': room, 'week_type': l.get('week_type') or 'always', 'orig': _orig(l, day)}
+
+
+class EditorConcurrencyTest(_ScheduleCase):
+    """DATA-1: строка занятия, которое другой админ удалил или перенёс в другую группу, не создаётся заново."""
+
+    def test_row_of_concurrently_deleted_lesson_is_not_recreated(self):
+        from cms.core import db
+        l = self.doc('schedules', 'base_00_1_0')
+        db.collection('schedules').document('base_00_1_0').delete()      # другой админ удалил занятие
+        r = self.post_json('/schedule/update_group', {'group_id': 'ПО 23-1', 'deleted_ids': [],
+                                                      'lessons': [_row('base_00_1_0', l, 1, '999')]})
+        self.assertEqual(r.status_code, 409, r.get_json())
+        self.assertEqual([e['key'] for e in r.get_json()['errors']], ['base_00_1_0'])
+        self.assertIn('обновите страницу', r.get_json()['error'])
+        self.assertEqual([d for d in self.docs('schedules', groupId='ПО 23-1') if d.get('room') == '999'], [])
+        self.assertEqual(_sent_pushes(), [])
+
+    def test_row_of_lesson_moved_to_other_group_is_not_duplicated(self):
+        from cms.core import db
+        l = self.doc('schedules', 'base_00_1_1')
+        db.collection('schedules').document('base_00_1_1').update({'groupId': 'ПО 24-1'})
+        new = {'key': 'new1', 'day': 4, 'time': '17.55-18.45', 'subject': 'Физика', 'teacher': 't_li',
+               'room': '777', 'week_type': 'always'}
+        r = self.post_json('/schedule/update_group', {'group_id': 'ПО 23-1', 'deleted_ids': [],
+                                                      'lessons': [_row('base_00_1_1', l, 1, '998'), new]})
+        self.assertEqual(r.status_code, 409)
+        rooms = {d.get('room') for d in self.docs('schedules', groupId='ПО 23-1')}
+        self.assertNotIn('998', rooms)
+        self.assertNotIn('777', rooms)      # ничего не записано — ни одной строки
+        self.assertEqual(self.doc('schedules', 'base_00_1_1')['groupId'], 'ПО 24-1')
+
+
+class PartialCommitTest(_ScheduleCase):
+    """DATA-2: сбой посередине массовой записи — notify:false снимается, ответ честный (часть сохранена)."""
+
+    def _flaky(self, fail_when):
+        from cms import routes_schedule as rs
+        orig = rs.ScheduleBatch._commit_ops
+
+        def flaky(ops):
+            ops = list(ops)
+            if fail_when(ops):
+                raise RuntimeError('Firestore: deadline exceeded')
+            return orig(ops)
+        return mock.patch.object(rs.ScheduleBatch, '_commit_ops', staticmethod(flaky))
+
+    def _payload(self):
+        upd = self.doc('schedules', 'base_00_1_2')
+        return {'group_id': 'ПО 23-1', 'lessons': [_row('base_00_1_2', upd, 1, '777')],
+                'deleted_ids': ['base_00_1_3']}
+
+    def test_failed_delete_phase_heals_notify_and_reports_partial(self):
+        with self._flaky(lambda ops: ops and all(kind == 'delete' for kind, _r, _d in ops)):
+            r = self.post_json('/schedule/update_group', self._payload())
+        data = r.get_json()
+        self.assertTrue(data.get('partial'), data)
+        self.assertIn('/schedule/edit_group/', data['redirect'])     # редактор перезагрузится со свежими данными
+        self.assertNotIn('Попробуйте ещё раз', data.get('message', '') + data.get('error', ''))
+        after_upd = self.doc('schedules', 'base_00_1_2')
+        self.assertEqual(after_upd['room'], '777')
+        self.assertNotIn('notify', after_upd, 'правка записана, но notify:false остался навсегда')
+        after_del = self.doc('schedules', 'base_00_1_3')
+        self.assertTrue(after_del is None or 'notify' not in after_del, 'неудалённое занятие осталось с notify:false')
+        self.assertIn('warning', [c for c, _t in self.flashes()])
+
+    def test_failed_first_write_is_plain_error(self):
+        with self._flaky(lambda ops: True):
+            r = self.post_json('/schedule/update_group', self._payload())
+        self.assertEqual(r.status_code, 500)
+        self.assertNotEqual(self.doc('schedules', 'base_00_1_2')['room'], '777')
+        self.assertIsNotNone(self.doc('schedules', 'base_00_1_3'))
+
+    def test_single_edit_clears_stale_notify_false(self):
+        from cms.core import db
+        db.collection('schedules').document('base_01_1_1').update({'notify': False})   # «залип» после сбоя
+        src = self.doc('schedules', 'base_01_1_1')
+        r = self.post('/schedule/edit/base_01_1_1', {
+            'groupId': GROUP, 'day': '1', 'time': src['time'], 'subject': src['subject'],
+            'teacher': src['teacher'], 'room': '909', 'week_type': src.get('week_type', 'always')})
+        self.assertEqual(r.status_code, 302)
+        doc = self.doc('schedules', 'base_01_1_1')
+        self.assertEqual(doc['room'], '909')
+        self.assertNotIn('notify', doc)
+
+
+class AcceptedConflictsHighlightTest(_ScheduleCase):
+    """DATA-6: принятая накладка не подсвечивается снова на неделе группы и у преподавателя."""
+
+    def _accept(self, lesson_id):
+        from cms import conflicts
+        a = conflicts.get_analysis()
+        hashes = [c['hash'] for c in a.all_clusters() if lesson_id in c['ids']]
+        self.assertTrue(hashes)
+        r = self.post('/schedule/conflicts/ack', {'hash': hashes, 'note': 'так задумано'})
+        self.assertIn(r.status_code, (302, 303))
+
+    def test_accepted_group_conflict_not_highlighted(self):
+        self._accept('cf_grp_sub_a')
+        html = self.get_ok('/schedule?group=%D0%9F%D0%9E+25-1&view=list')
+        row = re.search(r'<tr class="([^"]*)" data-href="[^"]*/schedule/edit/cf_grp_sub_a', html)
+        self.assertIsNotNone(row)
+        self.assertNotIn('is-conflict', row.group(1), 'принятая накладка снова подсвечена как пересечение')
+
+    def test_accepted_teacher_conflict_not_counted(self):
+        before = self.get_ok('/schedule/teachers?teacher=uid:t_petrov')
+        self.assertRegex(before, r'class="[^"]*has-alert" data-day="2"')
+        self._accept('cf_petrov_a')
+        after = self.get_ok('/schedule/teachers?teacher=uid:t_petrov')
+        self.assertNotRegex(after, r'class="[^"]*has-alert" data-day="2"')
+
+    def test_fallback_highlight_when_engine_fails(self):
+        with mock.patch('cms.conflicts.get_analysis', side_effect=RuntimeError('движок упал')):
+            html = self.get_ok('/schedule?group=%D0%9F%D0%9E+25-1&view=list')
+        row = re.search(r'<tr class="([^"]*)" data-href="[^"]*/schedule/edit/cf_grp_sub_a', html)
+        self.assertIn('is-conflict', row.group(1))

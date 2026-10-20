@@ -18,6 +18,14 @@
 {%- if totals.enrolled %}{% set _ = sitems.append({'value': totals.enrolled, 'label': 'поступили', 'href': url_for('applicants_leads', status='enrolled')}) %}{% endif -%}
 {{ ui.summary_line(sitems) }}
 
+{% if clashes %}
+{% call ui.hint(icon='exclamation-triangle', tone='warning') %}
+    {{ 'Коды' if clashes|length > 1 else 'Код' }} {{ clashes|join(', ') }} есть и у кампании, и у QR-источника: регистрация
+    в старой версии приложения с таким кодом кампании не пройдёт. Если по QR ещё никто не зарегистрировался — удалите
+    источник и создайте его с другим кодом, иначе — новую кампанию с другим кодом.
+{% endcall %}
+{% endif %}
+
 {% call ui.list_card() %}
     {% if totals.count %}
     {{ ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Название, код или канал', 'label': 'Поиск источника', 'filter': '#apSources'}, inline=True) }}

@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 from datetime import date, datetime, timedelta
 
-from .core import ALMATY, cache, db, log, today_almaty, where
+from .core import ALMATY, cache, db, fs_opts, log, today_almaty, where
 
 # ==================== СЕТКА ЗВОНКОВ И ДНИ ====================
 
@@ -292,15 +292,24 @@ _WEEK_ALIASES = {
 def norm_week_type(value):
     """week_type → ('always'|'numerator'|'denominator', unknown: bool).
 
-    Пусто/None → 'always' (как APP: `week_type ?? 'always'`). Неизвестное непустое
-    значение → 'always' и unknown=True (для «Качества данных»)."""
-    s = str(value or '').strip().lower().replace('ё', 'е')
-    if not s:
+    Как APP (ScheduleService.applyFilter: `(week_type ?? 'always').toString()` сравнивается буквально):
+    известны только None и точные 'always' | 'numerator' | 'denominator'. Всё остальное — пустая строка,
+    регистр, пробелы, синонимы ('Числитель', 'ч') — unknown=True: приложение прячет такое занятие при
+    фильтре недели («Качество данных»). Неделя для CMS — по синониму (подсказка, во что исправить),
+    иначе 'always'."""
+    if value is None:
         return 'always', False
-    week = _WEEK_ALIASES.get(s)
-    if week:
-        return week, False
-    return 'always', True
+    if isinstance(value, str) and value in WEEK_TYPES:
+        return value, False
+    return week_type_suggestion(value) or 'always', True
+
+
+def week_type_suggestion(value):
+    """Канонический ключ для неканонического week_type ('Числитель' → 'numerator', '' → 'always') или None."""
+    s = str('' if value is None else value).strip().lower().replace('ё', 'е')
+    if not s:
+        return 'always'
+    return _WEEK_ALIASES.get(s)
 
 
 def weeks_overlap(a, b):
@@ -409,12 +418,12 @@ def _teacher_directory():
     """{'users': {uid: ФИО} (users role==teacher), 'legacy': {id: ФИО} (старая коллекция teachers)}."""
     def load():
         users, legacy = {}, {}
-        for doc in where(db.collection('users'), 'role', '==', 'teacher').select(['name']).stream():
+        for doc in where(db.collection('users'), 'role', '==', 'teacher').select(['name']).stream(**fs_opts(True)):
             name = (doc.to_dict() or {}).get('name')
             if name:
                 users[doc.id] = name
         try:
-            for doc in db.collection('teachers').select(['name']).stream():
+            for doc in db.collection('teachers').select(['name']).stream(**fs_opts(True)):
                 name = (doc.to_dict() or {}).get('name')
                 if name:
                     legacy[doc.id] = name
@@ -445,7 +454,7 @@ def get_all_subjects():
     """Список названий дисциплин (кэш 5 мин, ключ 'all_subjects')."""
     def load():
         subjects = []
-        for doc in db.collection('subjects').stream():
+        for doc in db.collection('subjects').stream(**fs_opts(True)):
             name = (doc.to_dict() or {}).get('name')
             if name:
                 subjects.append(name)
@@ -458,7 +467,7 @@ def get_all_groups():
     Кэш 5 мин, ключ 'all_groups'."""
     def load():
         groups = set()
-        for doc in db.collection('groups_list').select([]).stream():
+        for doc in db.collection('groups_list').select([]).stream(**fs_opts(True)):
             groups.add(doc.id)
         for g in load_lessons_snapshot().by_group:
             if g:
@@ -662,7 +671,7 @@ def _load_snapshot():
     started = time.time()
     index = build_teacher_index()
     lessons = []
-    for doc in db.collection('schedules').stream():
+    for doc in db.collection('schedules').stream(**fs_opts(True)):
         lessons.append(normalize_lesson(doc.id, doc.to_dict() or {}, index))
     snap = LessonsSnapshot(lessons, index)
     log.info('Снапшот расписания: %d занятий за %.2f с', len(lessons), time.time() - started)

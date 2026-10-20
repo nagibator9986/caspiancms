@@ -7,8 +7,14 @@
 #                          Фото — Storage coin_products/<id>/<stamp>_<i><ext>.
 #   coin_orders/{id}       создаёт абитуриент {uid, productId, variant?, createdAt}; статус, снимок товара, списание
 #                          и склад — ТОЛЬКО Cloud Function (onCoinOrderCreated). CMS меняет лишь статус
-#                          reserved → issued | cancelled (+ issuedAt/issuedBy | cancelledAt/cancelledBy, note,
-#                          updatedAt); возврат коинов и склад при отмене делает onCoinOrderUpdated.
+#                          reserved → issued | cancelled (+ issuedAt/issuedBy | cancelledAt/cancelledBy, updatedAt);
+#                          возврат коинов и склад при отмене делает onCoinOrderUpdated. Зависший заказ (без status
+#                          дольше STUCK_MINUTES — функция не обработала, коины не списаны) CMS только закрывает:
+#                          status cancelled — функция такой заказ не трогает (before.status ≠ 'reserved').
+#                          Документ заказа абитуриент читает ЦЕЛИКОМ — служебного в нём не храним.
+#   coin_order_notes/{orderId}  заметка админа {note ≤500, uid, updatedAt, updatedBy} — только Admin SDK (правила
+#                          приложения закрывают коллекцию по умолчанию). Старое место coin_orders/{id}.note —
+#                          очищается (DELETE_FIELD) при новой заметке, выдаче/отмене и кнопкой «Перенести».
 #   coin_campaigns/{CODE}  id = код ^[A-Z0-9]{4,16}$; claimsCount меняет только функция (CMS пишет 0 при создании
 #                          и никогда не трогает при правке).
 #   coin_transactions      журнал; CMS создаёт только ручные операции {uid, amount (int ≠ 0, |amount| ≤ 100000),
@@ -27,10 +33,11 @@ from flask import abort, current_app, flash, jsonify, redirect, render_template,
 
 from .applicant_login import canonical_login, display_login, normalize_phone, to_auth_email
 from .core import (DELETE_FIELD, IS_EMULATOR, ArrayUnion, SERVER_TIMESTAMP, Routes, UploadError, admin_required,
-                   aggregate_sum, audit, back_url, cache, chunked, count, csv_response, current_admin, db,
-                   delete_storage_paths, doc_dict, flash_action, flash_error, fmt_dt, get_docs, image_fields,
+                   aggregate_sum, audit, back_url, cache, chunked, count, csv_cell, csv_response, current_admin, db,
+                   delete_storage_paths, doc_dict, flash_action, flash_error, fmt_dt, fs_opts, get_docs, image_fields,
                    images_from_uploader, images_of, local_input_value, log, next_target, now_utc, paginate,
-                   paginate_list, parse_local_datetime, plural, safe_next_url, to_almaty, to_datetime, where)
+                   paginate_list, parse_local_datetime, plural, safe_next_url, storage_path_from_url, to_almaty,
+                   to_datetime, where)
 
 routes = Routes()
 
@@ -50,6 +57,9 @@ CLAIMS_LIMIT = 1000         # вводов кода на странице кам
 PER_PAGE = 30
 JOURNAL_PER_PAGE = 30        # UX_SPEC_v2 CRM-8: 30 строк на страницу журнала
 EXPORT_LIMIT = 5000
+STUCK_MINUTES = 15          # заказ без status дольше — функция его не обработала (абитуриенту правила дают 10 мин)
+NOTES_COLL = 'coin_order_notes'
+NOTES_LIMIT = 5000          # заметок к заказам немного (пишут админы вручную) — читаем одним запросом
 
 PRODUCTS_TTL = 300
 ORDERS_TTL = 60
@@ -173,23 +183,6 @@ def site_root():
     return root.rstrip('/') + '/'
 
 
-_CSV_DANGER = ('=', '+', '-', '@', '\t', '\r')
-
-
-def csv_cell(v):
-    """Защита от формул в Excel (CSV injection): опасное начало строки экранируем апострофом; числа — как есть."""
-    if v is None:
-        return ''
-    if isinstance(v, bool):
-        return 'да' if v else 'нет'
-    if isinstance(v, (int, float)):
-        return v
-    if isinstance(v, datetime):
-        return fmt_dt(v)
-    s = str(v)
-    return "'" + s if s.startswith(_CSV_DANGER) else s
-
-
 def normalize_code(raw):
     """Код кампании к виду id документа — порт CoinService.normalizeCode (APP): верхний регистр, без пробелов,
     дефисов, подчёркиваний и точек, кириллица-двойник → латиница. Прочие символы остаются (такой код не пройдёт
@@ -253,7 +246,7 @@ def load_people():
     def load():
         out = {}
         q = where(db.collection('users'), 'role', '==', 'applicant').select(PEOPLE_FIELDS)
-        for s in q.stream():
+        for s in q.stream(**fs_opts(True)):
             out[s.id] = s.to_dict() or {}
         return out
     return cache.get_or_set('coins:people', load, PEOPLE_TTL)
@@ -328,10 +321,10 @@ def find_people(q, limit=20):
                 break
     if not found:
         try:
-            if _safe_doc_id(q) and db.collection('users').document(q).get().exists:
+            if _safe_doc_id(q) and db.collection('users').document(q).get(**fs_opts()).exists:
                 add(q)
             elif email:
-                for s in where(db.collection('users'), 'email', '==', email).limit(5).stream():
+                for s in where(db.collection('users'), 'email', '==', email).limit(5).stream(**fs_opts(True)):
                     add(s.id)
         except Exception:
             log.warning('Поиск пользователя «%s» не удался', q, exc_info=True)
@@ -363,7 +356,7 @@ def sort_missing(p):
 def next_sort(exclude=()):
     """max(sort) + 1 по СВЕЖИМ данным (не из кэша) — для нового товара и для товара без sort."""
     best = None
-    for s in db.collection('coin_products').select(['sort']).stream():
+    for s in db.collection('coin_products').select(['sort']).stream(**fs_opts(True)):
         if s.id in exclude:
             continue
         v = (s.to_dict() or {}).get('sort')
@@ -384,7 +377,7 @@ def load_products():
     """Все товары по порядку sort (кэш 5 мин). Документы без sort — в конце."""
     def load():
         items = []
-        for s in db.collection('coin_products').stream():
+        for s in db.collection('coin_products').stream(**fs_opts(True)):
             d = s.to_dict() or {}
             d['id'] = s.id
             items.append(d)
@@ -603,7 +596,7 @@ def coins_product_form(product_id=None):
     if product_id:
         if not _safe_doc_id(product_id):
             abort(404)
-        doc = doc_dict(db.collection('coin_products').document(product_id).get())
+        doc = doc_dict(db.collection('coin_products').document(product_id).get(**fs_opts()))
         if doc is None:
             flash('Товар не найден — возможно, его уже удалили', 'warning')
             return redirect(url_for('coins_shop'))
@@ -642,7 +635,11 @@ def coins_product_form(product_id=None):
                     delete_storage_paths(res.uploaded_paths)
                     flash_error('Не удалось сохранить товар. Попробуйте ещё раз', e)
                 else:
-                    delete_storage_paths([p for p in res.removed_paths if p.startswith('coin_products/')])
+                    removed = [p for p in res.removed_paths if p.startswith('coin_products/')]
+                    if removed and product_id:
+                        keep = _photo_paths_in_orders(product_id, res.removed)
+                        removed = [] if keep is None else [p for p in removed if p not in keep]
+                    delete_storage_paths(removed)
                     invalidate_coins_cache('products')
                     audit('update' if product_id else 'create', 'coin_product', ref.id,
                           {'title': data['title'], 'price': data['price'], 'stock': stock, 'active': data['active'],
@@ -660,6 +657,21 @@ def coins_product_form(product_id=None):
                            max_limit=MAX_LIMIT_PER_USER)
 
 
+def _photo_paths_in_orders(product_id, removed):
+    """Пути убранных фото товара, на которые ссылаются снимки imageUrl в его заказах (orderProductSnapshot
+    в функциях копирует обложку в заказ): их не удаляем — «Мои заказы» в приложении и список заказов CMS
+    показывают это фото. None — заказы прочитать не удалось (тогда не удаляем ничего)."""
+    try:
+        q = where(db.collection('coin_orders'), 'productId', '==', product_id).select(['imageUrl'])
+        urls = {_str((s.to_dict() or {}).get('imageUrl')) for s in q.stream(**fs_opts(True))}
+    except Exception:
+        log.exception('Заказы товара %s не прочитаны — старые фото не удаляем', product_id)
+        return None
+    urls.discard('')
+    paths = {storage_path_from_url(u) for u in urls}
+    return {im['path'] for im in removed if im.get('path') and (im.get('url') in urls or im['path'] in paths)}
+
+
 @routes.route('/coins/shop/<product_id>/toggle', methods=['POST'])
 @admin_required
 def coins_product_toggle(product_id):
@@ -667,7 +679,7 @@ def coins_product_toggle(product_id):
         abort(404)
     ref = db.collection('coin_products').document(product_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Товар не найден', 'warning')
             return _back('coins_shop')
@@ -753,7 +765,7 @@ def coins_product_delete(product_id):
         abort(404)
     ref = db.collection('coin_products').document(product_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             invalidate_coins_cache('products')
             flash('Товар уже удалён', 'info')
@@ -801,7 +813,7 @@ def coins_shop_reorder():
     try:
         # свежие данные: по кэшу можно «не заметить» товар без sort
         known = {}
-        for s in db.collection('coin_products').stream():
+        for s in db.collection('coin_products').stream(**fs_opts(True)):
             known[s.id] = dict(s.to_dict() or {}, id=s.id)
     except Exception:
         log.exception('Товары не прочитаны')
@@ -875,21 +887,36 @@ def coins_shop_bulk():
 
 # ==================== ЗАКАЗЫ ====================
 
+def load_order_notes():
+    """Заметки админов к заказам {orderId: текст} из coin_order_notes (одним запросом, только поле note)."""
+    return {s.id: _str((s.to_dict() or {}).get('note')) for s in
+            db.collection(NOTES_COLL).select(['note']).limit(NOTES_LIMIT).stream(**fs_opts(True))}
+
+
 def load_orders():
-    """Снимок заказов: ВСЕ ждущие выдачи + ORDERS_WINDOW последних, с людьми (кэш 60 с)."""
+    """Снимок заказов: ВСЕ ждущие выдачи + ORDERS_WINDOW последних, с людьми и заметками (кэш 60 с)."""
     def load():
         coll = db.collection('coin_orders')
         by_id = {}
-        for s in where(coll, 'status', '==', 'reserved').select(ORDER_FIELDS).stream():
+        for s in where(coll, 'status', '==', 'reserved').select(ORDER_FIELDS).stream(**fs_opts(True)):
             by_id[s.id] = dict(s.to_dict() or {}, id=s.id)
-        recent = list(coll.select(ORDER_FIELDS).order_by('createdAt', direction=DESC).limit(ORDERS_WINDOW).stream())
+        recent = list(coll.select(ORDER_FIELDS).order_by('createdAt', direction=DESC).limit(ORDERS_WINDOW)
+                .stream(**fs_opts(True)))
         for s in recent:
             by_id.setdefault(s.id, dict(s.to_dict() or {}, id=s.id))
         orders = sorted(by_id.values(), key=lambda o: _ts(o.get('createdAt')), reverse=True)
         uids = [o.get('uid') for o in orders]
         uids += [o.get(k) for o in orders for k in ('issuedBy', 'cancelledBy') if o.get(k)]
-        return {'orders': orders, 'people': people_for(uids), 'truncated': len(recent) >= ORDERS_WINDOW}
+        return {'orders': orders, 'people': people_for(uids), 'truncated': len(recent) >= ORDERS_WINDOW,
+                'notes': _safe(load_order_notes, {})}
     return cache.get_or_set('coins:orders', load, ORDERS_TTL)
+
+
+def is_stuck(o, now=None):
+    """Заказ без status дольше STUCK_MINUTES: onCoinOrderCreated его не обработал (коины не списаны)."""
+    created = to_datetime((o or {}).get('createdAt'))
+    return not (o or {}).get('status') and created is not None and \
+        (now or now_utc()) - created > timedelta(minutes=STUCK_MINUTES)
 
 
 def order_counts():
@@ -900,8 +927,10 @@ def order_counts():
     return cache.get_or_set('coins:order_counts', load, ORDERS_TTL)
 
 
-def order_view(o, people, products):
+def order_view(o, people, products, notes=None):
     p = person(o.get('uid'), people)
+    legacy_note = _str(o.get('note'))                  # старое место заметки — документ заказа (виден абитуриенту)
+    note = (notes or {}).get(o['id']) or legacy_note
     status = o.get('status') if o.get('status') in ORDER_STATUS_KEYS else 'pending'
     product = products.get(o.get('productId')) or {}
     pimgs = images_of(product) if product else []
@@ -922,18 +951,19 @@ def order_view(o, people, products):
         'image': _str(o.get('imageUrl')) or (pimgs[0]['url'] if pimgs else ''),
         'created': created, 'issued_at': to_datetime(o.get('issuedAt')),
         'cancelled_at': to_datetime(o.get('cancelledAt')), 'refunded': o.get('refundedAt') is not None,
-        'by': by, 'note': _str(o.get('note')),
+        'by': by, 'note': note, 'legacy_note': bool(legacy_note),
         'reason': REJECT_REASONS.get(_str(o.get('reason')), _str(o.get('reason'))) if status == 'rejected' else '',
-        'stuck': status == 'pending' and created is not None and now_utc() - created > timedelta(minutes=10),
+        'stuck': status == 'pending' and is_stuck(o),
         'search': _norm(' '.join([o['id'], _str(o.get('title')), _str(o.get('variant')), p['title'], p['login'],
-                                  p['phone'], p['uid'], _str(o.get('note'))])),
+                                  p['phone'], p['uid'], note])),
     }
 
 
 def _order_filters(args):
     tab = args.get('status', 'reserved')
     period = _str(args.get('period'))
-    return {'status': tab if tab in ORDER_STATUS_KEYS + ['pending', 'all'] else 'reserved',
+    # 'pending' — ещё обрабатываются (моложе STUCK_MINUTES), 'stuck' — зависли (без status дольше)
+    return {'status': tab if tab in ORDER_STATUS_KEYS + ['pending', 'stuck', 'all'] else 'reserved',
             'q': _str(args.get('q'), 120), 'product': _str(args.get('product'), 64), 'uid': _str(args.get('uid'), 128),
             'period': period if period in dict(PERIODS) else ''}
 
@@ -943,7 +973,13 @@ def filter_orders(views, f):
     words = _norm(f['q']).split()
     out = []
     for v in views:
-        if f['status'] != 'all' and v['status'] != f['status']:
+        if f['status'] == 'stuck':
+            if not v['stuck']:
+                continue
+        elif f['status'] == 'pending':
+            if v['status'] != 'pending' or v['stuck']:
+                continue
+        elif f['status'] != 'all' and v['status'] != f['status']:
             continue
         if f['product'] and v['product_id'] != f['product']:
             continue
@@ -954,15 +990,16 @@ def filter_orders(views, f):
         if words and not all(w in v['search'] for w in words):
             continue
         out.append(v)
-    if f['status'] == 'reserved':
-        out.sort(key=lambda v: v['created'] or EPOCH)   # выдаём по очереди: сначала самые давние
+    if f['status'] in ('reserved', 'stuck'):
+        out.sort(key=lambda v: v['created'] or EPOCH)   # выдаём (разбираем) по очереди: сначала самые давние
     return out
 
 
 def _orders_context():
     snap = load_orders()
     products = {p['id']: p for p in _safe(load_products, [])}
-    return snap, [order_view(o, snap['people'], products) for o in snap['orders']]
+    notes = snap.get('notes') or {}
+    return snap, [order_view(o, snap['people'], products, notes) for o in snap['orders']]
 
 
 @routes.route('/coins/orders')
@@ -975,11 +1012,12 @@ def coins_orders():
         flash_error('Не удалось загрузить заказы. Обновите страницу', e)
         snap, views = {'truncated': False, 'people': {}}, []
     counts = dict(_safe(order_counts, {}))
-    local = {k: sum(1 for v in views if v['status'] == k) for k in ORDER_STATUS_KEYS + ['pending']}
+    local = {k: sum(1 for v in views if v['status'] == k) for k in ORDER_STATUS_KEYS}
     for k in ORDER_STATUS_KEYS:
         if counts.get(k) is None:
             counts[k] = local[k]
-    counts['pending'] = local['pending']
+    counts['stuck'] = sum(1 for v in views if v['stuck'])
+    counts['pending'] = sum(1 for v in views if v['status'] == 'pending' and not v['stuck'])
     rows = filter_orders(views, f)
     page = paginate_list(rows, request.args.get('page'), PER_PAGE)
     reserved = [v for v in views if v['status'] == 'reserved']
@@ -989,7 +1027,7 @@ def coins_orders():
         'oldest': min((v['created'] for v in reserved if v['created']), default=None),
         'issued_week': sum(1 for v in views
                            if v['status'] == 'issued' and v['issued_at'] and v['issued_at'] >= week_ago),
-        'issued': counts.get('issued') or 0, 'stuck': sum(1 for v in views if v['stuck']),
+        'issued': counts.get('issued') or 0, 'stuck': counts['stuck'],
     }
     who = None
     if f['uid']:
@@ -1000,14 +1038,29 @@ def coins_orders():
     product_options = sorted({(v['product_id'], v['title']) for v in views if v['product_id']}, key=lambda x: x[1])
     return render_template('coins/orders.html', page=page, f=f, counts=counts, kpi=kpi, statuses=ORDER_STATUSES,
                            periods=PERIODS, product_options=product_options, who=who, filtered=len(rows),
-                           truncated=snap.get('truncated'), bulk_limit=BULK_LIMIT, now=now_utc())
+                           truncated=snap.get('truncated'), bulk_limit=BULK_LIMIT, now=now_utc(),
+                           legacy_notes=sum(1 for v in views if v['legacy_note']), stuck_minutes=STUCK_MINUTES)
+
+
+def _note_doc(note, uid, admin_uid):
+    """Документ coin_order_notes/{orderId}: заметку видят только админы (Admin SDK), абитуриент — нет."""
+    return {'note': note, 'uid': _str(uid), 'updatedAt': SERVER_TIMESTAMP, 'updatedBy': admin_uid}
 
 
 def set_order_status(order_id, new_status, note=None):
-    """reserved → issued | cancelled в транзакции. → ('ok'|'missing'|'state', данные заказа до правки).
+    """reserved → issued | cancelled в транзакции; зависший заказ (без status дольше STUCK_MINUTES) — только
+    → cancelled. → ('ok'|'missing'|'state'|'charged', данные заказа до правки).
 
-    Деньги и склад здесь НЕ трогаем: при отмене возврат и склад делает функция onCoinOrderUpdated."""
+    Деньги и склад здесь НЕ трогаем: при отмене reserved возврат и склад делает функция onCoinOrderUpdated.
+    Зависший заказ функция не обработала — коины не списаны, склад не тронут; onCoinOrderUpdated его тоже не
+    тронет (before.status ≠ 'reserved'), а onCoinOrderCreated при повторе увидит status и выйдет. Поэтому
+    отмена зависшего — просто закрытие. Если списание order_<id> всё же есть (заказ пересоздан) — отказ
+    'charged': такая отмена не вернула бы коины.
+    Заметка пишется в coin_order_notes/{id}; старое поле note из заказа уходит (DELETE_FIELD) — без новой
+    заметки его текст переносится туда же (если там ещё пусто)."""
     ref = db.collection('coin_orders').document(order_id)
+    note_ref = db.collection(NOTES_COLL).document(order_id)
+    purchase_ref = db.collection('coin_transactions').document('order_' + order_id)
     admin_uid = _admin_uid()
     transaction = db.transaction()
 
@@ -1018,15 +1071,22 @@ def set_order_status(order_id, new_status, note=None):
             return 'missing', None
         d = snap.to_dict() or {}
         if d.get('status') != 'reserved':
-            return 'state', d
+            if new_status != 'cancelled' or not is_stuck(d):
+                return 'state', d
+            if purchase_ref.get(transaction=t).exists:
+                return 'charged', d
+        legacy = _str(d.get('note'))
+        move_legacy = bool(legacy and not note and not note_ref.get(transaction=t).exists)
         upd = {'status': new_status, 'updatedAt': SERVER_TIMESTAMP}
         if new_status == 'issued':
             upd.update({'issuedAt': SERVER_TIMESTAMP, 'issuedBy': admin_uid})
         else:
             upd.update({'cancelledAt': SERVER_TIMESTAMP, 'cancelledBy': admin_uid})
-        if note:
-            upd['note'] = note
+        if 'note' in d:
+            upd['note'] = DELETE_FIELD
         t.update(ref, upd)
+        if note or move_legacy:
+            t.set(note_ref, _note_doc(note or legacy, d.get('uid'), admin_uid))
         return 'ok', d
 
     return run(transaction)
@@ -1034,11 +1094,25 @@ def set_order_status(order_id, new_status, note=None):
 
 _STATE_TEXT = {'issued': 'уже выдан', 'cancelled': 'уже отменён', 'rejected': 'отклонён системой',
                None: 'ещё обрабатывается'}
+_CHARGED_TEXT = ('По заказу уже списаны коины, но сервер не проставил статус — отмена не вернула бы их, поэтому '
+                 'заказ не тронут. Подождите несколько минут: сервер повторит обработку. Если заказ так и не '
+                 'обработается — сообщите разработчику')
 
 
-def _after_orders_change():
+def _after_orders_change(cancelled=False):
     invalidate_coins_cache('orders', 'order_counts', 'products')
     cache.invalidate('applicants:orders')   # блок «Коины» в аналитике абитуриентов
+    if cancelled:  # отмена: функция вернёт коины — балансы в снапшоте абитуриентов пересчитаем
+        cache.invalidate('applicants:snapshot')
+
+
+def _order_title(d):
+    """Название для сообщений: снимок в заказе (пишет функция), иначе товар из каталога."""
+    title = _str(d.get('title'))
+    if not title and d.get('productId'):
+        product = next((p for p in _safe(load_products, []) if p['id'] == d.get('productId')), None) or {}
+        title = _str(product.get('title'))
+    return title or 'Заказ'
 
 
 def _order_action(order_id, new_status):
@@ -1052,17 +1126,27 @@ def _order_action(order_id, new_status):
         return _back('coins_orders')
     if result == 'missing':
         flash('Заказ не найден — возможно, абитуриент удалил аккаунт', 'warning')
+    elif result == 'charged':
+        flash(_CHARGED_TEXT, 'error')
+    elif result == 'state' and not d.get('status'):
+        flash('Заказ ещё обрабатывается сервером — статус не изменён. Если через %d минут после оформления он не '
+              'обработается, его можно будет отменить' % STUCK_MINUTES, 'warning')
     elif result == 'state':
         flash('Заказ %s — статус не изменён' % _STATE_TEXT.get(d.get('status'), 'в другом статусе'), 'warning')
     else:
-        title = _str(d.get('title')) or 'Заказ'
-        _after_orders_change()
+        title = _order_title(d)
+        stuck = not d.get('status')
+        _after_orders_change(cancelled=new_status != 'issued')
         audit('issue' if new_status == 'issued' else 'cancel', 'coin_order', order_id,
-              {'uid': d.get('uid'), 'title': title, 'price': d.get('price'), 'note': note or None})
+              {'uid': d.get('uid'), 'title': title, 'price': d.get('price'), 'note': note or None,
+               'stuck': stuck or None})
         if new_status == 'issued':
             # выдача — явное действие без модалки; в тосте — ссылка на журнал абитуриента (UX_SPEC_v2 §4.11)
             flash_action('«%s» выдан — абитуриент получит уведомление' % title, 'Журнал',
                          href=url_for('coins_journal', uid=d.get('uid')) if d.get('uid') else url_for('coins_journal'))
+        elif stuck:
+            flash('Зависший заказ «%s» отменён. Сервер его не обработал: коины не списывались и склад не менялся — '
+                  'возвращать нечего, уведомление абитуриенту не придёт' % title, 'success')
         else:
             price = _int(d.get('price'), 0) or 0
             flash('Заказ «%s» отменён — %d %s вернутся на счёт абитуриента через несколько секунд'
@@ -1085,7 +1169,8 @@ def coins_order_cancel(order_id):
 @routes.route('/coins/orders/<order_id>/note', methods=['POST'])
 @admin_required
 def coins_order_note(order_id):
-    """Заметка к заказу (видна только админам): ≤ 500 символов, пустая — удалить."""
+    """Заметка к заказу (видна только админам): coin_order_notes/{orderId}, ≤ 500 символов, пустая — удалить.
+    Старое поле coin_orders/{id}.note (документ заказа абитуриент читает целиком) удаляется в том же batch."""
     if not _safe_doc_id(order_id):
         abort(404)
     note = (request.form.get('note') or '').strip()
@@ -1094,16 +1179,62 @@ def coins_order_note(order_id):
         return _back('coins_orders')
     ref = db.collection('coin_orders').document(order_id)
     try:
-        if not ref.get().exists:
+        snap = ref.get(**fs_opts())
+        if not snap.exists:
             flash('Заказ не найден', 'warning')
             return _back('coins_orders')
-        ref.update({'note': note or DELETE_FIELD, 'updatedAt': SERVER_TIMESTAMP})
+        d = snap.to_dict() or {}
+        batch = db.batch()
+        note_ref = db.collection(NOTES_COLL).document(order_id)
+        if note:
+            batch.set(note_ref, _note_doc(note, d.get('uid'), _admin_uid()))
+        else:
+            batch.delete(note_ref)
+        if 'note' in d:
+            batch.update(ref, {'note': DELETE_FIELD})
+        batch.commit()
     except Exception as e:
         flash_error('Не удалось сохранить заметку', e)
         return _back('coins_orders')
     invalidate_coins_cache('orders')
     audit('note', 'coin_order', order_id, {'note': note or None})
     flash('Заметка сохранена' if note else 'Заметка удалена', 'success')
+    return _back('coins_orders')
+
+
+@routes.route('/coins/orders/notes/migrate', methods=['POST'])
+@admin_required
+def coins_orders_migrate_notes():
+    """Перенести старые заметки из заказов (coin_orders/{id}.note — документ доступен абитуриенту) в
+    coin_order_notes. Уже существующую заметку в coin_order_notes не перезаписываем: она новее."""
+    moved = 0
+    try:
+        # note > '' — только заказы с непустой строкой note (документы без поля запрос не возвращает)
+        legacy = list(where(db.collection('coin_orders'), 'note', '>', '').select(['note', 'uid'])
+                .stream(**fs_opts(True)))
+        existing = set()   # ошибка чтения прерывает перенос (get_docs молча вернул бы неполный ответ)
+        for part in chunked([db.collection(NOTES_COLL).document(s.id) for s in legacy], 300):
+            existing.update(n.id for n in db.get_all(part, field_paths=['note'], **fs_opts()) if n.exists)
+        admin_uid = _admin_uid()
+        for part in chunked(legacy, 200):   # 2 записи на заказ — лимит batch 500
+            batch = db.batch()
+            for s in part:
+                d = s.to_dict() or {}
+                if s.id not in existing:
+                    batch.set(db.collection(NOTES_COLL).document(s.id), _note_doc(_str(d.get('note')), d.get('uid'),
+                                                                                  admin_uid))
+                batch.update(s.reference, {'note': DELETE_FIELD})
+            batch.commit()
+            moved += len(part)
+    except Exception as e:
+        invalidate_coins_cache('orders')
+        flash_error('Не удалось перенести заметки%s. Повторите' % (' (перенесено %d)' % moved if moved else ''), e)
+        return _back('coins_orders')
+    invalidate_coins_cache('orders')
+    if moved:
+        audit('migrate_notes', 'coin_orders', None, {'count': moved})
+    flash('Заметки перенесены: %d — теперь их видят только администраторы' % moved if moved else
+          'Старых заметок в заказах нет', 'success')
     return _back('coins_orders')
 
 
@@ -1123,22 +1254,28 @@ def coins_orders_bulk():
         return _back('coins_orders')
     note = _field('note', 500)
     new_status = 'issued' if action == 'issue' else 'cancelled'
-    done, skipped, failed = [], 0, 0
+    done, stuck, skipped, failed = [], 0, 0, 0
     for oid in ids:
         try:
-            result, _d = set_order_status(oid, new_status, note)
+            result, d = set_order_status(oid, new_status, note)
         except Exception:
             log.exception('Массовое действие %s: заказ %s', action, oid)
             failed += 1
             continue
         if result == 'ok':
             done.append(oid)
+            stuck += 0 if d.get('status') else 1
         else:
             skipped += 1
     if done:
-        _after_orders_change()
+        _after_orders_change(cancelled=action != 'issue')
         audit('bulk_' + action, 'coin_orders', None, {'ids': done[:100], 'count': len(done), 'note': note or None})
-    msg = '%s: %d' % ('Выдано заказов' if action == 'issue' else 'Отменено заказов (с возвратом коинов)', len(done))
+    if action == 'issue':
+        msg = 'Выдано заказов: %d' % len(done)
+    else:
+        msg = 'Отменено заказов (с возвратом коинов): %d' % (len(done) - stuck)
+        if stuck:
+            msg += '; закрыто зависших (коины не списывались): %d' % stuck
     if skipped:
         msg += '; пропущено %d — они уже не ждут выдачи' % skipped
     if failed:
@@ -1157,12 +1294,12 @@ def coins_orders_export():
         flash_error('Не удалось выгрузить заказы', e)
         return redirect(url_for('coins_orders'))
     rows = filter_orders(views, f)[:EXPORT_LIMIT]
-    labels = dict(ORDER_STATUSES, pending='Обрабатывается')
+    labels = dict(ORDER_STATUSES, pending='Обрабатывается', stuck='Завис — сервер не обработал')
     header = ['Заказ', 'Дата', 'Статус', 'Товар', 'Вариант', 'Цена (коины)', 'Абитуриент', 'Логин', 'Телефон',
               'Выдан/отменён', 'Кем', 'Причина отказа', 'Заметка', 'UID']
     data = [[csv_cell(x) for x in (
-        v['id'], fmt_dt(v['created'], default=''), labels.get(v['status'], v['status']), v['title'], v['variant'],
-        v['price'], v['person']['name'], v['person']['login'], v['person']['phone'],
+        v['id'], fmt_dt(v['created'], default=''), labels.get('stuck' if v['stuck'] else v['status'], v['status']),
+        v['title'], v['variant'], v['price'], v['person']['name'], v['person']['login'], v['person']['phone'],
         fmt_dt(v['issued_at'] or v['cancelled_at'], default=''), v['by'], v['reason'], v['note'], v['uid'])]
         for v in rows]
     audit('export', 'coin_orders', None, {'status': f['status'], 'rows': len(data)})
@@ -1175,13 +1312,34 @@ def load_campaigns():
     """Все кампании (новые сверху, кэш 2 мин). id = код."""
     def load():
         items = []
-        for s in db.collection('coin_campaigns').stream():
+        for s in db.collection('coin_campaigns').stream(**fs_opts(True)):
             d = s.to_dict() or {}
             d['id'] = s.id
             items.append(d)
         items.sort(key=lambda c: _ts(c.get('createdAt')), reverse=True)
         return items
     return cache.get_or_set('coins:campaigns', load, CAMPAIGNS_TTL)
+
+
+def source_titles():
+    """QR-источники {код: название} (applicant_sources, id = код; кэш 2 мин) — чтобы коды кампаний с ними не
+    совпадали: старая версия приложения пишет код кампании в users.source, а правила отклоняют регистрацию,
+    если там код существующего QR-источника."""
+    def load():
+        return {s.id: _str((s.to_dict() or {}).get('title')) or s.id for s in
+                db.collection('applicant_sources').select(['title']).stream(**fs_opts(True))}
+    return cache.get_or_set('coins:sources', load, CAMPAIGNS_TTL)
+
+
+def qr_source_title(code):
+    """Название QR-источника с кодом code (свежее чтение, не из кэша) или None, если такого нет."""
+    snap = db.collection('applicant_sources').document(code).get(**fs_opts())
+    return (_str((snap.to_dict() or {}).get('title')) or code) if snap.exists else None
+
+
+def taken_codes():
+    """Коды, которые нельзя дать новой кампании: другие кампании и QR-источники."""
+    return {c['id'] for c in _safe(load_campaigns, [])} | set(_safe(source_titles, {}))
 
 
 def campaign_state(c, now=None):
@@ -1252,8 +1410,9 @@ def coins_campaigns():
            'claims': sum(v['claims'] for v in views),
            'coins': stats.get('coins') if stats.get('coins') is not None else sum(v['issued'] for v in views)}
     page = paginate_list(rows, request.args.get('page'), PER_PAGE)
+    clashes = sorted(set(_safe(source_titles, {})) & {c['id'] for c in items})   # созданы до проверки кодов
     return render_template('coins/campaigns.html', page=page, kpi=kpi, state=state, q=q, states=CAMPAIGN_STATES,
-                           state_counts=state_counts, filtered=len(rows))
+                           state_counts=state_counts, filtered=len(rows), clashes=clashes)
 
 
 def _campaign_form_values(doc=None):
@@ -1304,7 +1463,7 @@ def _validate_campaign(v, creating):
 def _campaign_or_404(code):
     if not is_valid_code(code):
         abort(404)
-    doc = doc_dict(db.collection('coin_campaigns').document(code).get())
+    doc = doc_dict(db.collection('coin_campaigns').document(code).get(**fs_opts()))
     if doc is None:
         abort(404)
     return doc
@@ -1323,9 +1482,22 @@ def coins_campaign_form(code=None):
     doc = _campaign_or_404(code) if code else None
     values = _campaign_form_values(doc)
     errors = {}
-    taken = {c['id'] for c in _safe(load_campaigns, [])}
+    taken = taken_codes()   # предложенный/сгенерированный код не совпадёт ни с кампанией, ни с QR-источником
     if request.method == 'POST':
         errors, data = _validate_campaign(values, creating=doc is None)
+        if doc is None and values['code'] and 'code' not in errors:
+            # код QR-источника нельзя: старая версия приложения пишет код кампании в users.source, а правила
+            # отклоняют регистрацию с кодом существующего QR-источника
+            try:
+                src = qr_source_title(values['code'])
+            except Exception:
+                log.exception('QR-источник %s не проверен', values['code'])
+                errors['code'] = 'Не удалось проверить, свободен ли код. Попробуйте ещё раз'
+            else:
+                if src is not None:
+                    errors['code'] = ('Код %s уже используется QR-источником «%s» (Абитуриенты → QR-источники) — '
+                                      'придумайте другой: иначе абитуриенты со старой версией приложения не смогут '
+                                      'зарегистрироваться с этим кодом' % (values['code'], src))
         if not errors:
             try:
                 if doc is None:
@@ -1362,7 +1534,7 @@ def coins_campaign_form(code=None):
 def load_claims(code, limit=CLAIMS_LIMIT):
     """Вводы кода (coin_claims where code ==), новые сверху. Без order_by — не нужен составной индекс."""
     items = [dict(s.to_dict() or {}, id=s.id) for s in
-             where(db.collection('coin_claims'), 'code', '==', code).limit(limit).stream()]
+             where(db.collection('coin_claims'), 'code', '==', code).limit(limit).stream(**fs_opts(True))]
     items.sort(key=lambda c: _ts(c.get('createdAt')), reverse=True)
     return items
 
@@ -1454,7 +1626,7 @@ def coins_campaign_present(code):
     view = campaign_view(_campaign_or_404(code))
     sources = []
     try:
-        for s in db.collection('applicant_sources').select(['title', 'active']).stream():
+        for s in db.collection('applicant_sources').select(['title', 'active']).stream(**fs_opts(True)):
             d = s.to_dict() or {}
             if d.get('active') is True:
                 sources.append((s.id, _str(d.get('title')) or s.id))
@@ -1468,7 +1640,7 @@ def coins_campaign_present(code):
         join_url += '/' + src
     else:
         try:
-            snap = db.collection('app_config').document('admissions').get()
+            snap = db.collection('app_config').document('admissions').get(**fs_opts())
             reg = _str((snap.to_dict() or {}).get('registerUrl')) if snap.exists else ''
             if reg.startswith(('http://', 'https://')):
                 join_url = reg
@@ -1520,14 +1692,17 @@ def coins_campaign_delete(code):
 # ==================== ЖУРНАЛ ====================
 
 def _journal_stats():
-    """Сводка журнала (aggregation, кэш 5 мин)."""
+    """Сводка журнала (aggregation, кэш 5 мин). Возврат за отменённый заказ (type 'refund', amount > 0) —
+    не начисление: «начислено» его не включает, возвраты — отдельной строкой (и уже вычтены из «потрачено»)."""
     def load():
         tx = db.collection('coin_transactions')
         purchases = aggregate_sum(where(tx, 'type', '==', 'purchase'), 'amount', default=None)
         refunds = aggregate_sum(where(tx, 'type', '==', 'refund'), 'amount', default=None)
+        positive = aggregate_sum(where(tx, 'amount', '>', 0), 'amount', default=None)
         month = now_utc() - timedelta(days=30)
         return {
-            'issued': aggregate_sum(where(tx, 'amount', '>', 0), 'amount', default=None),
+            'issued': positive - refunds if positive is not None and refunds is not None else None,
+            'refunds': refunds,
             'spent': (-(purchases or 0) - (refunds or 0)) if purchases is not None else None,
             'balance': aggregate_sum(db.collection('coin_wallets'), 'balance', default=None),
             'errors': count(where(tx, 'applied', '==', False), default=None),
@@ -1573,10 +1748,11 @@ def journal_query(f, uids):
         items = []
         for part in chunked(uids, 10):
             q = where(tx, 'uid', '==', part[0]) if len(part) == 1 else where(tx, 'uid', 'in', part)
-            items += [dict(s.to_dict() or {}, id=s.id) for s in q.limit(1000).stream()]
+            items += [dict(s.to_dict() or {}, id=s.id) for s in q.limit(1000).stream(**fs_opts(True))]
         return 'list', _sorted_list([t for t in items if _tx_matches(t, f, since)])
     if f['status'] == 'error':
-        items = [dict(s.to_dict() or {}, id=s.id) for s in where(tx, 'applied', '==', False).limit(1000).stream()]
+        items = [dict(s.to_dict() or {}, id=s.id) for s in where(tx, 'applied', '==', False).limit(1000)
+                .stream(**fs_opts(True))]
         return 'list', _sorted_list([t for t in items if _tx_matches(t, f, since)])
     q = tx
     if f['type']:
@@ -1585,7 +1761,7 @@ def journal_query(f, uids):
         q = where(q, 'createdAt', '>=', since)
     q = q.order_by('createdAt', direction=DESC)
     if f['status']:   # «проведено» / «в обработке» — фильтр в памяти по последним 1000
-        items = [dict(s.to_dict() or {}, id=s.id) for s in q.limit(1000).stream()]
+        items = [dict(s.to_dict() or {}, id=s.id) for s in q.limit(1000).stream(**fs_opts(True))]
         return 'list', [t for t in items if tx_status(t) == f['status']]
     return 'page', q
 
@@ -1668,7 +1844,7 @@ def coins_journal_export():
             items = []
         else:
             kind, res = journal_query(f, uids)
-            items = [dict(s.to_dict() or {}, id=s.id) for s in res.limit(EXPORT_LIMIT).stream()] \
+            items = [dict(s.to_dict() or {}, id=s.id) for s in res.limit(EXPORT_LIMIT).stream(**fs_opts(True))] \
                 if kind == 'page' else res[:EXPORT_LIMIT]
     except Exception as e:
         flash_error('Не удалось выгрузить журнал', e)
@@ -1689,8 +1865,18 @@ def coins_journal_export():
                          'ID операции'], rows)
 
 
+class AmbiguousRecipient(ValueError):
+    """Телефон из профиля указан у нескольких абитуриентов (братья и сёстры пишут номер родителя)."""
+
+    def __init__(self, token, uids):
+        super().__init__(token)
+        self.token = token
+        self.uids = list(uids)
+
+
 def resolve_recipient(token, directory):
-    """Строка получателя (uid, логин, телефон, email) → uid или None."""
+    """Строка получателя (uid, логин, телефон, email) → uid или None. Логин и email уникальны; телефон
+    профиля — нет: несколько совпадений → AmbiguousRecipient (не начислять «первому найденному»)."""
     token = _str(token, 120)
     if not token:
         return None
@@ -1703,11 +1889,13 @@ def resolve_recipient(token, directory):
         if _match_login(u, canon, email, None):
             return uid
     if phone:
-        for uid, u in directory.items():
-            if normalize_phone(_str(u.get('phone'))) == phone:
-                return uid
+        matches = [uid for uid, u in directory.items() if normalize_phone(_str(u.get('phone'))) == phone]
+        if len(matches) > 1:
+            raise AmbiguousRecipient(token, matches)
+        if matches:
+            return matches[0]
     try:
-        if _safe_doc_id(token) and db.collection('users').document(token).get().exists:
+        if _safe_doc_id(token) and db.collection('users').document(token).get(**fs_opts()).exists:
             return token
     except Exception:
         log.warning('Получатель %s не проверен', token, exc_info=True)
@@ -1737,13 +1925,24 @@ def coins_award():
         flash('За раз — не больше %d получателей' % MAX_RECIPIENTS, 'error')
         return _back('coins_journal')
     directory = _safe(load_people, {})
-    resolved, unknown = [], []
+    resolved, unknown, ambiguous = [], [], []
     for t in tokens:
-        uid = resolve_recipient(t, directory)
+        try:
+            uid = resolve_recipient(t, directory)
+        except AmbiguousRecipient as e:
+            ambiguous.append(e)
+            continue
         if uid:
             resolved.append(uid)
         else:
             unknown.append(t)
+    if ambiguous:
+        e = ambiguous[0]
+        who = ', '.join('%s (%s)' % (_str((directory.get(u) or {}).get('name')) or '—',
+                                     display_login_of(directory.get(u)) or u) for u in e.uids[:5])
+        flash('Номер «%s» указан у нескольких абитуриентов: %s — укажите логин. Операция не проведена'
+              % (e.token, who), 'error')
+        return _back('coins_journal')
     if unknown:
         flash('Не найдены: %s. Операция не проведена — проверьте логины' % ', '.join(unknown[:10]), 'error')
         return _back('coins_journal')

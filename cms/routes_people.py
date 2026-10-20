@@ -23,14 +23,15 @@ from collections import Counter, OrderedDict
 
 from flask import flash, jsonify, redirect, render_template, request, session, url_for
 
+from . import conflicts
 from .applicant_login import RESET_PASSWORD, display_login, normalize_phone
-from .core import (DELETE_FIELD, SERVER_TIMESTAMP, ArrayUnion, Routes, UploadError, admin_required, audit,
-                   cache, chunked, csv_response, db, delete_storage_paths, fb_auth, flash_action, flash_error,
+from .core import (DELETE_FIELD, SERVER_TIMESTAMP, ArrayUnion, Routes, UploadError, admin_required, audit, cache,
+                   chunked, csv_response, db, delete_storage_paths, fb_auth, flash_action, flash_error, fs_opts,
                    get_docs, log, nav_url, next_target, now_utc, paginate_list, redirect_back, safe_next_url,
                    storage_path_from_url, to_datetime, today_almaty, upload_image, url_with, where)
 from .schedule_model import (DAY_NAMES_FULL, get_all_groups, get_all_teachers, group_key, group_sort_key,
                              intervals_overlap, invalidate_directory_caches, invalidate_schedule_caches,
-                             load_lessons_snapshot, norm_text, weeks_overlap)
+                             load_lessons_snapshot, norm_text)
 
 routes = Routes()
 
@@ -119,6 +120,7 @@ def _invalidate_people(roles=()):
     """Сбросить кэши раздела после записи в users (и справочник преподавателей, если он задет)."""
     cache.invalidate_prefix('people:')
     cache.invalidate_prefix('home:')
+    cache.invalidate_prefix('search:')   # Ctrl+K
     roles = set(r for r in roles if r)
     if 'teacher' in roles:
         invalidate_directory_caches()
@@ -216,7 +218,7 @@ def _users_snapshot():
     не менять на месте — копировать (dict(row))."""
     def load():
         return [_user_row(snap.id, snap.to_dict() or {})
-                for snap in db.collection('users').select(USER_FIELDS).stream()]
+                for snap in db.collection('users').select(USER_FIELDS).stream(**fs_opts(True))]
     return cache.get_or_set(USERS_KEY, load, ttl=USERS_TTL)
 
 
@@ -506,7 +508,7 @@ def admin_edit_user(user_id):
     """Карточка и правка пользователя. GET — форма + аккаунт входа; POST — сохранение по роли."""
     ref = db.collection('users').document(user_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить пользователя', e)
         return redirect(url_for('admin_users'))
@@ -566,7 +568,7 @@ def admin_reset_password(user_id):
     Пароль администратора так не сбрасывается."""
     ref = db.collection('users').document(user_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить пользователя', e)
         return _back('admin_users')
@@ -625,6 +627,25 @@ def _delete_account_and_profile(uid):
     db.collection('users').document(uid).delete()
 
 
+def _cleanup_applicant_data(docs):
+    """После удаления users/{uid} (docs — {uid: профиль до удаления}). Абитуриент: заметки к его заказам
+    (coin_order_notes пишет CMS, функция про них не знает; остальное чистит onApplicantDeleted). Зачисленный
+    студент (есть CRM-карточка): функция выходит (role ≠ applicant) — его данные абитуриента чистит CMS.
+    → (сколько зачисленных найдено, сколько очищено не полностью)."""
+    from .routes_applicants import _delete_order_notes, purge_converted_applicant
+    for uid, d in docs.items():
+        if (d or {}).get('role') == 'applicant':
+            _delete_order_notes(uid)
+    students = [uid for uid, d in docs.items() if (d or {}).get('role') == 'student']
+    converted = list(get_docs('applicant_crm', students, ['status'])) if students else []
+    failed = sum(1 for uid in converted if not purge_converted_applicant(uid))
+    if converted:
+        cache.invalidate_prefix('applicants:')
+        cache.invalidate_prefix('coins:')
+        cache.invalidate('nav:badges')
+    return len(converted), failed
+
+
 @routes.route('/admin/users/delete/<user_id>', methods=['POST'])
 @admin_required
 def admin_delete_user(user_id):
@@ -634,7 +655,7 @@ def admin_delete_user(user_id):
         flash('Нельзя удалить самого себя', 'error')
         return _back('admin_users')
     try:
-        snap = db.collection('users').document(user_id).get()
+        snap = db.collection('users').document(user_id).get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить пользователя', e)
         return _back('admin_users')
@@ -649,9 +670,16 @@ def admin_delete_user(user_id):
     except Exception as e:
         flash_error('Не удалось удалить пользователя. Попробуйте ещё раз', e)
         return _back('admin_users')
+    converted, failed = _cleanup_applicant_data({user_id: data})
     _invalidate_people([role])
-    audit('delete', 'user', user_id, {'role': role, 'name': data.get('name') or '', 'email': data.get('email') or ''})
-    flash('Пользователь «%s» удалён вместе с аккаунтом входа' % title, 'success')
+    audit('delete', 'user', user_id, {'role': role, 'name': data.get('name') or '', 'email': data.get('email') or '',
+                                      'applicant_data': bool(converted) or None})
+    if failed:
+        flash('Пользователь «%s» удалён, но часть его данных абитуриента (коины, заказы, CRM) не очистилась — '
+              'сообщите разработчику' % title, 'warning')
+    else:
+        flash('Пользователь «%s» удалён вместе с аккаунтом входа%s'
+              % (title, ' и данными абитуриента' if converted else ''), 'success')
     return redirect(_next_url('admin_users', role=role if role in ROLE_LABELS else None))
 
 
@@ -792,6 +820,10 @@ def _bulk_delete(ids, docs):
             batch.commit()
     except Exception as e:
         flash_error('Аккаунты удалены, но профили — не все. Повторите удаление', e)
+    _converted, cleanup_failed = _cleanup_applicant_data({uid: docs.get(uid) for uid in done})
+    if cleanup_failed:
+        flash('Данные абитуриента очистились не у всех зачисленных (%d) — сообщите разработчику' % cleanup_failed,
+              'warning')
     _invalidate_people({(docs.get(uid) or {}).get('role') for uid in done})
     audit('bulk_delete', 'user', None, {'ids': done, 'failed': sorted(failed)})
     msg = 'Удалено пользователей: %d' % len(done)
@@ -1003,7 +1035,7 @@ def teacher_edit(uid):
     не было, аккаунт Auth создаётся с ТЕМ ЖЕ uid."""
     ref = db.collection('users').document(uid)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить преподавателя', e)
         return redirect(url_for('teachers_list'))
@@ -1101,17 +1133,18 @@ def teacher_edit(uid):
 def _teacher_clashes(days):
     """id занятий преподавателя, которые пересекаются по времени с другим его занятием в тот же день
     (с учётом числителя/знаменателя и дат разовых занятий) — подсветка на странице преподавателя.
-    Полный разбор накладок — в разделе «Накладки»."""
+    Когда пары идут одновременно — как в разделе «Накладки» (conflicts.pair_weeks): занятие только с date
+    (старый веб) приложение показывает каждую неделю, разовое — только явный one_off + date."""
     out = set()
     for items in days.values():
         for i, a in enumerate(items):
             for b in items[i + 1:]:
-                if a['kind'] == 'dated' and b['kind'] == 'dated' and a['date'] != b['date']:
+                if conflicts.pair_weeks(a, b) is None:
                     continue
                 if (a['room_key'] and a['room_key'] == b['room_key']
                         and norm_text(a['subject']) == norm_text(b['subject']) and a['groupId'] != b['groupId']):
                     continue  # поток: одна аудитория и дисциплина у нескольких групп — не накладка
-                if weeks_overlap(a['week'], b['week']) and intervals_overlap(a['start'], a['end'], b['start'], b['end']):
+                if intervals_overlap(a['start'], a['end'], b['start'], b['end']):
                     out.update((a['id'], b['id']))
     return out
 
@@ -1122,7 +1155,7 @@ def teacher_delete(uid):
     """Удаление преподавателя (аккаунт входа + карточка). Если у него есть занятия — только с
     подтверждением force=1 (занятия останутся без преподавателя — их видно в «Качестве данных»)."""
     try:
-        snap = db.collection('users').document(uid).get()
+        snap = db.collection('users').document(uid).get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить преподавателя', e)
         return redirect(url_for('teachers_list'))
@@ -1221,7 +1254,7 @@ def _group_major(name):
 def _groups_directory():
     """groups_list: {название: данные} (кэш; сбрасывается вместе со справочником групп)."""
     def load():
-        return {d.id: d.to_dict() or {} for d in db.collection('groups_list').stream()}
+        return {d.id: d.to_dict() or {} for d in db.collection('groups_list').stream(**fs_opts(True))}
     return cache.get_or_set(GROUPS_DIR_KEY, load)
 
 
@@ -1338,7 +1371,7 @@ def group_rename():
     moved_users = lessons = 0
     try:
         dir_ref = db.collection('groups_list').document(old)
-        dir_snap = dir_ref.get()
+        dir_snap = dir_ref.get(**fs_opts())
         data = dict(dir_snap.to_dict() or {}) if dir_snap.exists else {'createdAt': SERVER_TIMESTAMP}
         data.update({'name': new, 'updatedAt': SERVER_TIMESTAMP})
         batch = db.batch()
@@ -1346,7 +1379,8 @@ def group_rename():
         if dir_snap.exists:
             batch.delete(dir_ref)
         batch.commit()
-        refs = [d.reference for d in where(db.collection('users'), 'group', '==', old).select([]).stream()]
+        refs = [d.reference for d in where(db.collection('users'), 'group', '==', old).select([])
+                .stream(**fs_opts(True))]
         for part in chunked(refs, 450):
             b = db.batch()
             for ref in part:
@@ -1375,7 +1409,8 @@ def group_delete(group_name):
     (их удаляют в разделе «Расписание», чтобы случайно не стереть сетку)."""
     try:
         db.collection('groups_list').document(group_name).delete()
-        refs = [d.reference for d in where(db.collection('users'), 'group', '==', group_name).select([]).stream()]
+        refs = [d.reference for d in where(db.collection('users'), 'group', '==', group_name).select([])
+                .stream(**fs_opts(True))]
         for part in chunked(refs, 450):
             batch = db.batch()
             for ref in part:
@@ -1401,7 +1436,7 @@ def group_delete(group_name):
 def _subjects():
     def load():
         rows = [{'id': d.id, 'name': str((d.to_dict() or {}).get('name') or '').strip()}
-                for d in db.collection('subjects').stream()]
+                for d in db.collection('subjects').stream(**fs_opts(True))]
         return sorted(rows, key=lambda s: norm_text(s['name']))
     return cache.get_or_set(SUBJECTS_KEY, load)
 
@@ -1508,7 +1543,7 @@ def subject_edit(s_id):
         return _back('subjects_list')
     ref = db.collection('subjects').document(s_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить дисциплину', e)
         return _back('subjects_list')
@@ -1542,7 +1577,7 @@ def subject_edit(s_id):
 def subject_delete(s_id):
     ref = db.collection('subjects').document(s_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         name = str((snap.to_dict() or {}).get('name') or '') if snap.exists else ''
         ref.delete()
     except Exception as e:
@@ -1577,7 +1612,7 @@ def _management_photo(data):
 def _management(force=False):
     def load():
         rows = []
-        for d in db.collection('management').stream():
+        for d in db.collection('management').stream(**fs_opts(True)):
             data = d.to_dict() or {}
             p = _priority(data.get('priority'))
             rows.append({'id': d.id, 'name': str(data.get('name') or ''), 'position': str(data.get('position') or ''),
@@ -1678,7 +1713,7 @@ def administration_add():
 @admin_required
 def administration_edit(admin_id):
     try:
-        snap = db.collection('management').document(admin_id).get()
+        snap = db.collection('management').document(admin_id).get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось загрузить карточку', e)
         return redirect(url_for('administration'))
@@ -1696,7 +1731,7 @@ def administration_edit(admin_id):
 def administration_delete(admin_id):
     ref = db.collection('management').document(admin_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         data = (snap.to_dict() or {}) if snap.exists else {}
         ref.delete()
     except Exception as e:

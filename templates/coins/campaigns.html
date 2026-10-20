@@ -16,6 +16,13 @@
 ]) }}
 {{ cn.section_tabs('campaigns') }}
 
+{% if clashes %}
+{% call ui.hint(icon='exclamation-triangle', tone='warning') %}
+    {{ 'Коды' if clashes|length > 1 else 'Код' }} {{ clashes|join(', ') }} есть и у кампании, и у QR-источника: регистрация
+    в старой версии приложения с таким кодом кампании не пройдёт. Для идущей кампании создайте новую с другим кодом.
+{% endcall %}
+{% endif %}
+
 <div class="cn-listbar cn-listbar--plain">
     {%- set chips = [] -%}
     {%- for k, meta in states.items() %}{% if state_counts[k] or state == k %}{% set _ = chips.append((k, meta[0], state_counts[k])) %}{% endif %}{% endfor -%}

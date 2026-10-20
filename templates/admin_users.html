@@ -87,7 +87,7 @@
                     </td>
                     {% if role in ('', 'none') %}<td class="cc-cell-meta cc-col-md">{{ ui.role_badge(u.role) }}</td>{% endif %}
                     {% if role in ('', 'student') %}
-                    <td class="cc-cell-meta pp-group-cell{{ ' pp-empty' if u.role != 'student' and not (u.role == 'teacher' and u.subject) }}">
+                    <td class="cc-cell-meta pp-group-cell{{ ' cc-cell-empty' if u.role != 'student' and not (u.role == 'teacher' and u.subject) }}">
                         {%- if u.role == 'student' -%}
                             {%- if u.group %}<a href="{{ url_with(role='student', group=u.group, page=None) }}" title="Все студенты группы">{{ u.group }}</a>{% else %}<span class="pp-warn-text">без группы</span>{% endif %}{% if u.course %}<span class="cc-subtle"> · {{ u.course }} курс</span>{% endif -%}
                         {%- elif u.role == 'teacher' and u.subject %}<span class="cc-subtle">{{ u.subject }}</span>

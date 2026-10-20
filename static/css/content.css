@@ -69,7 +69,6 @@
   transition: border-color var(--cc-dur-fast) var(--cc-ease);
 }
 .ct-card:hover, .ct-card:focus-within { border-color: var(--cc-border-strong); }
-.ct-card:hover .cc-row-quick, .ct-card:focus-within .cc-row-quick { opacity: 1; }
 .ct-card__media {
   display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: var(--cc-surface-2);
   color: var(--cc-icon-subtle); font-size: 26px; overflow: hidden;

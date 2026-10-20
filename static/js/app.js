@@ -80,9 +80,14 @@
     input.value = token;
   }
   CC.ensureCsrf = ensureCsrf;
-  // Формы, отправленные программно (form.submit()), не вызывают событие submit.
+  // Формы, отправленные программно (form.submit()), не вызывают событие submit. Такая отправка — после своей
+  // проверки/подтверждения модуля — уводит со страницы: «несохранённые изменения» снимаем (иначе — лишний вопрос).
   var nativeSubmit = HTMLFormElement.prototype.submit;
-  HTMLFormElement.prototype.submit = function () { ensureCsrf(this); return nativeSubmit.call(this); };
+  HTMLFormElement.prototype.submit = function () {
+    ensureCsrf(this);
+    if (this._ccDirtyInit && CC.markClean && (!this.target || this.target === '_self')) CC.markClean(this);
+    return nativeSubmit.call(this);
+  };
   doc.addEventListener('submit', function (e) { ensureCsrf(e.target); }, true);
   onReady(function () {
     qsa('form').forEach(ensureCsrf);
@@ -367,10 +372,13 @@
   /* ----------------------------- Горячие клавиши (§4.13) ----------------------------- */
   var hotkeys = [];
   /** Сочетание модуля: CC.hotkey('BracketLeft', fn, 'Предыдущая группа') — по e.code (работает в RU-раскладке),
-   *  вне полей ввода; попадает в окно «?». opts: {shift: true, group: 'Расписание'}. */
+   *  вне полей ввода; попадает в окно «?». opts: {shift: true, group: 'Расписание', preventDefault: false}.
+   *  preventDefault: false — действие клавиши по умолчанию не отменяется (стрелки прокручивают страницу и таблицы);
+   *  обработчик fn(e) сам вызывает e.preventDefault(), если сработал. */
   CC.hotkey = function (code, fn, description, opts) {
     opts = opts || {};
-    hotkeys.push({ code: code, fn: fn, desc: description || code, shift: !!opts.shift, group: opts.group || 'На этой странице' });
+    hotkeys.push({ code: code, fn: fn, desc: description || code, shift: !!opts.shift, group: opts.group || 'На этой странице',
+                   keepDefault: opts.preventDefault === false });
   };
   var KEY_LABELS = { BracketLeft: '[', BracketRight: ']', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Slash: '/', Period: '.', Comma: ',', Escape: 'Esc', Enter: 'Enter', Space: 'Пробел' };
   function keyLabel(code) { return KEY_LABELS[code] || String(code).replace(/^Key/, '').replace(/^Digit/, ''); }
@@ -437,7 +445,7 @@
     }
     for (var i = 0; i < hotkeys.length; i++) {
       var h = hotkeys[i];
-      if (h.code === e.code && h.shift === e.shiftKey) { e.preventDefault(); h.fn(e); return; }
+      if (h.code === e.code && h.shift === e.shiftKey) { if (!h.keepDefault) e.preventDefault(); h.fn(e); return; }
     }
   });
 
@@ -676,6 +684,13 @@
     });
   });
   window.addEventListener('resize', debounce(function () { qsa('.cc-table-wrap').forEach(function (w) { if (qs('.cc-col-xl, .cc-col-lg, .cc-col-md', w)) sizeWrap(w); }); }, 150));
+  // Строки-карточки (.cc-table--stack): мета-ячейка или ячейка с подписью, где одни пробелы, — пустая
+  // (.cc-cell-empty: в карточке на телефоне не видна и не даёт лишний разделитель « · »).
+  CC.onInit(function (root) {
+    qsa('.cc-table--stack td.cc-cell-meta, .cc-table--stack td[data-label]', root).forEach(function (td) {
+      if (!td.firstElementChild && !td.textContent.trim()) td.classList.add('cc-cell-empty');
+    });
+  });
 
   /* ----------------------------- Выбор строк и массовые действия (§4.5.5) ----------------------------- */
   function selectBoxes(fid) {
@@ -779,6 +794,34 @@
     if (field) field.classList.toggle('is-active', el.type === 'checkbox' ? el.checked : !!el.value);
     if (el.form.requestSubmit) el.form.requestSubmit(); else el.form.submit();
   });
+  // Пилюля «Группа: Все ▾» — по ширине выбранного значения, а не самого длинного варианта. Где браузер умеет
+  // field-sizing: content (Chrome 123+) — это делает CSS; иначе (Firefox, Safari) ширину считаем по тексту.
+  // На телефоне пилюли в шторке и поле во всю ширину — инлайн-ширину снимаем.
+  var FIELD_SIZING = !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'));
+  var fselMeasure = null;
+  function fitSelect(sel) {
+    var opt = sel.options[sel.selectedIndex] || sel.options[0];
+    if (MOBILE.matches || !opt) { sel.style.width = ''; return; }
+    var cs = getComputedStyle(sel);
+    if (!fselMeasure) {
+      fselMeasure = doc.createElement('span');
+      fselMeasure.setAttribute('aria-hidden', 'true');
+      fselMeasure.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:pre;';
+      doc.body.appendChild(fselMeasure);
+    }
+    ['fontStyle', 'fontVariant', 'fontWeight', 'fontSize', 'fontFamily', 'letterSpacing', 'textTransform'].forEach(function (p) { fselMeasure.style[p] = cs[p]; });
+    fselMeasure.textContent = opt.text;
+    var box = ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth'].reduce(function (s, p) { return s + (parseFloat(cs[p]) || 0); }, 0);
+    sel.style.width = Math.ceil(fselMeasure.getBoundingClientRect().width + box + 4) + 'px';   // +4 — внутренний отступ текста select
+  }
+  function fitSelects(root) { qsa('.cc-filters--inline select.cc-fsel__select', root).forEach(fitSelect); }
+  if (!FIELD_SIZING) {
+    CC.onInit(fitSelects);
+    doc.addEventListener('change', function (e) { if (e.target && e.target.matches && e.target.matches('.cc-filters--inline select.cc-fsel__select')) fitSelect(e.target); });
+    var refit = function () { fitSelects(doc); };
+    if (MOBILE.addEventListener) MOBILE.addEventListener('change', refit); else if (MOBILE.addListener) MOBILE.addListener(refit);
+    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(refit);   // Montserrat догрузился — текст стал шире
+  }
   // Поиск: отправка через N мс после ввода (data-cc-autosubmit-debounce="600"); с data-cc-filter — мгновенно на клиенте.
   CC.onInit(function (root) {
     qsa('input[data-cc-autosubmit-debounce], [data-cc-filters] input[type="search"]', root).forEach(function (input) {
@@ -906,14 +949,16 @@
     });
   });
   // Телефон: «‹ Лиды» в топбаре и такая же ссылка «назад» в шапке страницы — дубль; шапочную прячем (CSS < 992 px),
-  // а её точный адрес (с фильтрами из next=) отдаём ссылке топбара, чтобы не потерять контекст списка.
+  // а её точный адрес (с фильтрами или другим списком из next=) отдаём ссылке топбара, чтобы не потерять контекст.
   CC.onInit(function (root) {
     if (root !== doc) return;
     var top = qs('.cc-topbar__back'), head = qs('.cc-content .cc-page-header__back');
-    if (!top || !head || top.pathname !== head.pathname) return;
+    if (!top || !head) return;
+    var samePath = top.pathname === head.pathname;
+    // одинаковая подпись — дубль, даже если шапка ведёт в другой список (карточка лида из «Пользователей»);
     // разные подписи и разные адреса («‹ ВТ 24-1» → неделя группы) — это другая цель, оставляем обе ссылки
-    if (top.search !== head.search && top.textContent.trim() !== head.textContent.trim()) return;
-    if (head.search) top.setAttribute('href', head.getAttribute('href'));
+    if (top.textContent.trim() !== head.textContent.trim() && !(samePath && top.search === head.search)) return;
+    if (head.search || !samePath) top.setAttribute('href', head.getAttribute('href'));
     head.classList.add('cc-page-header__back--dup');
   });
 
@@ -1084,16 +1129,24 @@
       if (form.id) {   // поля вне формы с form="id"
         qsa('[form="' + form.id + '"]').forEach(function (el) { if (!form.contains(el)) { el.addEventListener('input', onChange); el.addEventListener('change', onChange); } });
       }
-      form.addEventListener('submit', function (e) { if (!e.defaultPrevented) set(false); });
       if (form.hasAttribute('data-dirty-guard')) guarded.push(form);
     });
     updateBottomBar();
   });
+  // Отправка снимает «несохранённые изменения», только если её никто не отменил. Проверяем на window — после
+  // обработчиков формы и документа, в каком бы порядке модули их ни повесили. JSON-сохранение: модуль в своём
+  // submit зовёт e.preventDefault() (форма остаётся «грязной»), после успешного ответа — CC.markClean(form).
+  window.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (form && form._ccDirtyInit && !e.defaultPrevented) CC.markClean(form);
+  });
   window.addEventListener('beforeunload', function (e) {
     if (guarded.some(function (f) { return f._ccIsDirty && doc.contains(f); })) { e.preventDefault(); e.returnValue = ''; }
   });
-  /** Отметить форму сохранённой (после fetch-сохранения): CC.markClean(form). */
+  /** Отметить форму сохранённой (после успешного fetch-сохранения): CC.markClean(form). */
   CC.markClean = function (form) { form._ccIsDirty = false; var bar = savebarOf(form); if (bar) bar.classList.remove('is-dirty'); };
+  /** Отметить форму изменённой (правка без событий input/change — перестановка, удаление строки): CC.markDirty(form). */
+  CC.markDirty = function (form) { form._ccIsDirty = true; var bar = savebarOf(form); if (bar) bar.classList.add('is-dirty'); };
 
   function primarySubmit(form) {
     var btn = qs('[data-cc-save]', form) || (form.id && qs('[data-cc-save][form="' + form.id + '"]'));

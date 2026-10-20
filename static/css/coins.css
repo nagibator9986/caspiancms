@@ -128,6 +128,7 @@ a.cn-person__name:hover { color: var(--cc-text); text-decoration: underline; }
 .cn-order__id { color: var(--cc-text-muted); font-variant-numeric: tabular-nums; }
 .cn-order .cc-cell-sub .cn-coins { font-weight: 500; color: var(--cc-text-muted); }
 .cn-reason { color: var(--cc-danger-fg); }
+.cn-stuck-cancel { margin-top: 6px; }
 .cn-wait { font-size: 13px; font-weight: 600; color: var(--cc-text-muted); white-space: nowrap; }
 .cn-wait.is-long { color: var(--cc-warning-fg); }
 .cn-note { display: flex; gap: 6px; align-items: flex-start; max-width: 260px; margin-top: 6px; padding: 4px 8px; border-radius: var(--cc-radius-xs); background: var(--cc-surface-2); font-size: 12px; line-height: 1.35; color: var(--cc-text); word-break: break-word; }

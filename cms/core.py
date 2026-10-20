@@ -8,6 +8,7 @@
 # Модули (cms/routes_*.py) импортируют отсюда то, что им нужно, и НЕ меняют этот
 # файл (владелец — FOUNDATION). Совместимость: Python 3.10 (прод на PythonAnywhere).
 
+import hashlib
 import hmac
 import io
 import json
@@ -21,13 +22,15 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse, urlsplit
 
 import requests
 from flask import (abort, current_app, flash, g, get_flashed_messages, jsonify, redirect, render_template,
                    request, session, url_for)
 from firebase_admin import auth, credentials, firestore, initialize_app, storage
 import firebase_admin
+from google.api_core import exceptions as _gexc
+from google.api_core import retry as _gretry
 
 try:  # FieldFilter есть в google-cloud-firestore >= 2.11
     from google.cloud.firestore_v1.base_query import FieldFilter
@@ -86,6 +89,7 @@ def _make_credential():
 
 
 _firebase_lock = threading.Lock()
+HTTP_TIMEOUT = 15  # секунд на запрос Firebase Auth / FCM (firebase_admin httpTimeout)
 
 
 def _init_firebase():
@@ -93,7 +97,8 @@ def _init_firebase():
     with _firebase_lock:
         if firebase_admin._apps:
             return firebase_admin.get_app()
-        options = {'storageBucket': STORAGE_BUCKET, 'projectId': PROJECT_ID}
+        # httpTimeout — Auth и FCM (по умолчанию 120 с): при сбое сети воркер не висит минутами
+        options = {'storageBucket': STORAGE_BUCKET, 'projectId': PROJECT_ID, 'httpTimeout': HTTP_TIMEOUT}
         return initialize_app(_make_credential(), options)
 
 
@@ -182,7 +187,53 @@ def _credentials_guard():
         return None
     if not credentials_ok():
         abort(503, description='credentials')
+    if not firestore_available() and request.endpoint != 'logout':
+        abort(503)  # недавно был сбой связи с Firestore — не ждём таймаута на каждом запросе (выйти — можно)
     return None
+
+
+# ==================== ТАЙМАУТЫ FIRESTORE И ПРЕДОХРАНИТЕЛЬ ====================
+# По умолчанию google-api-core повторяет run_query / batch_get_documents / run_aggregation_query до 300 с:
+# при сбое сети единственный воркер PythonAnywhere висел бы минутами на КАЖДОМ запросе (а сбой сети
+# credentials_ok ключом не считает). Поэтому все чтения CMS идут с fs_opts(): повторы только на временных
+# ошибках и не дольше FS_RETRY.timeout, плюс таймаут на попытку. После сбоя связи FS_COOLDOWN секунд база
+# считается недоступной: страницы сразу отдают 503, бейджи сайдбара не пересчитываются.
+
+FS_TIMEOUT = 10        # с: точечные get / count / sum / get_all
+FS_TIMEOUT_LONG = 60   # с: полные снапшоты коллекций (stream)
+FS_RETRY = _gretry.Retry(predicate=_gretry.if_transient_error, initial=0.2, maximum=2.0, multiplier=2.0,
+                         timeout=15)
+FS_COOLDOWN = 30       # с: сколько после сбоя связи сразу отдаём 503
+_fs_state = {'down_until': 0.0}
+
+
+def fs_opts(long=False):
+    """kwargs для чтений Firestore: .get(**fs_opts()), .stream(**fs_opts(True)), db.get_all(refs, **fs_opts())."""
+    return {'retry': FS_RETRY, 'timeout': FS_TIMEOUT_LONG if long else FS_TIMEOUT}
+
+
+def is_connection_error(exc):
+    """Сбой связи с Firestore/Google (а не «нет индекса» или «нет прав»): таймаут, исчерпаны повторы, недоступно."""
+    from google.auth.exceptions import TransportError
+    return isinstance(exc, (_gexc.RetryError, _gexc.DeadlineExceeded, _gexc.ServiceUnavailable, TransportError))
+
+
+def note_firestore_error(exc):
+    """Учесть ошибку Firestore: сбой связи включает предохранитель на FS_COOLDOWN секунд. → True, если включил."""
+    if exc is None or not is_connection_error(exc):
+        return False
+    _fs_state['down_until'] = time.time() + FS_COOLDOWN
+    log.error('Firestore недоступен (%s) — %d с отвечаем 503', exc.__class__.__name__, FS_COOLDOWN)
+    return True
+
+
+def firestore_available():
+    return time.time() >= _fs_state['down_until']
+
+
+def reset_firestore_state():
+    """Сбросить предохранитель (тесты)."""
+    _fs_state['down_until'] = 0.0
 
 
 def _make_db():
@@ -414,10 +465,13 @@ class CacheManager:
     """Потокобезопасный TTL-кэш в памяти процесса с межпроцессной инвалидацией.
 
     На PythonAnywhere у каждого веб-воркера своя память, поэтому invalidate()
-    дополнительно «штампует» файл instance/cache/<namespace>.gen: другие воркеры
-    увидят штамп (проверка не чаще раза в секунду) и выбросят свои записи этого
-    пространства имён. Пространство имён — часть ключа до ':' ('schedule:snapshot'
-    → 'schedule'). Пустые значения ([], {}, 0, None) кэшируются как обычные.
+    дополнительно «штампует» файл instance/cache/<префикс>.gen: другие воркеры
+    увидят штамп (проверка не чаще раза в секунду) и выбросят свои записи с этим
+    префиксом. Штампуется ровно то, что сбрасывают: invalidate('coins:orders') —
+    префикс 'coins:orders' (ключ и 'coins:orders:*'), invalidate_prefix('schedule:') —
+    всё пространство 'schedule'. Запись устарела, если она посчитана раньше штампа
+    любого своего префикса по ':' ('coins', 'coins:orders', …) или полного сброса.
+    Пустые значения ([], {}, 0, None) кэшируются как обычные.
     """
 
     GEN_CHECK_INTERVAL = 1.0
@@ -427,25 +481,36 @@ class CacheManager:
         self._data = {}  # key -> (value, set_at, expires_at)
         self._lock = threading.Lock()
         self._shared_dir = shared_dir
-        self._gen_cache = {}  # namespace -> (checked_at, gen)
+        self._gen_cache = {}  # префикс -> (checked_at, gen) — штампы из файлов
+        self._local_gen = {}  # префикс -> штамп сброса в этом процессе (работает и без shared_dir)
         self._shared_ok = shared_dir is not None
 
     @staticmethod
     def namespace(key):
         return str(key).split(':', 1)[0]
 
+    @staticmethod
+    def _prefixes(key):
+        """'coins:orders:x' → ['coins', 'coins:orders', 'coins:orders:x']."""
+        parts = str(key).split(':')
+        return [':'.join(parts[:i]) for i in range(1, len(parts) + 1)]
+
     # --- межпроцессные штампы ---
     def _gen_path(self, ns):
-        safe = re.sub(r'[^A-Za-z0-9_.-]', '_', ns) or '_'
-        return os.path.join(self._shared_dir, safe + '.gen')
+        if re.match(r'^[A-Za-z0-9_.:-]+$', ns):
+            safe = ns.replace(':', '~')  # 'coins:orders' и пространство 'coins_orders' — разные файлы
+        else:  # кириллица и прочее в ключе (id) — короткое имя по хэшу
+            safe = 'h' + hashlib.md5(ns.encode('utf-8')).hexdigest()[:20]
+        return os.path.join(self._shared_dir, (safe or '_') + '.gen')
 
     def _read_gen(self, ns):
+        local = self._local_gen.get(ns, 0.0)
         if not self._shared_ok:
-            return 0.0
+            return local
         now = time.time()
         cached = self._gen_cache.get(ns)
         if cached and now - cached[0] < self.GEN_CHECK_INTERVAL:
-            return cached[1]
+            return max(cached[1], local)
         gen = 0.0
         try:
             with open(self._gen_path(ns), 'r') as fh:
@@ -455,12 +520,17 @@ class CacheManager:
         except (OSError, ValueError):
             gen = 0.0
         self._gen_cache[ns] = (now, gen)
-        return gen
+        return max(gen, local)
+
+    def _key_gen(self, key):
+        """Самый поздний штамп сброса, касающийся ключа (его префиксы и полный сброс)."""
+        return max([self._read_gen('_all')] + [self._read_gen(p) for p in self._prefixes(key)])
 
     def _bump(self, ns):
+        stamp = time.time()
+        self._local_gen[ns] = stamp
         if not self._shared_ok:
             return
-        stamp = time.time()
         try:
             os.makedirs(self._shared_dir, exist_ok=True)
             tmp = self._gen_path(ns) + '.%d.%d.tmp' % (os.getpid(), threading.get_ident())
@@ -474,35 +544,69 @@ class CacheManager:
 
     # --- API ---
     def get(self, key, default=None):
-        """Значение или default (None), если нет/устарело/инвалидировано другим воркером."""
+        """Значение или default (None), если нет/устарело/инвалидировано (в т.ч. другим воркером)."""
         now = time.time()
         with self._lock:
             item = self._data.get(key)
         if item is None:
             return default
         value, set_at, expires_at = item
-        if now >= expires_at or set_at < max(self._read_gen(self.namespace(key)), self._read_gen('_all')):
+        if now >= expires_at or set_at < self._key_gen(key):
             with self._lock:
                 if self._data.get(key) is item:
                     del self._data[key]
             return default
         return value
 
-    def set(self, key, value, ttl=None):
+    def set(self, key, value, ttl=None, set_at=None):
+        """Положить значение. set_at — когда начали его считать (по умолчанию сейчас): сброс,
+        пришедший после этого момента, делает значение устаревшим."""
         now = time.time()
         with self._lock:
-            self._data[key] = (value, now, now + (self.ttl if ttl is None else ttl))
+            self._data[key] = (value, now if set_at is None else set_at, now + (self.ttl if ttl is None else ttl))
         return value
 
     def get_or_set(self, key, factory, ttl=None):
-        """Вернуть закэшированное или посчитать factory() и закэшировать (включая None/пустое)."""
+        """Вернуть закэшированное или посчитать factory() и закэшировать (включая None/пустое).
+        Если во время расчёта ключ сбросили (запись в этом или другом воркере), значение вернётся,
+        но при следующем get() будет пересчитано — данные «до записи» не живут весь TTL."""
         value = self.get(key, _MISSING)
         if value is not _MISSING:
             return value
-        return self.set(key, factory(), ttl)
+        started = time.time()
+        return self.set(key, factory(), ttl, set_at=started)
+
+    def replace(self, key, update):
+        """Точечно обновить уже закэшированное значение: update(старое) → новое (старое не менять —
+        его могут читать другие запросы). TTL не продлевается. Свой процесс получает новое значение,
+        ключи 'key:*' (производные) сбрасываются, другие воркеры сбрасывают свою копию ключа (штамп).
+        → True, если заменено; False — ключа нет или он устарел (соберётся заново при чтении)."""
+        key = str(key)
+        with self._lock:
+            item = self._data.get(key)
+        if item is None:
+            return False
+        self._gen_cache.clear()  # штампы других воркеров — перечитать сейчас, а не через секунду
+        if time.time() >= item[2] or item[1] < self._key_gen(key):
+            self.invalidate(key)
+            return False
+        value = update(item[0])
+        with self._lock:
+            if self._data.get(key) is not item:  # параллельно сбросили или заменили — не затираем
+                self._data.pop(key, None)
+                value = None
+            else:
+                for k in [k for k in self._data if str(k).startswith(key + ':')]:
+                    del self._data[k]
+        self._bump(key)
+        if value is None:
+            return False
+        with self._lock:
+            self._data[key] = (value, self._local_gen.get(key, time.time()), item[2])
+        return True
 
     def invalidate(self, key=None):
-        """Сбросить ключ (и его пространство имён в других воркерах) или весь кэш (key=None)."""
+        """Сбросить ключ и 'key:*' (здесь и в других воркерах) или весь кэш (key=None)."""
         with self._lock:
             if key is None:
                 self._data.clear()
@@ -510,14 +614,18 @@ class CacheManager:
                 self._data.pop(key, None)
                 for k in [k for k in self._data if str(k).startswith(str(key) + ':')]:
                     del self._data[k]
-        self._bump('_all' if key is None else self.namespace(key))
+        self._bump('_all' if key is None else str(key))
 
     def invalidate_prefix(self, prefix):
         """Сбросить все ключи, начинающиеся с prefix ('schedule:' → всё расписание)."""
         with self._lock:
             for k in [k for k in self._data if str(k).startswith(prefix)]:
                 del self._data[k]
-        self._bump(self.namespace(prefix))
+        p = str(prefix)
+        if p.endswith(':'):
+            self._bump(p[:-1])
+        else:  # префикс не по границе ':' — штампуем ближайший целый префикс (шире, но надёжно)
+            self._bump(p.rsplit(':', 1)[0] if ':' in p else p)
 
 
 cache = CacheManager(ttl_seconds=300, shared_dir=os.path.join(INSTANCE_DIR, 'cache'))
@@ -592,7 +700,48 @@ def csrf_exempt(f):
 
 ROLE_RECHECK_SECONDS = 600       # роль перечитывается из users/{uid} раз в 10 минут
 ROLE_OUTAGE_GRACE_SECONDS = 3600  # если Firestore недоступен — доверяем проверке не старше часа
-SESSION_HOURS = 12
+SESSION_HOURS = 12               # абсолютный срок сессии от входа (не продлевается запросами)
+# Завершённые выходом сессии CMS: cms_sessions/{uid}.revoked = {sid: время выхода}. Пишет только
+# Admin SDK (правила: запрет по умолчанию); записи старше SESSION_HOURS вычищаются при следующем выходе.
+CMS_SESSIONS = 'cms_sessions'
+_SID_RE = re.compile(r'^s[0-9a-f]{32}$')
+
+
+def new_session_id():
+    """Id сессии CMS (простое имя поля Firestore: буква + hex)."""
+    return 's' + secrets.token_hex(16)
+
+
+def session_expired():
+    """True, если сессия старше SESSION_HOURS от входа (или старого формата — без времени входа)."""
+    try:
+        login_at = float(session.get('login_at') or 0)
+    except (TypeError, ValueError):
+        login_at = 0.0
+    return not login_at or time.time() - login_at > SESSION_HOURS * 3600 or not session.get('sid')
+
+
+def revoke_cms_session(uid, sid):
+    """Выход: пометить сессию sid завершённой — её копия cookie перестанет работать при следующей
+    перепроверке роли (не позже ROLE_RECHECK_SECONDS). Ошибки логируются, не бросаются."""
+    if not uid or not sid or not _SID_RE.match(str(sid)):
+        return
+    if not firestore_available():
+        log.warning('Выход %s: Firestore недоступен — копия cookie будет действовать до конца срока сессии', uid)
+        return
+    now = time.time()
+    ref = db.collection(CMS_SESSIONS).document(str(uid))
+    try:
+        snap = ref.get(**fs_opts())
+        old = (snap.to_dict() or {}).get('revoked') if snap.exists else None
+        ref.set({'revoked': {sid: now}, 'updatedAt': SERVER_TIMESTAMP}, merge=True)
+        stale = [k for k, v in (old or {}).items()
+                 if _SID_RE.match(str(k)) and (not isinstance(v, (int, float)) or now - v > SESSION_HOURS * 3600)]
+        if stale:
+            ref.update({'revoked.%s' % k: DELETE_FIELD for k in stale})
+    except Exception as e:
+        note_firestore_error(e)
+        log.exception('Не удалось завершить сессию CMS %s', uid)
 
 
 def wants_json():
@@ -613,22 +762,54 @@ def _login_redirect():
 
 
 def _check_admin_role(uid):
-    """True/False — роль admin; None — Firestore недоступен."""
+    """True/False — роль admin, вход не заблокирован, сеансы не завершены и сессия не закрыта выходом;
+    None — Firestore или Firebase Auth недоступны (тогда действует отсрочка ROLE_OUTAGE_GRACE_SECONDS)."""
     try:
-        snap = db.collection('users').document(uid).get()
-    except Exception:
+        login_at = float(session.get('login_at') or 0)
+    except (TypeError, ValueError):
+        login_at = 0.0
+    sid = session.get('sid') or ''
+    try:
+        snap = db.collection('users').document(uid).get(**fs_opts())
+        sess = db.collection(CMS_SESSIONS).document(uid).get(**fs_opts())
+    except Exception as e:
+        note_firestore_error(e)
         log.exception('Не удалось перепроверить роль админа %s', uid)
         return None
     data = snap.to_dict() if snap.exists else None
     if not data or data.get('role') != 'admin':
         return False
+    revoked = ((sess.to_dict() or {}).get('revoked') or {}) if sess.exists else {}
+    if sid and isinstance(revoked, dict) and sid in revoked:
+        return False  # эта сессия завершена выходом (копия cookie)
+    # «Заблокировать вход» и «Завершить сеансы» (revoke_refresh_tokens) действуют и на CMS.
+    try:
+        user = fb_auth.get_user(uid)
+    except fb_auth.UserNotFoundError:
+        return False
+    except Exception:
+        log.exception('Не удалось проверить аккаунт Firebase Auth админа %s', uid)
+        return None
+    if user.disabled:
+        return False
+    if (user.tokens_valid_after_timestamp or 0) / 1000.0 > login_at:
+        return False
     session['admin_name'] = (data.get('name') or '')[:120]
     return True
 
 
+def _expired_session_response():
+    session.clear()
+    if wants_json():
+        return jsonify({'ok': False, 'success': False, 'error': 'unauthorized'}), 401
+    flash('Сессия истекла — войдите снова', 'info')
+    return _login_redirect()
+
+
 def admin_required(f):
-    """Только для вошедшего админа. Роль перепроверяется раз в ROLE_RECHECK_SECONDS:
-    разжалованный админ теряет доступ максимум через 10 минут."""
+    """Только для вошедшего админа. Сессия живёт SESSION_HOURS от входа (не продлевается).
+    Роль и аккаунт перепроверяются раз в ROLE_RECHECK_SECONDS: разжалованный, заблокированный
+    или с завершёнными сеансами админ теряет доступ максимум через 10 минут."""
 
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -637,6 +818,8 @@ def admin_required(f):
             if wants_json():
                 return jsonify({'ok': False, 'success': False, 'error': 'unauthorized'}), 401
             return _login_redirect()
+        if session_expired():
+            return _expired_session_response()
         checked_at = float(session.get('role_checked_at') or 0)
         age = time.time() - checked_at
         if not session.get('is_admin') or age > ROLE_RECHECK_SECONDS:
@@ -753,19 +936,28 @@ class RateLimiter:
 
 
 def client_ip():
-    """IP клиента (PythonAnywhere ставит X-Real-IP / X-Forwarded-For)."""
-    fwd = request.headers.get('X-Forwarded-For', '')
-    if fwd:
-        return fwd.split(',')[0].strip()
-    return request.headers.get('X-Real-IP') or request.remote_addr or '?'
+    """IP клиента для лимитов: X-Real-IP (его перезаписывает балансировщик PythonAnywhere), иначе адрес
+    соединения. X-Forwarded-For не используем: его левый элемент присылает сам клиент (обход лимитов)."""
+    real = (request.headers.get('X-Real-IP') or '').strip()
+    return real or request.remote_addr or '?'
 
 
 def safe_next_url(target, default=None):
-    """Только относительный путь этого сайта (защита от open redirect)."""
+    """Только относительный путь этого сайта (защита от open redirect).
+
+    Отклоняются управляющие символы (Werkzeug/браузер выкидывают таб и перевод строки:
+    '/\\t/evil' → '//evil', а CR/LF в заголовке — 500), обратный слеш где угодно ('/\\evil'
+    браузер читает как '//evil') и пробел сразу после первого '/'. Пробел внутри пути допустим:
+    here() отдаёт декодированный путь вроде '/schedule/edit_group/ПО 23-1'."""
     s = str(target or '').strip()
-    if s.startswith('/') and not s.startswith('//') and not s.startswith('/\\'):
-        return s
-    return default
+    if not s.startswith('/') or s.startswith('//'):
+        return default
+    if '\\' in s or s[1:2].isspace() or any(ord(c) < 0x20 or c == '\x7f' for c in s):
+        return default
+    parts = urlsplit(s)
+    if parts.scheme or parts.netloc:
+        return default
+    return s
 
 
 def redirect_back(default_endpoint='dashboard', **values):
@@ -1180,9 +1372,10 @@ def count(query, default=None):
 
     При ошибке (нет индекса, сеть) — лог + default."""
     try:
-        res = query.count(alias='n').get()
+        res = query.count(alias='n').get(**fs_opts())
         return int(res[0][0].value)
-    except Exception:
+    except Exception as e:
+        note_firestore_error(e)
         log.exception('count() не удался')
         return default
 
@@ -1190,10 +1383,11 @@ def count(query, default=None):
 def aggregate_sum(query, field, default=None):
     """Сумма числового поля через aggregation sum()."""
     try:
-        res = query.sum(field, alias='s').get()
+        res = query.sum(field, alias='s').get(**fs_opts())
         v = res[0][0].value
         return v if v is not None else 0
-    except Exception:
+    except Exception as e:
+        note_firestore_error(e)
         log.exception('sum(%s) не удался', field)
         return default
 
@@ -1243,12 +1437,16 @@ def paginate(query, page_size=25, cursor=None, collection=None):
         if coll is None:
             coll = query if hasattr(query, 'document') else getattr(query, '_parent', None)
         try:
-            snap = coll.document(str(cursor)).get() if coll is not None else None
+            snap = coll.document(str(cursor)).get(**fs_opts()) if coll is not None else None
             if snap is not None and snap.exists:
                 q = q.start_after(snap)
         except Exception:
             log.warning('paginate: курсор %s не применён', cursor)
-    docs = list(q.limit(page_size + 1).stream())
+    try:
+        docs = list(q.limit(page_size + 1).stream(**fs_opts(True)))
+    except Exception as e:
+        note_firestore_error(e)
+        raise
     has_next = len(docs) > page_size
     docs = docs[:page_size]
     number = 1
@@ -1316,11 +1514,13 @@ def get_docs(collection, ids, field_paths=None):
     for part in chunked(ids, 300):
         refs = [coll.document(i) for i in part]
         try:
-            for snap in db.get_all(refs, field_paths=field_paths):
+            for snap in db.get_all(refs, field_paths=field_paths, **fs_opts()):
                 if snap.exists:
                     out[snap.id] = snap.to_dict() or {}
-        except Exception:
+        except Exception as e:
             log.exception('get_all(%s) не удался', collection)
+            if note_firestore_error(e):
+                break  # связи нет — остальные порции не ждём
     return out
 
 
@@ -1459,6 +1659,8 @@ def nav_badges():
     cached = cache.get('nav:badges')
     if cached is not None:
         return cached
+    if not firestore_available():
+        return {}  # база недоступна — бейджи не пересчитываем (иначе каждая страница ждала бы таймаутов)
     result = {}
     for mod in list(_nav_modules):
         fn = getattr(mod, 'nav_badges', None)
@@ -1472,8 +1674,11 @@ def nav_badges():
                     continue
                 if n > 0:
                     result[str(k)] = n
-        except Exception:
+        except Exception as e:
+            note_firestore_error(e)
             log.warning('nav_badges() модуля %s упал', getattr(mod, '__name__', mod), exc_info=True)
+            if not firestore_available():
+                break
     cache.set('nav:badges', result, ttl=NAV_BADGES_TTL)
     return result
 
@@ -1805,6 +2010,13 @@ def init_app(app):
         resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
         resp.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
         resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        # Страницы и выгрузки под сессией админа (ПДн абитуриентов) не кладём в кэш браузера:
+        # на общем компьютере после «Выйти» «Назад» не должен показывать лиды и карточки.
+        if session.get('uid') and request.endpoint != 'static':
+            resp.headers['Cache-Control'] = 'no-store'
+            resp.headers['Pragma'] = 'no-cache'
+        if app.config.get('SESSION_COOKIE_SECURE'):
+            resp.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
         lang = request.args.get('lang')
         if lang in ('ru', 'kk') and request.cookies.get('cc_lang') != lang:
             resp.set_cookie('cc_lang', lang, max_age=365 * 86400, samesite='Lax',
@@ -1905,41 +2117,124 @@ def sanitize_topic(value):
     return out or 'default'
 
 
+def topic_variants(value):
+    """Имена FCM-топика, на которые нужно слать: как функции (sanitize_topic: ъ/ь → '_') и как подписывается
+    приложение (NotificationService._sanitize: `translitMap[char] ?? char` — пустая замена ъ/ь их выбрасывает).
+    Различаются, только если в имени есть ъ/ь ('Связь-24': 'svyaz_-24' и 'svyaz-24'); иначе — один топик."""
+    first = sanitize_topic(value)
+    if not isinstance(value, str):
+        return [first]
+    app = sanitize_topic(re.sub('[ъьЪЬ]', '', value))
+    return [first] if app == first else [first, app]
+
+
 # В эмуляторе (и при CMS_DISABLE_PUSH=1) пуши не отправляются, а складываются сюда — для тестов.
 sent_pushes = []
+
+
+def _push_payload(title, body, topic=None, token=None, data=None):
+    return {'title': str(title)[:200], 'body': str(body)[:1000],
+            'topic': sanitize_topic(topic) if topic else None, 'token': token,
+            'data': {str(k): str(v) for k, v in (data or {}).items() if v is not None}}
+
+
+def _push_test_mode():
+    return IS_EMULATOR or os.environ.get('CMS_DISABLE_PUSH') == '1'
+
+
+def _push_message(payload):
+    from firebase_admin import messaging
+    return messaging.Message(
+        notification=messaging.Notification(title=payload['title'], body=payload['body']),
+        data=payload['data'] or None, topic=payload['topic'], token=payload['token'])
 
 
 def send_push(title, body, topic=None, token=None, data=None):
     """Отправить пуш в FCM-топик (sanitize_topic применяется автоматически) или на токен.
 
     data — плоский dict (значения приводятся к строкам), например {'type': 'schedule'}.
-    → True, если отправлено (или записано в sent_pushes в тестах); ошибки логируются, не бросаются."""
+    → True, если отправлено (или записано в sent_pushes в тестах); ошибки логируются, не бросаются.
+    Много сообщений сразу (участники события, сводки расписания) — send_push_many."""
     if not topic and not token:
         return False
-    payload = {'title': str(title)[:200], 'body': str(body)[:1000],
-               'topic': sanitize_topic(topic) if topic else None, 'token': token,
-               'data': {str(k): str(v) for k, v in (data or {}).items() if v is not None}}
-    if IS_EMULATOR or os.environ.get('CMS_DISABLE_PUSH') == '1':
+    payload = _push_payload(title, body, topic, token, data)
+    if _push_test_mode():
         sent_pushes.append(payload)
         log.info('Пуш (не отправлен, тестовый режим): %s', payload)
         return True
     try:
         from firebase_admin import messaging
         _init_firebase()
-        msg = messaging.Message(
-            notification=messaging.Notification(title=payload['title'], body=payload['body']),
-            data=payload['data'] or None, topic=payload['topic'], token=payload['token'])
-        messaging.send(msg)
+        messaging.send(_push_message(payload))
         return True
     except Exception:
         log.exception('Не удалось отправить пуш (%s)', payload['topic'] or 'token')
         return False
 
 
+PUSH_BATCH = 500  # лимит messaging.send_each
+
+
+def send_push_many(messages):
+    """Несколько пушей одним махом: messages — [{'title', 'body', 'topic' | 'token', 'data'}].
+    messaging.send_each порциями по 500 (SDK шлёт их параллельно) вместо HTTPS-запроса на каждое сообщение
+    внутри запроса админа. → сколько доставлено в FCM; ошибки логируются (протухшие токены — одной строкой)."""
+    payloads = [_push_payload(m.get('title', ''), m.get('body', ''), m.get('topic'), m.get('token'), m.get('data'))
+                for m in messages or [] if m.get('topic') or m.get('token')]
+    if not payloads:
+        return 0
+    if _push_test_mode():
+        sent_pushes.extend(payloads)
+        log.info('Пуши (не отправлены, тестовый режим): %d', len(payloads))
+        return len(payloads)
+    sent = 0
+    try:
+        from firebase_admin import messaging
+        _init_firebase()
+    except Exception:
+        log.exception('FCM недоступен — %d пушей не отправлено', len(payloads))
+        return 0
+    for part in chunked(payloads, PUSH_BATCH):
+        try:
+            resp = messaging.send_each([_push_message(p) for p in part])
+        except Exception:
+            log.exception('Не удалось отправить %d пушей', len(part))
+            continue
+        sent += resp.success_count
+        if resp.failure_count:
+            log.warning('Пуши: не доставлено %d из %d (протухшие токены и т.п.)', resp.failure_count, len(part))
+    return sent
+
+
 # ==================== ЭКСПОРТ CSV ====================
+
+_CSV_DANGER = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _csv_escape(v):
+    """Строка с опасным для Excel началом (формула, DDE) → с апострофом; остальное как есть."""
+    if isinstance(v, str) and v.startswith(_CSV_DANGER):
+        return "'" + v
+    return v
+
+
+def csv_cell(v):
+    """Ячейка выгрузки: защита от формул в Excel (CSV injection) — опасное начало строки экранируем
+    апострофом; числа — как есть, bool → «да»/«нет», datetime → дата по Алматы."""
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return 'да' if v else 'нет'
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, datetime):
+        return fmt_dt(v)
+    return _csv_escape(str(v))
+
 
 def csv_response(filename, header, rows, delimiter=';'):
     """CSV для Excel: UTF-8 с BOM, разделитель ';' (русская локаль Excel), имя файла в UTF-8.
+    Каждая строковая ячейка экранируется от формул (как csv_cell; уже экранированная — без второго апострофа).
 
         return csv_response('лиды.csv', ['Имя', 'Логин'], [[l['name'], l['login']] for l in leads])
     """
@@ -1951,7 +2246,7 @@ def csv_response(filename, header, rows, delimiter=';'):
     if header:
         w.writerow(header)
     for row in rows:
-        w.writerow(['' if v is None else (fmt_dt(v) if isinstance(v, datetime) else v) for v in row])
+        w.writerow(['' if v is None else _csv_escape(fmt_dt(v) if isinstance(v, datetime) else v) for v in row])
     ascii_name = re.sub(r'[^A-Za-z0-9._-]+', '_', filename) or 'export.csv'
     resp = Response(buf.getvalue(), mimetype='text/csv; charset=utf-8')
     resp.headers['Content-Disposition'] = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (

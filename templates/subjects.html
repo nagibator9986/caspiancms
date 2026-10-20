@@ -57,8 +57,8 @@
                 <tr>
                     <td class="cc-cell-primary"><span class="cc-cell-main">{{ s.name or '(без названия)' }}</span>{% if s.duplicate %} <span class="cc-badge cc-badge--warning" title="Такое же название уже есть в справочнике">дубль</span>{% endif %}</td>
                     <td class="cc-cell-meta cc-num-col" data-value="{{ s.lessons }}">{% if s.lessons %}{{ s.lessons }}<span class="pp-unit"> {{ plural(s.lessons, 'занятие', 'занятия', 'занятий') }}</span>{% else %}<span class="cc-subtle">не используется</span>{% endif %}</td>
-                    <td class="cc-cell-meta cc-num-col{{ ' pp-empty' if not s.groups }}" data-value="{{ s.groups }}">{% if s.groups %}{{ s.groups }}<span class="pp-unit"> {{ plural(s.groups, 'группа', 'группы', 'групп') }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
-                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' pp-empty' if not s.teachers }}" data-value="{{ s.teachers }}">{% if s.teachers %}{{ s.teachers }}<span class="pp-unit"> препод.</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col{{ ' cc-cell-empty' if not s.groups }}" data-value="{{ s.groups }}">{% if s.groups %}{{ s.groups }}<span class="pp-unit"> {{ plural(s.groups, 'группа', 'группы', 'групп') }}</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' cc-cell-empty' if not s.teachers }}" data-value="{{ s.teachers }}">{% if s.teachers %}{{ s.teachers }}<span class="pp-unit"> препод.</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
                     <td class="cc-actions">{{ ui.row_menu([
                         {'label': 'Переименовать…', 'href': '#', 'icon': 'pencil', 'attrs': rename_attrs},
                         {'divider': True},

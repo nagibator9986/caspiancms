@@ -12,7 +12,8 @@
 #   applicant_sources/{CODE}  title, channel, note, welcomeCoins, active, scans, registrations, createdAt…
 #   coin_wallets/{uid}        balance, earnedTotal, spentTotal (пишет только Cloud Function)
 #   coin_transactions         ручная операция: {uid, amount, type:'manual', reason, createdBy, createdAt}
-#   coin_orders               заказы мерча (uid, status, title, price, variant…)
+#   coin_orders               заказы мерча (uid, status, title, price, variant…); заметки админов к ним —
+#                             coin_order_notes/{orderId} {note, uid, …} (модуль COINS), при удалении аккаунта — удаляем
 # Перевод в студенты — как AdminApplicantsRepository.convertToStudent: role 'student', group, course,
 # attendance '0%', grades 'N/A' + applicant_crm.status = 'enrolled'. Сброс пароля — SPEC D5.
 #
@@ -34,11 +35,11 @@ from urllib.parse import parse_qs, urlsplit
 
 from .applicant_login import (RESET_PASSWORD, display_login, is_synthetic_email, normalize_phone,
                               to_auth_email)
-from .core import (ALMATY, DELETE_FIELD, ArrayUnion, IS_EMULATOR, SERVER_TIMESTAMP, Routes, admin_required, audit,
-                   back_url, cache, chunked, count, csv_response, current_admin, db, fb_auth, flash_action,
-                   flash_error, fmt_dt, fmt_phone, get_docs, here, is_partial, log, next_target,
-                   now_utc, paginate_list, safe_next_url, to_almaty, to_datetime, today_almaty, view_param,
-                   wants_json, where)
+from .core import (ALMATY, DELETE_FIELD, ArrayUnion, IS_EMULATOR, SERVER_TIMESTAMP, Increment, Routes, admin_required,
+                   audit, back_url, cache, chunked, count, csv_cell, csv_response, current_admin, db, fb_auth,
+                   flash_action, flash_error, fmt_dt, fmt_phone, fs_opts, get_docs, here, is_partial, log, next_target,
+                   now_utc, paginate_list, safe_next_url, to_almaty, to_datetime, today_almaty, view_param, wants_json,
+                   where)
 
 routes = Routes()
 
@@ -154,9 +155,57 @@ def _history_entry(action, details=''):
 
 
 def invalidate_applicants_cache():
-    """Сбросить снапшот, аналитику и бейдж «новые лиды» (после любой записи)."""
+    """Сбросить снапшот, аналитику и бейдж «новые лиды» (после массовой записи, источников, «Обновить»).
+    Правка ОДНОГО лида — refresh_lead(uid): без полного пересканирования коллекций."""
     cache.invalidate_prefix('applicants:')
     cache.invalidate('nav:badges')
+
+
+def invalidate_people_caches():
+    """После записи в users из CRM (зачисление, профиль, пароль, удаление): списки «Людей», главная,
+    поиск Ctrl+K и каталог абитуриентов в разделе коинов — иначе до 5 минут показывают старое."""
+    cache.invalidate_prefix('people:')
+    cache.invalidate_prefix('home:')
+    cache.invalidate_prefix('search:')
+    cache.invalidate('coins:people')
+
+
+def refresh_lead(uid):
+    """После правки ОДНОГО лида: перечитать users/applicant_crm/coin_wallets этого uid (одно get_all)
+    и заменить его запись в снапшоте — вместо полного пересканирования трёх коллекций на каждый клик.
+    Аналитика (ключи SNAPSHOT_KEY:*) и бейдж «новые лиды» сбрасываются; другие воркеры сбросят свой
+    снапшот (CacheManager.replace). Снапшота в кэше нет — ничего не читаем: соберётся при открытии."""
+    cache.invalidate('nav:badges')
+    if cache.get(SNAPSHOT_KEY) is None:
+        cache.invalidate(SNAPSHOT_KEY)
+        return
+    try:
+        refs = [db.collection(c).document(uid) for c in ('users', 'applicant_crm', 'coin_wallets')]
+        docs = {s.reference.parent.id: (s.to_dict() or {}) for s in db.get_all(refs, **fs_opts()) if s.exists}
+    except Exception:
+        log.warning('Лид %s: точечное обновление снапшота не удалось — снапшот сброшен', uid, exc_info=True)
+        cache.invalidate(SNAPSHOT_KEY)
+        return
+    u, crm = docs.get('users'), docs.get('applicant_crm')
+    role = (u or {}).get('role')
+
+    def update(snap):
+        leads = [x for x in snap['leads'] if x['uid'] != uid]
+        # как _load_snapshot: абитуриент или зачисленный (студент с CRM-карточкой); удалённый — убираем
+        if u is not None and (role == 'applicant' or (role == 'student' and crm is not None)):
+            leads.append(_make_lead(uid, u, crm or {}, docs.get('coin_wallets') or {}, snap['sources'],
+                                    snap['campaigns'], converted=role == 'student'))
+        leads.sort(key=lambda x: (x['created'] or EPOCH, x['uid']), reverse=True)
+        refs_count = Counter(x['referred_by'] for x in leads if x['referred_by'])
+        leads = [x if x['referrals'] == refs_count.get(x['uid'], 0) else dict(x, referrals=refs_count.get(x['uid'], 0))
+                 for x in leads]
+        return dict(snap, leads=leads, by_uid={x['uid']: x for x in leads})
+
+    try:
+        cache.replace(SNAPSHOT_KEY, update)
+    except Exception:
+        log.warning('Лид %s: снапшот не обновлён — сброшен', uid, exc_info=True)
+        cache.invalidate(SNAPSHOT_KEY)
 
 
 def _back(endpoint, **values):
@@ -236,7 +285,7 @@ def load_sources():
     """QR-источники: {CODE: {id, title, channel, …}} (кэш 5 мин)."""
     def load():
         out = {}
-        for s in db.collection('applicant_sources').stream():
+        for s in db.collection('applicant_sources').stream(**fs_opts(True)):
             d = s.to_dict() or {}
             d['id'] = s.id
             out[s.id] = d
@@ -248,7 +297,7 @@ def load_campaign_titles():
     """Коды кампаний Caspian Coin → название (старые версии приложения писали код в users.source)."""
     def load():
         return {s.id: _str((s.to_dict() or {}).get('title')) for s in
-                db.collection('coin_campaigns').select(['title']).stream()}
+                db.collection('coin_campaigns').select(['title']).stream(**fs_opts(True))}
     try:
         return cache.get_or_set('applicants:campaigns', load, DIRECTORY_TTL)
     except Exception:
@@ -259,7 +308,7 @@ def load_campaign_titles():
 def load_admissions():
     """app_config/admissions (контакты, privacyUrl, сторы, каталог). Пустой dict, если документа нет."""
     def load():
-        snap = db.collection('app_config').document('admissions').get()
+        snap = db.collection('app_config').document('admissions').get(**fs_opts())
         return (snap.to_dict() or {}) if snap.exists else {}
     try:
         return cache.get_or_set('applicants:admissions', load, ADMISSIONS_TTL)
@@ -373,10 +422,11 @@ def _load_snapshot():
     campaigns = load_campaign_titles()
     users = {}
     q = where(db.collection('users'), 'role', '==', 'applicant').select(USER_FIELDS)
-    for s in q.stream():
+    for s in q.stream(**fs_opts(True)):
         users[s.id] = s.to_dict() or {}
-    crm = {s.id: (s.to_dict() or {}) for s in db.collection('applicant_crm').select(CRM_FIELDS).stream()}
-    wallets = {s.id: (s.to_dict() or {}) for s in db.collection('coin_wallets').select(WALLET_FIELDS).stream()}
+    crm = {s.id: (s.to_dict() or {}) for s in db.collection('applicant_crm').select(CRM_FIELDS).stream(**fs_opts(True))}
+    wallets = {s.id: (s.to_dict() or {}) for s in db.collection('coin_wallets').select(WALLET_FIELDS)
+            .stream(**fs_opts(True))}
     # Зачисленные: convertToStudent меняет role на 'student', но CRM-карточка остаётся — без них
     # воронка и конверсия по источникам врали бы. Удалённые аккаунты (нет users) пропускаем.
     converted = {}
@@ -595,7 +645,8 @@ def applicants_dashboard():
         days = 30
     try:
         snap = load_snapshot()
-        stats = cache.get_or_set('applicants:analytics:%d:%s' % (days, today_almaty().isoformat()),
+        # ключ — производный от снапшота: сбрасывается вместе с ним (и при refresh_lead)
+        stats = cache.get_or_set(SNAPSHOT_KEY + ':analytics:%d:%s' % (days, today_almaty().isoformat()),
                                  lambda: compute_analytics(snap, days), SNAPSHOT_TTL)
         orders = _order_counts()
     except Exception as e:
@@ -788,21 +839,6 @@ def applicants_leads():
                            total=len(snap['leads']), loaded_at=snap['loaded_at'], has_filters=has_filters, **ctx)
 
 
-_CSV_DANGER = ('=', '+', '-', '@', '\t', '\r')
-
-
-def csv_cell(v):
-    """Защита от формул в Excel (CSV injection): опасное начало ячейки экранируем апострофом."""
-    if v is None:
-        return ''
-    if isinstance(v, bool):
-        return 'да' if v else 'нет'
-    if isinstance(v, (int, float)):
-        return v
-    s = str(v)
-    return "'" + s if s.startswith(_CSV_DANGER) else s
-
-
 LEADS_CSV_HEADER = ['UID', 'Логин', 'ФИО', 'Телефон', 'Email', 'Город', 'Школа', 'Класс', 'Специальности',
                     'Код источника', 'Источник', 'Статус', 'Заметки', 'Профиль заполнен', 'Полей профиля',
                     'Согласие на звонки', 'Коины (баланс)', 'Пригласил (UID)', 'Приглашено друзей',
@@ -927,7 +963,7 @@ def applicants_bulk():
 # ==================== КАРТОЧКА АБИТУРИЕНТА ====================
 
 def _get_user(uid):
-    snap = db.collection('users').document(uid).get()
+    snap = db.collection('users').document(uid).get(**fs_opts())
     return (snap.to_dict() or {}) if snap.exists else None
 
 
@@ -950,10 +986,10 @@ def _require_applicant(uid, allow_converted=False):
 def _query_list(query_factory, fallback_factory, limit):
     """Запрос с orderBy (составной индекс есть в firestore.indexes.json); без индекса — без сортировки."""
     try:
-        return [dict(s.to_dict() or {}, id=s.id) for s in query_factory().limit(limit).stream()]
+        return [dict(s.to_dict() or {}, id=s.id) for s in query_factory().limit(limit).stream(**fs_opts(True))]
     except Exception:
         log.warning('Запрос с сортировкой не выполнен — читаем без неё', exc_info=True)
-        items = [dict(s.to_dict() or {}, id=s.id) for s in fallback_factory().limit(limit).stream()]
+        items = [dict(s.to_dict() or {}, id=s.id) for s in fallback_factory().limit(limit).stream(**fs_opts(True))]
         items.sort(key=lambda d: to_datetime(d.get('createdAt')) or EPOCH, reverse=True)
         return items
 
@@ -973,7 +1009,7 @@ def _auth_info(uid):
 
 
 def _doc_or(coll, uid, default):
-    snap = db.collection(coll).document(uid).get()
+    snap = db.collection(coll).document(uid).get(**fs_opts())
     return (snap.to_dict() or {}) if snap.exists else default
 
 
@@ -1065,7 +1101,8 @@ def applicant_detail(uid):
             lambda: where(orders_coll, 'uid', '==', uid).order_by('createdAt', direction=DESC),
             lambda: where(orders_coll, 'uid', '==', uid), 50),
         'invited': lambda: [dict(s.to_dict() or {}, id=s.id) for s in
-                            where(users, 'referredBy', '==', uid).select(invited_fields).limit(100).stream()],
+                            where(users, 'referredBy', '==', uid).select(invited_fields).limit(100)
+                                    .stream(**fs_opts(True))],
         'auth': lambda: _auth_info(uid),
     }
     try:
@@ -1181,7 +1218,7 @@ def applicant_set_status(uid):
             return jsonify({'ok': False, 'error': 'Абитуриент не найден — обновите страницу'}), 404
         return redirect(url_for('applicants_leads'))
     try:
-        snap = _crm_ref(uid).get()
+        snap = _crm_ref(uid).get(**fs_opts())
         old = (snap.to_dict() or {}).get('status') if snap.exists else None
         old = old if old in STATUS_KEYS else 'new'
         if old == status:
@@ -1202,7 +1239,7 @@ def applicant_set_status(uid):
         flash_error('Не удалось сменить статус. Попробуйте ещё раз', e)
         return _back('applicant_detail', uid=uid)
     audit('status', 'applicant', uid, {'from': old, 'to': status})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
     undo = {'post': url_for('applicant_set_status', uid=uid), 'fields': {'status': old}}
     if as_json:
         return jsonify({'ok': True, 'changed': True, 'status': status, 'label': STATUS_LABELS[status],
@@ -1227,7 +1264,7 @@ def applicant_save_notes(uid):
         flash_error('Не удалось сохранить заметку', e)
         return _back('applicant_detail', uid=uid)
     audit('notes', 'applicant', uid, {'length': len(notes)})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
     flash('Заметка сохранена', 'success')
     return _back('applicant_detail', uid=uid)
 
@@ -1252,7 +1289,7 @@ def applicant_next_step(uid):
             flash('Опишите следующий шаг или укажите дату', 'error')
             return _back('applicant_detail', uid=uid)
     try:
-        snap = _crm_ref(uid).get()
+        snap = _crm_ref(uid).get(**fs_opts())
         old = next_step_info(snap.to_dict() if snap.exists else {})
         if action == 'save':
             at = datetime(day.year, day.month, day.day, tzinfo=ALMATY) if day else None
@@ -1275,7 +1312,7 @@ def applicant_next_step(uid):
         flash_error('Не удалось сохранить следующий шаг', e)
         return _back('applicant_detail', uid=uid)
     audit('next_step', 'applicant', uid, {'action': action, 'text': text or old['text'] or None})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
     target = back_url('applicant_detail', uid=uid)
     if action == 'save':
         flash('Следующий шаг сохранён', 'success')
@@ -1299,7 +1336,7 @@ def applicant_log_contact(uid):
     if _require_applicant(uid, allow_converted=True) is None:
         return redirect(url_for('applicants_leads'))
     try:
-        snap = _crm_ref(uid).get()
+        snap = _crm_ref(uid).get(**fs_opts())
         old = (snap.to_dict() or {}).get('status') if snap.exists else None
         first = old in (None, '', 'new')
         data = {'lastContactAt': SERVER_TIMESTAMP, 'updatedAt': SERVER_TIMESTAMP, 'updatedBy': _admin().get('uid')}
@@ -1314,7 +1351,7 @@ def applicant_log_contact(uid):
         flash_error('Не удалось записать контакт', e)
         return _back('applicant_detail', uid=uid)
     audit('contact', 'applicant', uid, {'channel': channel})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
     flash('Контакт записан%s' % (' — статус «Связались»' if first else ''), 'success')
     return _back('applicant_detail', uid=uid)
 
@@ -1349,7 +1386,7 @@ def applicant_award_coins(uid):
         flash_error('Не удалось провести операцию с коинами', e)
         return _back('applicant_detail', uid=uid)
     audit('award' if amount > 0 else 'deduct', 'applicant', uid, {'amount': amount, 'reason': reason, 'tx': ref.id})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
     flash('%s %d коинов. Баланс обновится через несколько секунд'
           % ('Начислено' if amount > 0 else 'Списано', abs(amount)), 'success')
     return _back('applicant_detail', uid=uid)
@@ -1387,7 +1424,8 @@ def applicant_reset_password(uid):
     except Exception:
         log.warning('История CRM %s не дополнена', uid, exc_info=True)
     audit('reset_password', 'applicant', uid, {'login': display_login_of(u)})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
+    invalidate_people_caches()
     flash('Пароль сброшен до %s. При входе приложение попросит придумать новый' % RESET_PASSWORD, 'success')
     return _back('applicant_detail', uid=uid)
 
@@ -1420,7 +1458,8 @@ def applicant_convert(uid):
         flash_error('Не удалось перевести в студенты', e)
         return _back('applicant_detail', uid=uid)
     audit('convert_to_student', 'applicant', uid, {'group': group, 'course': course})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
+    invalidate_people_caches()
     flash('Абитуриент зачислен: группа %s, %s курс. Вход — по тому же логину и паролю' % (group, course), 'success')
     return _back('applicant_detail', uid=uid)
 
@@ -1482,15 +1521,97 @@ def applicant_save_profile(uid):
         flash_error('Не удалось сохранить профиль', e)
         return _back('applicant_detail', uid=uid)
     audit('update_profile', 'applicant', uid, {'fields': changed})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
+    invalidate_people_caches()
     flash('Профиль сохранён', 'success')
     return _back('applicant_detail', uid=uid)
+
+
+def _delete_order_notes(uid):
+    """Заметки админов к заказам абитуриента (coin_order_notes, пишет CMS): заказы удалит onApplicantDeleted,
+    а про заметки функция не знает — удаляем сами. Ошибка не мешает удалению аккаунта (только лог)."""
+    try:
+        snaps = list(where(db.collection('coin_order_notes'), 'uid', '==', uid).limit(BULK_LIMIT)
+                .stream(**fs_opts(True)))
+        for part in chunked(snaps, 450):
+            batch = db.batch()
+            for s in part:
+                batch.delete(s.reference)
+            batch.commit()
+    except Exception:
+        log.exception('Заметки к заказам %s не удалены', uid)
+
+
+def _delete_where(coll, field, value, max_rounds=200):
+    """Удалить документы coll, где field == value, порциями по 400 (как deleteQueryInBatches в функциях)."""
+    for _ in range(max_rounds):
+        snaps = list(where(db.collection(coll), field, '==', value).limit(400).stream(**fs_opts(True)))
+        if not snaps:
+            return
+        batch = db.batch()
+        for s in snaps:
+            batch.delete(s.reference)
+        batch.commit()
+
+
+def _release_reserved_orders(uid):
+    """Как deleteApplicantOrders в функциях: резерв (status reserved) возвращается на склад, заказы удаляются."""
+    for snap in where(db.collection('coin_orders'), 'uid', '==', uid).stream(**fs_opts(True)):
+        o = snap.to_dict() or {}
+        pid = _str(o.get('productId'))
+        if o.get('status') != 'reserved' or not pid or len(pid) > 64 or '/' in pid or pid in ('.', '..') \
+                or re.match(r'^__.*__$', pid):
+            continue
+        product_ref = db.collection('coin_products').document(pid)
+
+        @firestore.transactional
+        def run(t, ref=snap.reference):
+            order = ref.get(transaction=t)
+            if not order.exists:
+                return
+            product = product_ref.get(transaction=t)
+            stock = (product.to_dict() or {}).get('stock') if product.exists else None
+            if (order.to_dict() or {}).get('status') == 'reserved' and isinstance(stock, (int, float)) \
+                    and not isinstance(stock, bool):
+                t.update(product_ref, {'stock': Increment(1)})
+            t.delete(ref)
+        run(db.transaction())
+    _delete_where('coin_orders', 'uid', uid)
+
+
+def purge_converted_applicant(uid):
+    """Удалён аккаунт ЗАЧИСЛЕННОГО абитуриента (role student + CRM-карточка) — из раздела «Люди».
+    onApplicantDeleted выходит, если удалённый профиль не абитуриент, поэтому те же шаги делает CMS:
+    журнал наград помечается (повторно награды не выдать), резервы заказов возвращаются на склад, удаляются
+    заказы, реферальный код, кошелёк, CRM-карточка (ПДн), коды кампаний, журнал коинов, уведомления и
+    заметки к заказам. → True, если все шаги прошли; ошибки — в лог (удаление аккаунта не откатывается)."""
+    steps = [
+        ('журнал наград', lambda: db.collection('applicant_ledger').document(uid).set(
+            {'registrationCounted': True, 'deletedAt': SERVER_TIMESTAMP}, merge=True)),
+        ('заказы', lambda: _release_reserved_orders(uid)),
+        ('реферальный код', lambda: _delete_where('referral_codes', 'uid', uid)),
+        ('кошелёк', lambda: db.collection('coin_wallets').document(uid).delete()),
+        ('CRM-карточка', lambda: _crm_ref(uid).delete()),
+        ('коды кампаний', lambda: _delete_where('coin_claims', 'uid', uid)),
+        ('журнал коинов', lambda: _delete_where('coin_transactions', 'uid', uid)),
+        ('уведомления', lambda: _delete_where('notifications', 'userId', uid)),
+        ('заметки к заказам', lambda: _delete_where('coin_order_notes', 'uid', uid)),
+    ]
+    ok = True
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception:
+            ok = False
+            log.exception('Данные зачисленного %s: шаг «%s» не выполнен', uid, name)
+    return ok
 
 
 @routes.route('/applicants/<uid>/delete', methods=['POST'])
 @admin_required
 def applicant_delete_account(uid):
-    """Удалить аккаунт: Auth + users/{uid}. Кошелёк, журнал, заказы, CRM чистит onApplicantDeleted."""
+    """Удалить аккаунт: Auth + users/{uid} (+ заметки к его заказам). Кошелёк, журнал, заказы, CRM чистит
+    onApplicantDeleted."""
     u = _require_applicant(uid)
     if u is None:
         return _back('applicant_detail', uid=uid)
@@ -1509,8 +1630,10 @@ def applicant_delete_account(uid):
     except Exception as e:
         flash_error('Аккаунт входа удалён, но профиль не удалился. Повторите удаление', e)
         return _back('applicant_detail', uid=uid)
+    _delete_order_notes(uid)
     audit('delete', 'applicant', uid, {'login': display_login_of(u), 'name': _str(u.get('name'))})
-    invalidate_applicants_cache()
+    refresh_lead(uid)
+    invalidate_people_caches()
     flash('Аккаунт %s удалён. Связанные данные (коины, заказы, CRM) очистятся автоматически'
           % (display_login_of(u) or uid), 'success')
     return redirect(url_for('applicants_leads'))
@@ -1526,6 +1649,12 @@ def join_base_url():
         if host not in ('localhost', '127.0.0.1'):
             root = 'https://' + root[len('http://'):]
     return root.rstrip('/') + '/join'
+
+
+def _invalidate_sources():
+    """После создания/удаления источника: кэш раздела и список кодов QR в «Caspian Coin» (проверка кодов кампаний)."""
+    invalidate_applicants_cache()
+    cache.invalidate('coins:sources')
 
 
 def suggest_code(existing=()):
@@ -1605,11 +1734,14 @@ def _sources_page(new_values=None, new_errors=None, status=200):
     if words:
         rows = [r for r in rows if all(w in _norm(' '.join([r['title'], r['code'], r['note'], r['channel_label']]))
                                        for w in words)]
-    values = new_values or {'code': suggest_code(snap['sources']), 'title': '', 'channel': 'stand',
+    campaigns = load_campaign_titles()
+    taken = set(snap['sources']) | set(campaigns)       # предложенный код не совпадёт и с кодом кампании
+    values = new_values or {'code': suggest_code(taken), 'title': '', 'channel': 'stand',
                             'welcomeCoins': 0, 'active': True, 'note': ''}
     return render_template('applicants/sources.html', rows=rows, totals=totals, channels=CHANNELS, q=q,
-                           suggested=suggest_code(snap['sources']), join_base=base, max_welcome=MAX_WELCOME,
-                           new_values=values, new_errors=new_errors or {}), status
+                           suggested=suggest_code(taken), join_base=base, max_welcome=MAX_WELCOME,
+                           new_values=values, new_errors=new_errors or {},
+                           clashes=sorted(set(snap['sources']) & set(campaigns))), status
 
 
 @routes.route('/applicants/sources')
@@ -1627,6 +1759,20 @@ def applicant_source_create():
         errors['code'] = 'Код — 3–24 латинские заглавные буквы и цифры (например, STAND1)'
     elif code in RESERVED_SOURCES:
         errors['code'] = 'Коды APP и WEB зарезервированы — выберите другой'
+    else:
+        # код кампании нельзя: старая версия приложения пишет код кампании в users.source, а правила отклоняют
+        # регистрацию, если там код существующего QR-источника (свежее чтение, не кэш)
+        try:
+            snap = db.collection('coin_campaigns').document(code).get(**fs_opts())
+        except Exception:
+            log.exception('Кампания %s не проверена', code)
+            errors['code'] = 'Не удалось проверить, свободен ли код. Попробуйте ещё раз'
+        else:
+            if snap.exists:
+                title = _str((snap.to_dict() or {}).get('title')) or code
+                errors['code'] = ('Код %s уже используется как код кампании Caspian Coin «%s» — выберите другой: '
+                                  'иначе абитуриенты со старой версией приложения не смогут зарегистрироваться '
+                                  'с кодом этой кампании' % (code, title))
     values = dict(data, code=code, title=_field('title'), note=_field('note'), welcomeCoins=_field('welcomeCoins'))
     if errors:
         flash('Проверьте поля формы', 'error')
@@ -1642,7 +1788,7 @@ def applicant_source_create():
         flash_error('Не удалось создать источник', e)
         return _sources_page(values, {}, 500)
     audit('create', 'applicant_sources', code, data)
-    invalidate_applicants_cache()
+    _invalidate_sources()
     flash_action('Источник %s создан — QR-код готов к печати' % code, 'Плакат',
                  href=url_for('applicant_source_poster', code=code))
     return redirect(url_for('applicant_sources', _anchor='src-' + code))
@@ -1654,7 +1800,7 @@ def applicant_source_edit(code):
     code = _str(code, 24).upper()
     ref = db.collection('applicant_sources').document(code)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось прочитать источник', e)
         return redirect(url_for('applicant_sources'))
@@ -1695,7 +1841,7 @@ def applicant_source_toggle(code):
     code = _str(code, 24).upper()
     ref = db.collection('applicant_sources').document(code)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Источник не найден', 'error')
             return redirect(url_for('applicant_sources'))
@@ -1720,7 +1866,7 @@ def applicant_source_delete(code):
     code = _str(code, 24).upper()
     ref = db.collection('applicant_sources').document(code)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Источник уже удалён', 'info')
             return redirect(url_for('applicant_sources'))
@@ -1735,7 +1881,7 @@ def applicant_source_delete(code):
         flash_error('Не удалось удалить источник', e)
         return redirect(url_for('applicant_sources'))
     audit('delete', 'applicant_sources', code)
-    invalidate_applicants_cache()
+    _invalidate_sources()
     flash('Источник %s удалён' % code, 'success')
     return redirect(url_for('applicant_sources'))
 
@@ -1745,7 +1891,7 @@ def applicant_source_delete(code):
 def applicant_source_poster(code):
     code = _str(code, 24).upper()
     try:
-        snap = db.collection('applicant_sources').document(code).get()
+        snap = db.collection('applicant_sources').document(code).get(**fs_opts())
     except Exception as e:
         flash_error('Не удалось прочитать источник', e)
         return redirect(url_for('applicant_sources'))

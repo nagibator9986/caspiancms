@@ -552,7 +552,8 @@
 </div>
 {%- endmacro %}
 
-{# Пилюля-выбор «Подпись: Значение ▾» (в старой панели — поле с подписью сверху) #}
+{# Пилюля-выбор «Подпись: Значение ▾» (в старой панели — поле с подписью сверху). Ширина — по выбранному значению:
+   field-sizing: content, в браузерах без него — app.js; на телефоне (шторка) поле во всю ширину. #}
 {% macro filter_select(name, label, options, value=None, all_label='Все', autosubmit=True) -%}
 <div class="cc-filters__field cc-fsel{{ ' is-active' if value not in (None, '') and all_label }}">
     <label class="form-label cc-fsel__label" for="flt-{{ name }}">{{ label }}</label>
@@ -591,6 +592,9 @@
      </table>
    {% endcall %}
    Поиск — на клиенте по строкам текущей страницы; для больших данных — серверный filters_bar + pagination.
+   Строка-карточка на телефоне (.cc-table--stack): td.cc-cell-primary — заголовок, td.cc-cell-meta — строка «A · B · C»
+   (« · » только между видимыми), td[data-label] — «Подпись: значение»; пустую ячейку («—» на компьютере) помечайте
+   td.cc-cell-empty — в карточке её не будет.
 #}
 {% macro data_table(table_id, search=False, placeholder='Поиск в таблице…', title=None, actions=None) -%}
 <section class="cc-card cc-table-card">
@@ -617,8 +621,9 @@
        {'label': 'Удалить', 'action': url_for('news_delete', news_id=n.id), 'icon': 'trash', 'danger': True,
         'confirm': 'Удалить новость «' ~ n.title ~ '»?'},
    ], quick={'label': 'Редактировать', 'href': url_for('news_form', news_id=n.id, next=here()), 'icon': 'pencil'}) }}</td>
-   quick — одна иконка самого частого действия (ссылка или {action, fields, confirm} — POST). Меню не обрезается
-   прокруткой таблицы (popper strategy: fixed).
+   quick — одна иконка самого частого действия (ссылка или {action, fields, confirm} — POST). На компьютере видна
+   при наведении на свою строку: tr, li, article (карточка) или [data-cc-row]; на телефоне — всегда.
+   Меню не обрезается прокруткой таблицы (popper strategy: fixed).
 #}
 {% macro row_menu(items, label='Действия', quick=None) -%}
 <div class="cc-row-menu">

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Общая часть run_tests.sh / run_screens.sh: конфиг эмуляторов Firebase на портах от PORT_BASE.
 #   source tests/_emulators.sh PORT_BASE
-# После source доступны: ROOT, PY, FB, WORK, PORT_* и функция emu_exec "<команда>".
+# После source доступны: ROOT, PY, FB, WORK, PROJECT, PORT_* и функция emu_exec "<команда>".
 # Порты: hub=B, logging=B+1, firestore=B+2 (websocket B+3), auth=B+4, storage=B+5, flask=B+6.
+# Проект эмуляторов — demo-caspian-<B>, временные файлы CLI — в своём каталоге: параллельные прогоны
+# на разных PORT_BASE не пересекаются.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,9 +12,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -f "$ROOT/tests/.env.local" ]; then . "$ROOT/tests/.env.local"; fi
 
 PORT_BASE="${1:-18000}"
+case "$PORT_BASE" in ''|*[!0-9]*) echo "PORT_BASE должен быть числом: $PORT_BASE" >&2; exit 2 ;; esac
 PY="${CMS_PYTHON:-python3}"
 FB="${FIREBASE_BIN:-firebase}"
-PROJECT="demo-caspian"
+# Свой demo-проект на каждый PORT_BASE: CLI ведёт реестр хаба по id проекта (os.tmpdir()/hub-<проект>.json),
+# и параллельные прогоны с общим id делили один файл реестра («multiple instances…»; первый вышедший его удалял).
+# Префикс demo- обязателен: эмулятор не ходит в настоящий Firebase.
+PROJECT="demo-caspian-$PORT_BASE"
 
 PORT_HUB=$PORT_BASE
 PORT_LOGGING=$((PORT_BASE + 1))
@@ -85,6 +91,9 @@ emu_exec() {
   { echo 'set -euo pipefail'; emu_env; echo "$1"; } > "$WORK/inner.sh"
   # JAVA_TOOL_OPTIONS (прокси/truststore песочницы) эмуляторам не нужен, а его «Picked up …»
   # в stderr рантайм правил Storage принимает за ошибку — убираем для процесса CLI.
-  (cd "$WORK" && env -u JAVA_TOOL_OPTIONS "$FB" emulators:exec --only firestore,auth,storage --project "$PROJECT" \
+  # TMPDIR — свой на прогон: эмулятор Storage держит файлы в os.tmpdir()/firebase/storage/blobs и при
+  # остановке чистит каталог, а соседний прогон падал на ENOENT («An unexpected error has occurred»).
+  mkdir -p "$WORK/tmp"
+  (cd "$WORK" && env -u JAVA_TOOL_OPTIONS TMPDIR="$WORK/tmp" "$FB" emulators:exec --only firestore,auth,storage --project "$PROJECT" \
       --config "$WORK/firebase.json" "bash $WORK/inner.sh")
 }

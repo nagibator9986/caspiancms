@@ -689,3 +689,105 @@ class HomeTest(CmsTestCase):
         self.assertIn('name="from"', html)
         html = self.get_ok('/audit?period=custom&from=2001-01-01&to=2001-01-02')
         self.assertIn('Ничего не найдено', html)
+
+
+class DateOnlyLessonsTest(CmsTestCase):
+    """C1 / DATA-8: занятие только с date (старый веб) приложение показывает КАЖДУЮ неделю в этот день недели
+    (matchesWeekday); разовым считается только явный one_off + date — как во вкладке «Накладки»."""
+    login_as_admin = False
+
+    def _lesson(self, doc_id, data):
+        from cms.schedule_model import TeacherIndex, normalize_lesson
+        return normalize_lesson(doc_id, data, TeacherIndex({'t_li': 'Ли Сергей Николаевич'}))
+
+    def test_teacher_page_clashes_match_engine(self):
+        from cms import conflicts
+        from cms.routes_people import _teacher_clashes
+        a = self._lesson('a', {'groupId': 'ПО 23-1', 'date': '2026-10-19', 'time': '14.00-14.50',
+                               'teacher': 't_li', 'subject': 'Сети', 'room': 'А-12'})
+        b = self._lesson('b', {'groupId': 'ИС 23-1', 'date': '2026-10-26', 'time': '14.00-14.50',
+                               'teacher': 't_li', 'subject': 'Сети', 'room': 'А-14'})
+        self.assertTrue(conflicts.analyze([a, b]).clusters['teacher'])
+        self.assertEqual(_teacher_clashes({0: [a, b]}), {'a', 'b'})
+        # настоящие разовые занятия в разные даты — не пересекаются
+        c = self._lesson('c', dict(a['raw'], one_off=True))
+        d = self._lesson('d', dict(b['raw'], one_off=True))
+        self.assertEqual(_teacher_clashes({0: [c, d]}), set())
+
+    def test_today_counts_date_only_lessons_every_week(self):
+        from datetime import date
+        from cms.routes_home import _today_lessons
+        from cms.schedule_model import current_week_type
+
+        class Snap:
+            def __init__(self, lessons):
+                self.by_day = {}
+                for l in lessons:
+                    self.by_day.setdefault(l['weekday'], []).append(l)
+        wed = date(2026, 10, 21)
+        weekly = self._lesson('w', {'groupId': 'ПО 24-1', 'date': '2025-09-03', 'time': '08.00-08.50',
+                                    'room': '101', 'week_type': 'always', 'teacher': 't_li', 'subject': 'Сети'})
+        once_other = self._lesson('o', {'groupId': 'ПО 24-1', 'date': '2025-09-03', 'one_off': True,
+                                        'time': '09.00-09.50', 'room': '102', 'teacher': 't_li', 'subject': 'Сети'})
+        once_today = self._lesson('t', {'groupId': 'ПО 24-1', 'date': wed.isoformat(), 'one_off': True,
+                                        'time': '10.00-10.50', 'room': '103', 'teacher': 't_li', 'subject': 'Сети'})
+        self.assertIsNotNone(current_week_type(wed))
+        ids = [l['id'] for l in _today_lessons(Snap([weekly, once_other, once_today]), wed)]
+        self.assertEqual(sorted(ids), ['t', 'w'])
+
+
+class DeleteApplicantDataTest(CmsTestCase):
+    """C4: удаление из «Людей». Абитуриент — заметки к его заказам (coin_order_notes) удаляет CMS (остальное —
+    onApplicantDeleted). Зачисленный студент — функция выходит (role ≠ applicant), поэтому всё чистит CMS."""
+    fresh_seed_each_test = True
+
+    def _extra_data(self, uid, order_id):
+        from cms.core import SERVER_TIMESTAMP, db
+        db.collection('coin_order_notes').document(order_id).set({'note': 'Размер M', 'uid': uid,
+                                                                 'updatedAt': SERVER_TIMESTAMP})
+        db.collection('referral_codes').document('ZZ%s' % uid[-3:]).set({'uid': uid})
+        db.collection('notifications').document('n_' + uid).set({'userId': uid, 'title': 'x'})
+        db.collection('coin_claims').document('X_' + uid).set({'uid': uid, 'code': 'X'})
+
+    def test_delete_enrolled_student_purges_applicant_data(self):
+        uid = 'ap_003'                                     # заказ ord_001 (reserved, prod_hoodie)
+        self.post('/applicants/%s/convert' % uid, {'group': 'ПО 23-1', 'course': '1'})
+        self.assertEqual(self.doc('users', uid)['role'], 'student')
+        self._extra_data(uid, 'ord_001')
+        stock = self.doc('coin_products', 'prod_hoodie')['stock']
+        self.assertIsNotNone(self.doc('applicant_crm', uid))
+        r = self.post('/admin/users/delete/%s' % uid)
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(self.doc('users', uid))
+        self.assertIsNone(self.doc('applicant_crm', uid), 'CRM-карточка (ПДн) осталась')
+        self.assertIsNone(self.doc('coin_wallets', uid))
+        for coll, field in (('coin_transactions', 'uid'), ('coin_orders', 'uid'), ('coin_claims', 'uid'),
+                            ('referral_codes', 'uid'), ('notifications', 'userId'), ('coin_order_notes', 'uid')):
+            self.assertEqual(self.docs(coll, **{field: uid}), [], coll)
+        self.assertEqual(self.doc('coin_products', 'prod_hoodie')['stock'], stock + 1)   # резерв вернулся на склад
+        self.assertIs(self.doc('applicant_ledger', uid).get('registrationCounted'), True)
+
+    def test_delete_applicant_removes_order_notes(self):
+        uid = 'ap_006'                                     # заказ ord_002
+        self._extra_data(uid, 'ord_002')
+        r = self.post('/admin/users/delete/%s' % uid)
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(self.doc('users', uid))
+        self.assertEqual(self.docs('coin_order_notes', uid=uid), [])
+
+    def test_bulk_delete_enrolled_and_applicant(self):
+        self.post('/applicants/ap_003/convert', {'group': 'ПО 23-1', 'course': '1'})
+        self._extra_data('ap_003', 'ord_001')
+        self._extra_data('ap_006', 'ord_002')
+        r = self.post('/admin/users/bulk', {'action': 'delete', 'ids': ['ap_003', 'ap_006']})
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(self.doc('applicant_crm', 'ap_003'))
+        self.assertEqual(self.docs('coin_transactions', uid='ap_003'), [])
+        self.assertEqual(self.docs('coin_order_notes', uid='ap_003'), [])
+        self.assertEqual(self.docs('coin_order_notes', uid='ap_006'), [])
+
+    def test_plain_student_delete_does_not_touch_other_data(self):
+        r = self.post('/admin/users/delete/st_002')
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(self.doc('users', 'st_002'))
+        self.assertIsNotNone(self.doc('applicant_crm', 'ap_001'))

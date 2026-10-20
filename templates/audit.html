@@ -46,7 +46,7 @@
                         <span class="cc-cell-main">{{ e.entity_label }}</span>
                         {% if e.entity_id %}<span class="cc-cell-sub pp-audit__id">{% if e.link %}<a href="{{ e.link }}">{{ e.entity_id }}</a>{% else %}{{ e.entity_id }}{% endif %}</span>{% endif %}
                     </td>
-                    <td class="pp-audit__details cc-col-md{{ ' pp-empty' if not e.details }}">
+                    <td class="pp-audit__details cc-col-md{{ ' cc-cell-empty' if not e.details }}">
                         {% if e.details %}
                         <ul class="pp-details">
                             {% for k, v in e.details %}<li>{% if k %}<span>{{ k }}:</span> {% endif %}{{ v }}</li>{% endfor %}

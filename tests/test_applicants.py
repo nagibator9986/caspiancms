@@ -2,9 +2,9 @@
 #
 # Публичная регистрация по QR (SPEC §1, §2.1, §6.5): минимальная регистрация, занятый логин, кириллица,
 # несовпадение паролей, honeypot, слишком быстрая отправка, CSRF, source и ref пишутся, откат Auth
-# при ошибке Firestore, счётчик сканов. Админка: аналитика на сид-данных, лиды (поиск/фильтры/CSV),
-# карточка, сброс пароля до abiturient123 (D5), статус/заметки/контакт, коины, перевод в студенты,
-# удаление, массовые действия, QR-источники (CRUD, плакат).
+# при ошибке Firestore, счётчик сканов, WhatsApp/телефон приёмной как в приложении. Админка: аналитика на
+# сид-данных, лиды (поиск/фильтры/CSV), карточка, сброс пароля до abiturient123 (D5), статус/заметки/контакт,
+# коины, перевод в студенты, удаление, массовые действия, QR-источники (CRUD, плакат, код ≠ код кампании).
 
 import csv
 import io
@@ -249,6 +249,28 @@ class PublicJoinTest(JoinMixin, CmsTestCase):
         r = self.app.test_client().get('/join?done=1')
         self.assertRedirectsTo(r, '/join')
 
+    def _done_page(self, **adm):
+        """Страница «Готово» (как сразу после регистрации) с контактами приёмной adm."""
+        from cms.core import cache, db
+        db.collection('app_config').document('admissions').update(adm)
+        cache.invalidate('applicants:admissions')
+        with self.client.session_transaction() as s:
+            s['join_done'] = {'login': '+7 701 555 44 33', 'coins': 0, 'source': '', 'at': time.time()}
+        return self.get_ok('/join?done=1')
+
+    def test_done_page_whatsapp_link_normalized(self):
+        # WhatsApp — как в приложении (ApplicantValidators.whatsappUrl): +7XXXXXXXXXX → https://wa.me/7XXXXXXXXXX
+        html = self._done_page(whatsapp='8 (701) 555-01-99', phone='+7 (7292) 30-30-30')
+        self.assertIn('href="https://wa.me/77015550199"', html)
+        self.assertIn('href="tel:+77292303030"', html)
+        # номер не распознаётся — кнопки WhatsApp нет (никаких битых wa.me/…), «Позвонить» остаётся
+        for bad in ('звоните в приёмную', '12345', '+1 202 555 0100'):
+            with self.subTest(bad=bad):
+                html = self._done_page(whatsapp=bad)
+                self.assertNotIn('wa.me', html)
+                self.assertIn('href="tel:+77292303030"', html)
+        self.assertNotIn('jn-contacts', self._done_page(whatsapp='', phone=''))
+
 
 # ==================== АДМИНКА: АНАЛИТИКА, ЛИДЫ, КАРТОЧКА ====================
 
@@ -286,6 +308,16 @@ class ApplicantsAdminTest(CmsTestCase):
         top = stats['referrers'][0]
         self.assertEqual((top['uid'], top['count']), ('ap_001', 3))
         self.assertGreaterEqual(stats['coins']['earned'], stats['coins']['balance'])
+
+    def test_analytics_earned_is_wallet_earned_total(self):
+        # «Начислено» в аналитике — сумма earnedTotal кошельков. Возврат за отменённый заказ (refund) функция
+        # onCoinOrderUpdated проводит через spentTotal (−), earnedTotal не трогает — начислением он не считается
+        from cms.routes_applicants import compute_analytics, load_snapshot
+        snap = load_snapshot(force=True)
+        uids = {x['uid'] for x in snap['leads']}
+        earned = sum(int(w.get('earnedTotal') or 0) for w in self.docs('coin_wallets') if w['id'] in uids)
+        self.assertEqual(compute_analytics(snap, 30)['coins']['earned'], earned)
+        self.assertTrue(self.docs('coin_transactions', type='refund'))      # в сиде возврат есть (refund_ord_006)
 
     def test_compute_analytics_pure(self):
         from cms.routes_applicants import compute_analytics
@@ -746,6 +778,16 @@ class SourcesTest(CmsTestCase):
         html = self.app.test_client().get('/join/EXPO26').get_data(as_text=True)
         self.assertIn('+40 Caspian Coin', html)
 
+    def test_create_rejects_campaign_code(self):
+        # код QR-источника = код кампании Caspian Coin → правила отклонят регистрацию старой версии приложения,
+        # которая пишет код кампании в users.source
+        r = self.post('/applicants/sources/new', {'code': 'dod2026', 'title': 'Стенд ДОД', 'channel': 'event'})
+        self.assertEqual(r.status_code, 400)
+        html = r.get_data(as_text=True)
+        self.assertIn('кампании Caspian Coin', html)
+        self.assertIn('data-cc-open-on-load', html)              # модалка с ошибкой откроется сама
+        self.assertIsNone(self.doc('applicant_sources', 'DOD2026'))
+
     def test_edit_toggle_delete(self):
         html = self.get_ok('/applicants/sources/INSTA/edit')
         self.assertIn('Instagram @caspian.college', html)
@@ -800,3 +842,102 @@ class SourcesTest(CmsTestCase):
         self.assertIn('ap-poster-wrap--a4', html)
         self.assertIn('ap-poster-wrap--a5', self.get_ok('/applicants/sources/STAND1/poster?format=a5'))
         self.assertEqual(self.client.get('/applicants/sources/NOPE42/poster').status_code, 404)
+
+
+class CrmWritesInvalidatePeopleTest(CmsTestCase):
+    """DATA-5: зачисление и удаление абитуриента в CRM сразу видны в «Людях» и в поиске Ctrl+K."""
+    fresh_seed_each_test = True
+
+    def _search_user_ids(self, q):
+        r = self.client.get('/api/search', query_string={'q': q})
+        return [x['url'] for x in r.get_json()['results'] if x['type'] == 'user']
+
+    def test_converted_applicant_shows_among_students(self):
+        self.get_ok('/admin/users?role=student')          # прогрели кэш people:users
+        r = self.post('/applicants/ap_002/convert', {'group': 'ПО 23-1', 'course': '1'})
+        self.assertIn(r.status_code, (302, 303))
+        self.assertEqual(self.doc('users', 'ap_002')['role'], 'student')
+        html = self.get_ok('/admin/users?role=student&q=ap_002')
+        self.assertIn('/admin/users/edit/ap_002', html, 'зачисленный абитуриент не появился среди студентов')
+
+    def test_deleted_applicant_disappears_from_users_and_search(self):
+        name = self.doc('users', 'ap_003')['name']
+        self.get_ok('/admin/users?role=applicant')
+        self.assertTrue(any('ap_003' in u for u in self._search_user_ids(name)))
+        r = self.post('/applicants/ap_003/delete', {'confirm': 'удалить'})
+        self.assertIn(r.status_code, (302, 303))
+        self.assertIsNone(self.doc('users', 'ap_003'))
+        html = self.get_ok('/admin/users?role=applicant&q=ap_003')
+        self.assertNotIn('/admin/users/edit/ap_003', html, 'удалённый абитуриент всё ещё в списке пользователей')
+        self.assertFalse(any('ap_003' in u for u in self._search_user_ids(name)), 'Ctrl+K находит удалённого')
+
+    def test_profile_name_change_visible_in_people(self):
+        self.get_ok('/admin/users?role=applicant')
+        self.post('/applicants/ap_004/profile', {'name': 'Новоимённая Дана', 'phone': '', 'city': '', 'school': '',
+                                                 'grade': ''})
+        self.assertEqual(self.doc('users', 'ap_004')['name'], 'Новоимённая Дана')
+        self.assertIn('Новоимённая Дана', self.get_ok('/admin/users?role=applicant&q=ap_004'))
+
+
+class LeadRefreshTest(CmsTestCase):
+    """PERF-4: правка одного лида обновляет его запись в снапшоте, а не пересканирует три коллекции;
+    регистрация на /join добавляет лида и не сбрасывает источники и настройки приёмной."""
+    fresh_seed_each_test = True
+
+    def _count_rebuilds(self):
+        from cms import routes_applicants as ra
+        calls = []
+        orig = ra._load_snapshot
+
+        def counted():
+            calls.append(1)
+            return orig()
+        return calls, mock.patch.object(ra, '_load_snapshot', counted)
+
+    def test_crm_edits_do_not_rescan_snapshot(self):
+        calls, patch = self._count_rebuilds()
+        with patch:
+            self.get_ok('/applicants/ap_002?next=/applicants/leads')
+            self.assertEqual(len(calls), 1)
+            r = self.post('/applicants/ap_002/status', {'status': 'declined', 'next': '/applicants/ap_002'})
+            self.assertEqual(r.status_code, 302)
+            self.post('/applicants/ap_002/notes', {'notes': 'Перезвонить после 18:00'})
+            self.post('/applicants/ap_002/contact', {'channel': 'call', 'comment': 'ок'})
+            self.post('/applicants/ap_002/next-step', {'action': 'save', 'next_step': 'Позвонить маме'})
+            self.get_ok('/applicants/ap_002?next=/applicants/leads')
+            html = self.get_ok('/applicants/leads?status=declined')
+            self.assertEqual(len(calls), 1, 'правка одного лида пересобрала снапшот целиком')
+        self.assertIn('/applicants/ap_002', html)                      # новый статус виден в списке сразу
+        from cms.routes_applicants import load_snapshot
+        lead = load_snapshot()['by_uid']['ap_002']
+        self.assertEqual((lead['status'], lead['notes'], lead['next_step']),
+                         ('declined', 'Перезвонить после 18:00', 'Позвонить маме'))
+
+    def test_dashboard_analytics_follow_lead_edit(self):
+        before = self.get_ok('/applicants?days=365')
+        self.post('/applicants/ap_005/status', {'status': 'enrolled'})
+        from cms.routes_applicants import load_snapshot
+        self.assertEqual(load_snapshot()['by_uid']['ap_005']['status'], 'enrolled')
+        from cms.core import cache
+        self.assertFalse([k for k in list(cache._data) if 'analytics' in str(k)], 'аналитика не сброшена')
+        self.assertTrue(before)
+
+    def test_join_registration_adds_lead_without_rescan(self):
+        from cms.core import cache
+        calls, patch = self._count_rebuilds()
+        with patch:
+            self.get_ok('/applicants/leads')
+            self.assertEqual(len(calls), 1)
+            self.assertIsNotNone(cache.get('applicants:sources'))
+            anon = self.app.test_client()
+            anon.get('/join/STAND1')
+            with anon.session_transaction() as s:
+                s['join_ts'] = time.time() - 30
+                tok = s.get('_csrf')
+            r = anon.post('/join/STAND1', data={'login': 'perf4.user', 'password': 'secret12', 'password2': 'secret12',
+                                                'consent': '1', 'csrf_token': tok})
+            self.assertEqual(r.status_code, 302, r.get_data(as_text=True)[:400])
+            self.assertIsNotNone(cache.get('applicants:sources'), '/join сбросил справочник источников')
+            html = self.get_ok('/applicants/leads?q=perf4.user')
+            self.assertEqual(len(calls), 1, 'регистрация пересобрала снапшот целиком')
+        self.assertIn('perf4.user', html)

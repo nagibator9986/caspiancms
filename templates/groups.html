@@ -45,7 +45,7 @@
                         <a class="cc-row-link cc-cell-main" href="{{ sched_url }}">{{ g.name }}</a>
                         {% if not g.in_directory %}<span class="pp-warn-text pp-inline-note">нет в справочнике</span>{% endif %}
                     </td>
-                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' pp-empty' if not g.course }}" data-value="{{ g.course or 0 }}">{% if g.course %}{{ g.course }}<span class="pp-unit"> курс</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
+                    <td class="cc-cell-meta cc-num-col cc-col-md{{ ' cc-cell-empty' if not g.course }}" data-value="{{ g.course or 0 }}">{% if g.course %}{{ g.course }}<span class="pp-unit"> курс</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
                     <td class="cc-cell-meta cc-num-col" data-value="{{ g.students }}">{% if g.students %}<a href="{{ students_url }}" title="Студенты группы">{{ g.students }}<span class="pp-unit"> студ.</span></a>{% else %}<span class="cc-subtle">0<span class="pp-unit"> студ.</span></span>{% endif %}</td>
                     <td class="cc-cell-meta cc-num-col" data-value="{{ g.lessons }}">{% if g.lessons %}{{ g.load }}<span class="pp-unit"> пар/нед.</span>{% else %}<span class="pp-warn-text">нет<span class="pp-unit"> расписания</span></span>{% endif %}</td>
                     <td class="cc-num-col cc-col-md cc-col-optional" data-value="{{ g.teachers }}">{% if g.teachers %}{{ g.teachers }}{% else %}<span class="cc-subtle">—</span>{% endif %}</td>

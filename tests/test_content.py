@@ -844,3 +844,128 @@ class FeedbackInboxTest(CmsTestCase):
         # подделанный restore со статусом вне справочника ничего не меняет
         self.post('/feedback/bulk', {'action': 'restore', 'restore': json.dumps({'fb_1': 'hacked'})})
         self.assertEqual(self.doc('feedback', 'fb_1')['status'], 'new')
+
+
+class BatchedPushTest(CmsTestCase):
+    """PERF-3: пуши участникам и сводки расписания уходят пачками (messaging.send_each, до 500 за вызов),
+    а не отдельным HTTPS-запросом на каждый токен прямо в запросе админа."""
+    fresh_seed_each_test = True
+
+    class _Resp:
+        def __init__(self, n):
+            self.success_count, self.failure_count, self.responses = n, 0, []
+
+    def _patched(self, calls):
+        from unittest import mock
+        from cms import core
+
+        def fake_send_each(messages, dry_run=False, app=None):
+            calls.append(list(messages))
+            return self._Resp(len(calls[-1]))
+        return [mock.patch.object(core, 'IS_EMULATOR', False),
+                mock.patch('firebase_admin.messaging.send_each', side_effect=fake_send_each),
+                mock.patch('firebase_admin.messaging.send', side_effect=AssertionError('пуш по одному'))]
+
+    def _run(self, calls, fn):
+        patches = self._patched(calls)
+        for p in patches:
+            p.start()
+        try:
+            return fn()
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    def test_remind_sends_one_batch(self):
+        from cms.core import SERVER_TIMESTAMP, db
+        uids = self.seed['students'][:3]
+        for i, uid in enumerate(uids):
+            db.collection('users').document(uid).update({'fcmToken': 'tok-%d' % i})
+            db.collection('events').document('ev_openday').collection('registrations').document(uid).set(
+                {'registeredAt': SERVER_TIMESTAMP})
+        calls = []
+        r = self._run(calls, lambda: self.post('/events/remind/ev_openday', {'message': 'Ждём вас в 11:00'}))
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue({'tok-0', 'tok-1', 'tok-2'} <= {m.token for m in calls[0]})
+
+    def test_send_push_many_chunks_by_500(self):
+        from cms import core
+        calls = []
+        msgs = [{'title': 'Т', 'body': 'Б', 'token': 'tok-%d' % i} for i in range(1201)] + [{'title': 'x', 'body': 'y'}]
+        n = self._run(calls, lambda: core.send_push_many(msgs))
+        self.assertEqual([len(c) for c in calls], [500, 500, 201])
+        self.assertEqual(n, 1201)
+
+    def test_schedule_summary_pushes_in_one_call(self):
+        from cms.routes_schedule import ScheduleBatch
+        calls = []
+
+        def go():
+            with self.app.test_request_context('/'):
+                b = ScheduleBatch(quiet=True)
+                for g, t in (('ПО 24-1', 't_li'), ('ИС 24-1', 't_kim'), ('Связь-24', 't_petrov')):
+                    b.add({'groupId': g, 'day_index': 5, 'date': '2026-10-24', 'time': '17.55-18.45',
+                           'subject': 'Физика', 'teacher': t, 'room': '901', 'week_type': 'always'})
+                b.commit()
+        self._run(calls, go)
+        self.assertEqual(len(calls), 1)
+        topics = sorted(m.topic for m in calls[0])
+        self.assertIn('schedule_group_po_24-1', topics)
+        self.assertIn('schedule_group_svyaz-24', topics)      # C5: и топик приложения
+        self.assertIn('schedule_teacher_t_li', topics)
+
+
+class PollResultsPerfTest(CmsTestCase):
+    """PERF-5: результаты опроса кэшируются (страницу обновляют, следя за голосованием); анонимный опрос
+    считает голосовавших через count(), не читая документы; в таблице — первые 200, полный список — CSV."""
+    fresh_seed_each_test = True
+
+    def _count_votes_reads(self):
+        from unittest import mock
+        from cms import routes_content as rc
+        calls = []
+        orig = rc._poll_votes
+
+        def counted(pid):
+            calls.append(pid)
+            return orig(pid)
+        return calls, mock.patch.object(rc, '_poll_votes', counted)
+
+    def test_results_cached_between_views_and_reset_on_edit(self):
+        calls, patch = self._count_votes_reads()
+        with patch:
+            self.get_ok('/poll/poll_club/results')
+            self.get_ok('/poll/poll_club/results')
+            self.assertEqual(len(calls), 1, 'каждое обновление страницы читает все голоса заново')
+            self.post('/poll/poll_club/extend', {'days': '3'})        # правка опроса — кэш сброшен
+            self.get_ok('/poll/poll_club/results')
+        self.assertEqual(len(calls), 2)
+
+    def test_anonymous_poll_counts_without_reading_votes(self):
+        from cms.core import db
+        for uid in self.seed['students'][:3]:
+            db.collection('poll_responses').document('poll_canteen_' + uid).set(
+                {'pollId': 'poll_canteen', 'userId': uid, 'answers': ['a0']})
+        calls, patch = self._count_votes_reads()
+        with patch:
+            html = self.get_ok('/poll/poll_canteen/results')
+        self.assertEqual(calls, [], 'анонимный опрос читает документы голосов ради числа')
+        self.assertRegex(html, r'<b class="cc-num">3</b> из \d+ проголосовали')
+
+    def test_many_voters_table_limited_csv_full(self):
+        from cms.core import db
+        from cms.core import chunked
+        ids = ['ghost_%03d' % i for i in range(205)]
+        for part in chunked(ids, 400):
+            b = db.batch()
+            for uid in part:
+                b.set(db.collection('poll_responses').document('poll_club_' + uid),
+                      {'pollId': 'poll_club', 'userId': uid, 'answers': ['a1']})
+            b.commit()
+        html = self.get_ok('/poll/poll_club/results')
+        self.assertIn('первые 200', html)
+        table = html.split('id="votersTable"', 1)[1].split('</table>', 1)[0]
+        self.assertEqual(table.count('<tr>') - 1, 200)          # без строки заголовка
+        rows = self.client.get('/poll/poll_club/results?format=csv').get_data(as_text=True).strip().splitlines()
+        self.assertEqual(len(rows) - 1, 206)                     # 205 + голос из сида

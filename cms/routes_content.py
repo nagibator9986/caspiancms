@@ -31,12 +31,11 @@ from datetime import datetime, timedelta, timezone
 from firebase_admin import firestore
 from flask import flash, redirect, render_template, request, url_for
 
-from .core import (ALMATY, SERVER_TIMESTAMP, Routes, UploadError, admin_required, aggregate_sum,
-                   audit, back_url, cache, chunked, count, csv_response, current_admin, db, delete_storage_paths,
-                   doc_dict, flash_action, flash_error, get_docs, image_fields, images_from_uploader, images_of,
-                   local_input_value, log, next_target, now_utc, paginate_list, parse_local_datetime, plural,
-                   send_push, storage_path_from_url, to_almaty, to_datetime, today_almaty,
-                   upload_image, where)
+from .core import (ALMATY, SERVER_TIMESTAMP, Routes, UploadError, admin_required, aggregate_sum, audit, back_url, cache,
+                   chunked, count, csv_response, current_admin, db, delete_storage_paths, doc_dict, flash_action,
+                   flash_error, fs_opts, get_docs, image_fields, images_from_uploader, images_of, local_input_value,
+                   log, next_target, now_utc, paginate_list, parse_local_datetime, plural, send_push, send_push_many,
+                   storage_path_from_url, to_almaty, to_datetime, today_almaty, upload_image, where)
 
 routes = Routes()
 
@@ -163,7 +162,7 @@ def _invalidate(*kinds):
 def _snapshot(kind, query_factory, ttl=SNAPSHOT_TTL):
     """Кэшируемый список документов коллекции: [{'id', ...}]. Элементы НЕ менять (общий кэш)."""
     def load():
-        return [doc_dict(s) for s in query_factory().stream()]
+        return [doc_dict(s) for s in query_factory().stream(**fs_opts(True))]
     return cache.get_or_set('content:%s' % kind, load, ttl)
 
 
@@ -220,7 +219,7 @@ def _delete_subcollection(ref, name, limit=450):
     total = 0
     coll = ref.collection(name)
     while True:
-        snaps = list(coll.limit(limit).stream())
+        snaps = list(coll.limit(limit).stream(**fs_opts(True)))
         if not snaps:
             return total
         batch = db.batch()
@@ -235,7 +234,7 @@ def _delete_subcollection(ref, name, limit=450):
 def _delete_query(query, limit=450):
     total = 0
     while True:
-        snaps = list(query.limit(limit).stream())
+        snaps = list(query.limit(limit).stream(**fs_opts(True)))
         if not snaps:
             return total
         batch = db.batch()
@@ -363,7 +362,7 @@ def _validate_news(values, current_category=None):
 def news_form(news_id=None):
     doc = None
     if news_id:
-        doc = doc_dict(db.collection('news').document(news_id).get())
+        doc = doc_dict(db.collection('news').document(news_id).get(**fs_opts()))
         if doc is None:
             flash('Новость не найдена — возможно, её уже удалили', 'warning')
             return redirect(url_for('news'))
@@ -415,7 +414,7 @@ def news_form(news_id=None):
 def _delete_news_doc(news_id):
     """Удалить новость и ВСЕ её фото (как NewsService.deleteNews). → заголовок или None."""
     ref = db.collection('news').document(news_id)
-    snap = ref.get()
+    snap = ref.get(**fs_opts())
     if not snap.exists:
         return None
     data = snap.to_dict() or {}
@@ -503,7 +502,7 @@ def _poll_totals(ids):
         q = db.collection('polls').document(pid).collection('answers')
         total = aggregate_sum(q, 'votes', default=None)
         if total is None:  # нет агрегаций — читаем только поле votes
-            total = sum(_as_int((s.to_dict() or {}).get('votes')) for s in q.select(['votes']).stream())
+            total = sum(_as_int((s.to_dict() or {}).get('votes')) for s in q.select(['votes']).stream(**fs_opts(True)))
         return pid, _as_int(total)
 
     if missing:
@@ -545,7 +544,7 @@ def polls():
 
 
 def _load_answers(poll_id):
-    snaps = list(db.collection('polls').document(poll_id).collection('answers').limit(200).stream())
+    snaps = list(db.collection('polls').document(poll_id).collection('answers').limit(200).stream(**fs_opts(True)))
     answers = [doc_dict(s) for s in snaps]
 
     def key(a):
@@ -587,7 +586,7 @@ def _clean_options(raw_list):
 def poll_form(poll_id=None):
     poll, answers = None, []
     if poll_id:
-        poll = doc_dict(db.collection('polls').document(poll_id).get())
+        poll = doc_dict(db.collection('polls').document(poll_id).get(**fs_opts()))
         if poll is None:
             flash('Опрос не найден — возможно, его уже удалили', 'warning')
             return redirect(url_for('polls'))
@@ -695,7 +694,7 @@ def poll_add_answer(poll_id):
     ref = db.collection('polls').document(poll_id)
     if not text:
         flash('Введите текст варианта', 'error')
-    elif not ref.get().exists:
+    elif not ref.get(**fs_opts()).exists:
         flash('Опрос не найден', 'warning')
         return redirect(url_for('polls'))
     else:
@@ -734,7 +733,7 @@ def poll_close(poll_id):
     """Завершить сейчас. Без подтверждения: тост «Отменить» возвращает прежний срок (poll_set_end)."""
     ref = db.collection('polls').document(poll_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Опрос не найден', 'warning')
             return _back('polls')
@@ -766,7 +765,7 @@ def poll_set_end(poll_id):
             end = end.replace(tzinfo=timezone.utc)
     ref = db.collection('polls').document(poll_id)
     try:
-        if not ref.get().exists:
+        if not ref.get(**fs_opts()).exists:
             flash('Опрос не найден', 'warning')
             return _back('polls')
         ref.update({'endTime': end, 'updatedAt': SERVER_TIMESTAMP})
@@ -786,7 +785,7 @@ def poll_extend(poll_id):
     days = max(1, min(_as_int(request.form.get('days'), 7), 90))
     ref = db.collection('polls').document(poll_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Опрос не найден', 'warning')
             return _back('polls')
@@ -812,7 +811,7 @@ def poll_delete(poll_id):
     """Удалить опрос: варианты, голоса обеих схем, картинку и сам документ."""
     ref = db.collection('polls').document(poll_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         data = snap.to_dict() or {} if snap.exists else {}
         _delete_subcollection(ref, 'answers')
         responses = db.collection('poll_responses')
@@ -848,13 +847,15 @@ def _poll_votes(poll_id):
     → (voters: [{uid, answers: [id], at}], anonymous_legacy: [answer_id])."""
     responses = db.collection('poll_responses')
     voters, anon_legacy = {}, []
-    for s in where(responses, 'pollId', '==', poll_id).limit(5000).stream():
+    for s in where(responses, 'pollId', '==', poll_id).select(['userId', 'answers', 'votedAt']).limit(5000) \
+            .stream(**fs_opts(True)):
         d = s.to_dict() or {}
         uid = d.get('userId') or s.id
         ans = [str(a) for a in (d.get('answers') or []) if a]
         v = voters.setdefault(uid, {'uid': d.get('userId'), 'answers': [], 'at': d.get('votedAt')})
         v['answers'] += [a for a in ans if a not in v['answers']]
-    for s in where(responses, 'poll_id', '==', poll_id).limit(5000).stream():
+    for s in where(responses, 'poll_id', '==', poll_id).select(['user_id', 'answer_id', 'votedAt']).limit(5000) \
+            .stream(**fs_opts(True)):
         d = s.to_dict() or {}
         aid = d.get('answer_id')
         uid = d.get('user_id')
@@ -868,17 +869,42 @@ def _poll_votes(poll_id):
     return list(voters.values()), anon_legacy
 
 
+POLL_RESULTS_TTL = 60   # с: результаты опроса (админы обновляют страницу, следя за голосованием)
+VOTERS_SHOWN = 200      # строк в таблице участников; полный список — CSV
+
+
+def _poll_results_data(poll_id, anonymous):
+    """Голоса для страницы результатов (кэш 60 с; сбрасывается правкой опроса — ключ под content:polls).
+    Анонимный опрос: только число голосовавших — count() по схеме приложения (один ответ на человека), без
+    чтения документов; есть голоса старой веб-схемы — читаем как раньше (там ответ на вариант, не на человека).
+    → {'count'} или {'count', 'voters', 'anon_legacy', 'users'}."""
+    def load():
+        if anonymous:
+            responses = db.collection('poll_responses')
+            n = count(where(responses, 'pollId', '==', poll_id), default=None)
+            legacy = n is None or count(where(responses, 'poll_id', '==', poll_id), default=1) > 0
+            if not legacy:
+                return {'count': n}
+            voters, anon_legacy = _poll_votes(poll_id)
+            return {'count': len(voters) + len(anon_legacy)}
+        voters, anon_legacy = _poll_votes(poll_id)
+        users = get_docs('users', [v['uid'] for v in voters if v['uid']], ['name', 'group', 'role'])
+        return {'count': len(voters) + len(anon_legacy), 'voters': voters, 'anon_legacy': anon_legacy,
+                'users': users}
+    return cache.get_or_set('content:polls:results:%s' % poll_id, load, POLL_RESULTS_TTL)
+
+
 @routes.route('/poll/<poll_id>/results')
 @routes.route('/polls/<poll_id>/results')
 @admin_required
 def poll_results(poll_id):
-    poll = doc_dict(db.collection('polls').document(poll_id).get())
+    poll = doc_dict(db.collection('polls').document(poll_id).get(**fs_opts()))
     if poll is None:
         flash('Опрос не найден — возможно, его уже удалили', 'warning')
         return redirect(url_for('polls'))
     meta = _poll_meta(poll)
     answers = _load_answers(poll_id)
-    voters, anon_legacy = _poll_votes(poll_id)
+    data = _poll_results_data(poll_id, meta['anonymous'])
     total_votes = sum(_as_int(a.get('votes')) for a in answers)
     leader = max((_as_int(a.get('votes')) for a in answers), default=0)
     for a in answers:
@@ -889,8 +915,8 @@ def poll_results(poll_id):
     by_id = {a['id']: a for a in answers}
     people = []
     if not meta['anonymous']:
-        users = get_docs('users', [v['uid'] for v in voters if v['uid']], ['name', 'group', 'role'])
-        for v in voters:
+        users = data['users']
+        for v in data['voters']:
             u = users.get(v['uid'] or '', {})
             person = {'uid': v['uid'], 'name': u.get('name') or ('Удалённый пользователь' if v['uid'] else 'Без входа'),
                       'group': u.get('group') or '', 'role': u.get('role') or '', 'at': v['at'],
@@ -900,7 +926,7 @@ def poll_results(poll_id):
                 if a in by_id:
                     by_id[a]['voters'].append(person)
         people.sort(key=lambda p: _norm(p['name']))
-    voters_count = len(voters) + len(anon_legacy)
+    voters_count = data['count']
     # голоса есть, а списка голосовавших нет (старые опросы, данные до poll_responses) — число людей неизвестно
     voters_known = voters_count > 0 or total_votes == 0
     if request.args.get('format') == 'csv':
@@ -913,7 +939,8 @@ def poll_results(poll_id):
         return csv_response(name, ['Участник', 'Группа', 'Роль', 'Ответы', 'Время голоса'], rows)
     eligible = _audience_size(meta['audience']) if voters_known else None
     return render_template('poll_results.html', poll=poll, meta=meta, answers=answers, total_votes=total_votes,
-                           voters_count=voters_count, voters_known=voters_known, eligible=eligible, people=people)
+                           voters_count=voters_count, voters_known=voters_known, eligible=eligible,
+                           people=people[:VOTERS_SHOWN], people_total=len(people))
 
 
 AUDIENCE_ROLES = {'all': ('student', 'teacher'), 'students': ('student',), 'teachers': ('teacher',)}
@@ -956,7 +983,8 @@ ENTITY = {
 
 def _registrations(coll, doc_id):
     """Участники события/клуба с данными из users (одно пакетное чтение вместо N+1)."""
-    regs = [doc_dict(s) for s in db.collection(coll).document(doc_id).collection('registrations').limit(5000).stream()]
+    regs = [doc_dict(s) for s in db.collection(coll).document(doc_id).collection('registrations').limit(5000)
+            .stream(**fs_opts(True))]
     users = get_docs('users', [r['id'] for r in regs], ['name', 'group', 'phone', 'phoneNumber', 'email', 'role'])
     rows = []
     for r in regs:
@@ -976,7 +1004,7 @@ def _registrations(coll, doc_id):
 
 def _registrations_page(coll, doc_id, template):
     cfg = ENTITY[coll]
-    item = doc_dict(db.collection(coll).document(doc_id).get())
+    item = doc_dict(db.collection(coll).document(doc_id).get(**fs_opts()))
     if item is None:
         flash('Событие не найдено' if coll == 'events' else 'Клуб не найден', 'warning')
         return redirect(url_for(cfg['list']))
@@ -1022,28 +1050,27 @@ def _recount(coll, doc_id):
     ref = db.collection(coll).document(doc_id)
     n = count(ref.collection('registrations'), default=None)
     if n is None:
-        n = sum(1 for _ in ref.collection('registrations').select([]).stream())
+        n = sum(1 for _ in ref.collection('registrations').select([]).stream(**fs_opts(True)))
     ref.update({'registrationsCount': int(n)})
     return n
 
 
 def _remind(coll, doc_id, title, message):
     """Пуш участникам по их fcmToken. → (отправлено, всего участников)."""
-    regs = [s.id for s in db.collection(coll).document(doc_id).collection('registrations').select([]).limit(2000).stream()]
+    regs = [s.id for s in db.collection(coll).document(doc_id).collection('registrations').select([]).limit(2000)
+            .stream(**fs_opts(True))]
     users = get_docs('users', regs, ['fcmToken'])
-    sent = 0
     data = {'type': 'event' if coll == 'events' else 'club', 'id': doc_id}
-    for uid in regs:
-        token = (users.get(uid) or {}).get('fcmToken')
-        if token and send_push(title, message, token=token, data=data):
-            sent += 1
+    tokens = dict.fromkeys(t for t in ((users.get(uid) or {}).get('fcmToken') for uid in regs) if t)
+    # одной пачкой (send_each по 500), а не HTTPS-запросом на каждый токен — сотни участников не держат воркер
+    sent = send_push_many([{'title': title, 'body': message, 'token': t, 'data': data} for t in tokens])
     return sent, len(regs)
 
 
 def _delete_entity(coll, doc_id):
     """Удалить событие/клуб с регистрациями и картинкой. → название или None."""
     ref = db.collection(coll).document(doc_id)
-    snap = ref.get()
+    snap = ref.get(**fs_opts())
     if not snap.exists:
         return None
     data = snap.to_dict() or {}
@@ -1101,7 +1128,7 @@ def _event_form_values(ev=None):
 def event_form(event_id=None):
     ev = None
     if event_id:
-        ev = doc_dict(db.collection('events').document(event_id).get())
+        ev = doc_dict(db.collection('events').document(event_id).get(**fs_opts()))
         if ev is None:
             flash('Событие не найдено — возможно, его уже удалили', 'warning')
             return redirect(url_for('events'))
@@ -1221,7 +1248,7 @@ def event_recount(event_id):
 @routes.route('/events/remind/<event_id>', methods=['POST'])
 @admin_required
 def event_remind(event_id):
-    ev = doc_dict(db.collection('events').document(event_id).get())
+    ev = doc_dict(db.collection('events').document(event_id).get(**fs_opts()))
     if ev is None:
         flash('Событие не найдено', 'warning')
         return redirect(url_for('events'))
@@ -1295,7 +1322,7 @@ def _club_form_values(club=None):
 def club_form(club_id=None):
     club = None
     if club_id:
-        club = doc_dict(db.collection('clubs').document(club_id).get())
+        club = doc_dict(db.collection('clubs').document(club_id).get(**fs_opts()))
         if club is None:
             flash('Клуб не найден — возможно, его уже удалили', 'warning')
             return redirect(url_for('clubs'))
@@ -1399,7 +1426,7 @@ def club_recount(club_id):
 @routes.route('/clubs/remind/<club_id>', methods=['POST'])
 @admin_required
 def club_remind(club_id):
-    club = doc_dict(db.collection('clubs').document(club_id).get())
+    club = doc_dict(db.collection('clubs').document(club_id).get(**fs_opts()))
     if club is None:
         flash('Клуб не найден', 'warning')
         return redirect(url_for('clubs'))
@@ -1494,7 +1521,7 @@ def _product_form_values(product=None):
 def product_form(product_id=None):
     product = None
     if product_id:
-        product = doc_dict(db.collection('products').document(product_id).get())
+        product = doc_dict(db.collection('products').document(product_id).get(**fs_opts()))
         if product is None:
             flash('Товар не найден — возможно, его уже удалили', 'warning')
             return redirect(url_for('products'))
@@ -1551,7 +1578,7 @@ def product_form(product_id=None):
 def product_delete(product_id):
     ref = db.collection('products').document(product_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Товар уже удалён', 'info')
             return _back('products')
@@ -1583,7 +1610,7 @@ def _feedback_items():
     """Обращения с автором (кэш 60 с). Cloud Function хранит только последние 50 — список маленький."""
     def load():
         docs = [doc_dict(s) for s in db.collection('feedback').order_by('createdAt', direction=DESC)
-                .limit(500).stream()]
+                .limit(500).stream(**fs_opts(True))]
         uids = [d.get('userId') for d in docs if d.get('userId') and not d.get('anonymousVisual')]
         users = get_docs('users', uids, ['name', 'group', 'role'])
         for d in docs:
@@ -1691,7 +1718,7 @@ def feedback_reply(feedback_id):
         flash('Ответ слишком длинный (больше 4000 символов)', 'error')
         return _back('feedback_list')
     ref = db.collection('feedback').document(feedback_id)
-    snap = ref.get()
+    snap = ref.get(**fs_opts())
     if not snap.exists:
         flash('Обращение не найдено — возможно, его уже удалили', 'warning')
         return _back('feedback_list')
@@ -1740,7 +1767,7 @@ def feedback_status(feedback_id):
         return _back('feedback_list')
     ref = db.collection('feedback').document(feedback_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Обращение не найдено', 'warning')
             return _back('feedback_list')

@@ -1,5 +1,6 @@
 {# Заказы мерча — очередь выдачи: «Выдать» одной кнопкой (без модалки, тост со ссылкой «Журнал»), отмена с
-   возвратом коинов (возврат делает сервер), заметки, выбор строк и массовые действия, поиск по странице (CRM). #}
+   возвратом коинов (возврат делает сервер), заметки (coin_order_notes — видны только админам), выбор строк и
+   массовые действия, поиск по странице, «Зависли» — заказы без статуса дольше 15 минут с «Отменить» (CRM). #}
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'coins/_macros.html' as cn with context %}
@@ -17,7 +18,7 @@
 {%- set _ = sitems.append({'value': '', 'label': 'Очередь выдачи пуста'}) -%}
 {%- endif -%}
 {%- set _ = sitems.append({'value': kpi.issued_week, 'label': 'выдано за 7 дней', 'href': url_with(status='issued', page=None)}) -%}
-{%- if kpi.stuck %}{% set _ = sitems.append({'value': kpi.stuck, 'label': 'зависли — сервер не обработал', 'tone': 'danger', 'href': url_with(status='pending', page=None)}) %}{% endif -%}
+{%- if kpi.stuck %}{% set _ = sitems.append({'value': kpi.stuck, 'label': 'зависли — сервер не обработал', 'tone': 'danger', 'href': url_with(status='stuck', page=None), 'title': 'Заказы без статуса дольше ' ~ stuck_minutes ~ ' минут: функция их не обработала, коины не списаны'}) %}{% endif -%}
 {{ ui.page_header('Заказы мерча', None, meta=ui.summary_line(sitems), actions=[
     {'menu': [
         {'label': 'Экспорт CSV', 'href': url_for('coins_orders_export', **request.args), 'icon': 'download'},
@@ -35,12 +36,21 @@
 
 {% if truncated %}{{ ui.hint('Показаны последние 1500 заказов и все, что ждут выдачи. Старые заказы — в экспорте журнала коинов.') }}{% endif %}
 
+{% if legacy_notes %}
+{% call ui.hint(icon='exclamation-triangle', tone='warning') %}
+    {{ legacy_notes }} {{ legacy_notes|plural('заказ хранит', 'заказа хранят', 'заказов хранят') }} заметку в самом заказе — она
+    доступна абитуриенту: документ заказа он читает целиком.
+    <form method="post" action="{{ url_for('coins_orders_migrate_notes') }}" class="d-inline">{{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}"><button type="submit" class="btn btn-link btn-sm p-0 align-baseline">Перенести в заметки для администраторов</button></form>
+{% endcall %}
+{% endif %}
+
 <form id="cnOrdersBulk" method="post" action="{{ url_for('coins_orders_bulk') }}" class="m-0">{{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}"></form>
 {% call ui.list_card(classes='cn-orders-card') %}
     <div class="cn-orders-bar">
     {%- set chips = [] -%}
     {%- for k, label in statuses %}{% set _ = chips.append((k, label, counts[k])) %}{% endfor -%}
-    {%- if counts.pending %}{% set _ = chips.append(('pending', 'Обрабатываются', counts.pending)) %}{% endif -%}
+    {%- if counts.stuck or f.status == 'stuck' %}{% set _ = chips.append(('stuck', 'Зависли', counts.stuck)) %}{% endif -%}
+    {%- if counts.pending or f.status == 'pending' %}{% set _ = chips.append(('pending', 'Обрабатываются', counts.pending)) %}{% endif -%}
     {%- set _ = chips.append(('all', 'Все')) -%}
     {{ ui.filter_chips('status', chips, f.status, all_label=None) }}
     {% call ui.filters_bar(search={'name': 'q', 'value': f.q, 'placeholder': 'Имя, логин, телефон, товар или № заказа', 'label': 'Поиск заказов', 'filter': '#cnOrders'}, inline=True, ignore=('status', 'uid')) %}
@@ -67,9 +77,14 @@
             {%- set menu = [{'label': 'Заметка…', 'href': '#', 'icon': 'sticky', 'attrs': {'data-cn-note': url_for('coins_order_note', order_id=o.id), 'data-note': o.note, 'data-title': o.title ~ ' — ' ~ o.person.title}}] -%}
             {%- if o.person.link %}{% set _ = menu.append({'label': 'Карточка абитуриента', 'href': o.person.link, 'icon': 'person-vcard'}) %}{% endif -%}
             {%- if o.uid %}{% set _ = menu.append({'label': 'Все заказы абитуриента', 'href': url_for('coins_orders', uid=o.uid, status='all'), 'icon': 'box-seam'}) %}{% endif -%}
+            {#- зависший: функция не обработала заказ (onCoinOrderCreated) — списания и склада не было, а onCoinOrderUpdated
+                заказ без статуса reserved не трогает: отмена — просто закрытие, без возврата и уведомления -#}
+            {%- set stuck_confirm = 'Отменить зависший заказ «' ~ o.title ~ '» — ' ~ o.person.title ~ '? Сервер его не обработал: коины не списывались и склад не менялся, поэтому возвращать нечего. Заказ получит статус «Отменён», уведомление абитуриенту не придёт.' -%}
             {%- if o.status == 'reserved' -%}
             {%- set _ = menu.extend([{'divider': True}, {'label': 'Отменить заказ', 'action': url_for('coins_order_cancel', order_id=o.id), 'fields': {'next': here()}, 'icon': 'arrow-counterclockwise', 'danger': True, 'ok': 'Отменить заказ',
                 'confirm': 'Отменить заказ «' ~ o.title ~ '» — ' ~ o.person.title ~ '? ' ~ o.price ~ ' ' ~ o.price|plural('коин', 'коина', 'коинов') ~ ' вернутся абитуриенту, товар — на склад.'}]) -%}
+            {%- elif o.stuck -%}
+            {%- set _ = menu.extend([{'divider': True}, {'label': 'Отменить зависший заказ', 'action': url_for('coins_order_cancel', order_id=o.id), 'fields': {'next': here()}, 'icon': 'x-circle', 'danger': True, 'ok': 'Отменить заказ', 'confirm': stuck_confirm}]) -%}
             {%- endif -%}
             <tr id="o-{{ o.id }}" class="{{ 'is-stuck' if o.stuck }}">
                 {% if queue %}<td class="cc-select">{{ ui.select_row('cnOrdersBulk', o.id, o.title) }}</td>{% endif %}
@@ -88,11 +103,17 @@
                     <div>{{ o.created|dt }}</div><div class="cc-cell-sub">{{ o.created|ago }}</div>
                 </td>
                 <td class="cn-c-status">
-                    {% if queue %}<span class="cn-wait{{ ' is-long' if o.created and (now - o.created).days >= 3 }}" title="{{ o.created|dt }}">{{ o.created|ago }}</span>{% else %}{{ ui.badge(o.status) }}{% endif %}
+                    {% if queue %}<span class="cn-wait{{ ' is-long' if o.created and (now - o.created).days >= 3 }}" title="{{ o.created|dt }}">{{ o.created|ago }}</span>{% elif o.stuck %}{{ ui.badge('stuck', 'Завис', 'danger', 'exclamation-triangle') }}{% else %}{{ ui.badge(o.status) }}{% endif %}
                     {% if o.status == 'issued' and o.issued_at %}<div class="cc-cell-sub">{{ o.issued_at|dt }}{% if o.by %} · {{ o.by }}{% endif %}</div>{% endif %}
                     {% if o.status == 'cancelled' %}<div class="cc-cell-sub">{{ o.cancelled_at|dt }}{% if o.by %} · {{ o.by }}{% endif %}{% if o.refunded %} · коины возвращены{% endif %}</div>{% endif %}
                     {% if o.reason %}<div class="cc-cell-sub cn-reason">{{ o.reason }}</div>{% endif %}
-                    {% if o.stuck %}<div class="cc-cell-sub cn-reason">не обработан сервером — проверьте функции</div>{% endif %}
+                    {% if o.stuck %}
+                    <div class="cc-cell-sub cn-reason">Сервер не обработал заказ за {{ stuck_minutes }} минут: коины не списаны, склад не тронут</div>
+                    <form method="post" action="{{ url_for('coins_order_cancel', order_id=o.id) }}" class="m-0 cn-stuck-cancel" data-confirm="{{ stuck_confirm }}" data-confirm-ok="Отменить заказ">
+                        {{ ui.csrf_field() }}<input type="hidden" name="next" value="{{ here() }}">
+                        <button type="submit" class="btn btn-light btn-sm"><i class="bi bi-x-circle" aria-hidden="true"></i><span>Отменить</span></button>
+                    </form>
+                    {% endif %}
                     {% if o.note %}<div class="cn-note" title="Заметка"><i class="bi bi-sticky" aria-hidden="true"></i><span>{{ o.note }}</span></div>{% endif %}
                 </td>
                 {% if queue %}

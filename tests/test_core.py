@@ -571,3 +571,490 @@ class SearchApiTest(CmsTestCase):
     def test_anonymous_401(self):
         r = self.app.test_client().get('/api/search?q=ПО')
         self.assertEqual(r.status_code, 401)
+
+
+class OpenRedirectTest(CmsTestCase):
+    """SEC-1: next с управляющими символами/обратным слешем не уводит на чужой сайт и не даёт 500.
+    Werkzeug выкидывает таб из Location, поэтому '/\\t/evil.example' превращался в '//evil.example'."""
+
+    def _assert_local(self, r):
+        from urllib.parse import urlsplit
+        self.assertIn(r.status_code, (301, 302, 303))
+        loc = r.headers.get('Location', '')
+        self.assertFalse(loc.startswith('//'), loc)
+        self.assertEqual(urlsplit(loc).netloc in ('', 'localhost'), True, loc)
+        self.assertNotIn('evil', loc)
+
+    def test_safe_next_url_rejects_control_chars_and_backslash(self):
+        from cms.core import safe_next_url
+        for bad in ('/\t/evil.com', '/\n/x', '/\r/x', '/\x00/x', '/ /evil', '/\\evil', '/a\\b', '//evil',
+                    '/\x7f/x', '/\x0b/evil', 'https://evil.com', '\t//evil.com'):
+            self.assertIsNone(safe_next_url(bad), repr(bad))
+        # обычные пути (в т.ч. с пробелом в названии группы — так их отдаёт here()) — как есть
+        for ok in ('/schedule/rooms', '/admin/users?role=student&q=x', '/schedule/edit_group/ПО 23-1'):
+            self.assertEqual(safe_next_url(ok), ok)
+
+    def test_logged_in_login_with_tab_next_stays_on_site(self):
+        self._assert_local(self.client.get('/login?next=/%09/evil.example'))
+
+    def test_crlf_next_is_not_500(self):
+        for q in ('/%0d/x', '/%0a/x'):
+            r = self.client.get('/login?next=' + q)
+            self.assertNotEqual(r.status_code, 500, q)
+            self._assert_local(r)
+
+    def test_form_redirect_after_save_ignores_tab_next(self):
+        r = self.post('/admin/users/st_001/revoke?next=/%09/evil.example')
+        self._assert_local(r)
+
+    def test_anonymous_login_post_with_tab_next(self):
+        self.client = self.app.test_client()   # не вошедший: next из скрытого поля формы входа
+        self.client.get('/login')
+        r = self.client.post('/login', data={'email': S.ADMIN['email'], 'password': S.ADMIN['password'],
+                                             'csrf_token': self.csrf(), 'next': '/\t/evil.example'})
+        self._assert_local(r)
+
+
+class SessionRevocationTest(CmsTestCase):
+    """SEC-2: блокировка входа, «Завершить сеансы», выход и абсолютный срок 12 ч завершают сессию CMS."""
+
+    _n = 0
+
+    def _second_admin(self):
+        """Второй админ (Auth + users) и его вошедший клиент."""
+        from cms.core import db, fb_auth
+        type(self)._n += 1
+        uid = 'admin_sec_%d_%d' % (int(time.time()), self._n)
+        email = '%s@caspian.test' % uid
+        fb_auth.create_user(uid=uid, email=email, password='Second12345')
+        db.collection('users').document(uid).set({'role': 'admin', 'name': 'Второй Админ', 'email': email})
+        main = self.client
+        self.client = self.app.test_client()
+        try:
+            self.login(email, 'Second12345')
+            second = self.client
+        finally:
+            self.client = main
+        return uid, second
+
+    @staticmethod
+    def _force_recheck(client):
+        with client.session_transaction() as s:
+            s['role_checked_at'] = time.time() - 11 * 60
+
+    def _assert_locked_out(self, client):
+        r = client.get('/admin/users')
+        self.assertIn(r.status_code, (302, 401, 403), r.status_code)
+        if r.status_code == 302:
+            self.assertIn('/login', r.headers['Location'])
+        self.assertNotEqual(client.get('/applicants/leads.csv').status_code, 200)
+        with client.session_transaction() as s:
+            self.assertIsNone(s.get('uid'), 'сессия не очищена')
+
+    def test_disabled_admin_loses_cms_access(self):
+        uid, second = self._second_admin()
+        self.assertEqual(second.get('/admin/users').status_code, 200)
+        r = self.post('/admin/users/%s/disable' % uid, {'disabled': '1'})
+        self.assertEqual(r.status_code, 302)
+        self._force_recheck(second)
+        self._assert_locked_out(second)
+
+    def test_revoked_sessions_end_cms_session(self):
+        uid, second = self._second_admin()
+        time.sleep(1.1)  # validSince в Auth — с точностью до секунды
+        self.assertEqual(self.post('/admin/users/%s/revoke' % uid).status_code, 302)
+        self._force_recheck(second)
+        self._assert_locked_out(second)
+
+    def test_absolute_session_lifetime(self):
+        from cms.core import SESSION_HOURS
+        with self.client.session_transaction() as s:
+            s['login_at'] = time.time() - SESSION_HOURS * 3600 - 60
+            s['role_checked_at'] = time.time()   # роль только что проверена — срок всё равно истёк
+        r = self.client.get('/admin/users')
+        self.assertRedirectsTo(r, '/login')
+        with self.client.session_transaction() as s:
+            self.assertIsNone(s.get('uid'))
+        self.assertEqual(self.client.get('/api/schedule/all').status_code, 401)
+
+    def test_session_without_login_at_is_expired(self):
+        with self.client.session_transaction() as s:
+            s.pop('login_at', None)
+        self.assertRedirectsTo(self.client.get('/admin/users'), '/login')
+
+    def test_logout_invalidates_copied_cookie(self):
+        self.get_ok('/admin/users')
+        stolen = self.client.get_cookie('cc_session').value
+        self.logout()
+        thief = self.app.test_client()
+        thief.set_cookie('cc_session', stolen)
+        self._force_recheck(thief)
+        self._assert_locked_out(thief)
+
+    def test_role_recheck_survives_auth_outage(self):
+        from unittest import mock
+        from cms import core
+        self._force_recheck(self.client)
+        with mock.patch.object(core.fb_auth, 'get_user', side_effect=RuntimeError('auth timeout')):
+            self.get_ok('/admin/users')   # сбой сети — как сбой Firestore: отсрочка, не выход
+
+
+class ClientIpTest(CmsTestCase):
+    """SEC-3: лимиты считаются по X-Real-IP (его ставит прокси PythonAnywhere), а не по левому X-Forwarded-For."""
+    login_as_admin = False
+
+    def test_login_limit_not_bypassed_by_forwarded_for(self):
+        self.client.get('/login')
+        r = None
+        for i in range(11):
+            r = self.client.post('/login', data={'email': S.ADMIN['email'], 'password': 'bad-%d' % i,
+                                                 'csrf_token': self.csrf()},
+                                 headers={'X-Forwarded-For': '10.0.%d.%d' % (i, i), 'X-Real-IP': '203.0.113.7'})
+        self.assertEqual(r.status_code, 429)
+
+    def test_client_ip_prefers_real_ip(self):
+        from cms.core import client_ip
+        with self.app.test_request_context('/', headers={'X-Forwarded-For': '1.1.1.1, 203.0.113.9',
+                                                         'X-Real-IP': '203.0.113.9'}):
+            self.assertEqual(client_ip(), '203.0.113.9')
+        with self.app.test_request_context('/', headers={'X-Forwarded-For': '1.1.1.1'},
+                                           environ_base={'REMOTE_ADDR': '198.51.100.4'}):
+            self.assertEqual(client_ip(), '198.51.100.4')
+
+    def test_join_limit_not_bypassed_by_forwarded_for(self):
+        from unittest import mock
+        from cms import routes_public
+        from cms.core import RateLimiter
+        with mock.patch.object(routes_public, '_attempts', RateLimiter(2, 600)):
+            r = None
+            for i in range(3):
+                self.client.get('/join')
+                with self.client.session_transaction() as s:
+                    s['join_ts'] = time.time() - 30
+                r = self.client.post('/join', data={'login': 'Айгерим', 'password': 'secret12', 'password2': 'secret12',
+                                                    'consent': '1', 'csrf_token': self.csrf()},
+                                     headers={'X-Forwarded-For': '10.1.%d.1' % i, 'X-Real-IP': '203.0.113.8'})
+            self.assertEqual(r.status_code, 429)
+
+
+class CsvInjectionTest(CmsTestCase):
+    """SEC-4: общий csv_response экранирует опасное начало ячейки, как выгрузка лидов."""
+    fresh_seed_each_test = True
+
+    def test_users_csv_escapes_formula(self):
+        from cms.core import cache, db
+        db.collection('users').document('ap_002').update({'name': '=1+2'})
+        cache.invalidate_prefix('people:')
+        body = self.client.get('/admin/users?role=applicant&format=csv').get_data(as_text=True)
+        self.assertIn("'=1+2", body)
+        self.assertNotIn(';=1+2', body)
+        self.assertFalse(any(line.startswith('=1+2') for line in body.splitlines()))
+
+    def test_feedback_csv_escapes_formula(self):
+        from cms.core import cache, db
+        db.collection('feedback').document('fb_0').update({'message': '=HYPERLINK("https://evil.example")'})
+        cache.invalidate_prefix('content:')
+        body = self.client.get('/feedback?status=all&format=csv').get_data(as_text=True)
+        self.assertIn('\'=HYPERLINK', body)
+        self.assertNotIn(';"=HYPERLINK', body)
+
+    def test_csv_response_helper(self):
+        from datetime import datetime, timezone
+        from cms.core import csv_cell, csv_response
+        with self.app.test_request_context('/'):
+            r = csv_response('x.csv', ['a', 'b', 'c', 'd'], [['+7 701', '-1', 5, True],
+                                                            ['@SUM(A1)', '\tx', -3, datetime(2026, 1, 1, tzinfo=timezone.utc)],
+                                                            [csv_cell('=1'), '', None, 'обычный']])
+        lines = r.get_data(as_text=True).lstrip('﻿').splitlines()
+        self.assertEqual(lines[1], "'+7 701;'-1;5;True")
+        self.assertTrue(lines[2].startswith("'@SUM(A1);'\tx;-3;01.01.2026"), lines[2])
+        self.assertEqual(lines[3], "'=1;;;обычный")    # уже экранированное — без второго апострофа
+
+
+class LogoutCsrfTest(CmsTestCase):
+    """SEC-5: выход только POST с CSRF; GET /logout не разлогинивает (logout-CSRF с чужого сайта)."""
+
+    def test_get_logout_does_not_clear_session(self):
+        r = self.client.get('/logout', headers={'Referer': 'https://evil.example/'})
+        self.assertNotEqual(r.status_code, 500)
+        with self.client.session_transaction() as s:
+            self.assertEqual(s.get('uid'), S.ADMIN['uid'])
+        self.get_ok('/admin/users')
+
+    def test_post_logout_requires_csrf(self):
+        r = self.client.post('/logout')
+        self.assertEqual(r.status_code, 400)
+        self.get_ok('/admin/users')
+        r = self.logout()
+        self.assertRedirectsTo(r, '/login')
+        self.assertRedirectsTo(self.client.get('/admin/users'), '/login')
+
+
+class CacheHeadersTest(CmsTestCase):
+    """SEC-6: страницы админки и CSV с ПДн — Cache-Control: no-store; статика и публичные страницы — без него."""
+
+    def test_admin_pages_and_csv_not_stored(self):
+        for url in ('/applicants/leads', '/applicants/leads.csv', '/admin/users'):
+            r = self.client.get(url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertIn('no-store', r.headers.get('Cache-Control', ''), url)
+
+    def test_static_and_anonymous_pages_cacheable(self):
+        r = self.client.get('/static/css/app.css')
+        self.assertNotIn('no-store', r.headers.get('Cache-Control', '') or '')
+        anon = self.app.test_client()
+        r = anon.get('/join')
+        self.assertNotIn('no-store', r.headers.get('Cache-Control', '') or '')
+
+    def test_hsts_only_with_secure_cookies(self):
+        r = self.client.get('/admin/users')
+        self.assertIsNone(r.headers.get('Strict-Transport-Security'))   # эмулятор: cookie без Secure
+        self.app.config['SESSION_COOKIE_SECURE'] = True
+        try:
+            r = self.app.test_client().get('/login')
+            self.assertIn('max-age=', r.headers.get('Strict-Transport-Security', ''))
+        finally:
+            self.app.config['SESSION_COOKIE_SECURE'] = False
+
+
+class CacheRaceTest(CmsTestCase):
+    """DATA-3: значение, посчитанное до записи, не кэшируется на весь TTL, если сброс пришёл во время расчёта."""
+    login_as_admin = False
+
+    def test_invalidate_during_factory_drops_value(self):
+        import tempfile
+        from cms.core import CacheManager
+        c = CacheManager(shared_dir=tempfile.mkdtemp())
+
+        def load():
+            data = 'snapshot-before-write'       # прочитали Firestore
+            c.invalidate_prefix('schedule:')     # в это время запись сбросила кэш
+            return data
+        self.assertEqual(c.get_or_set('schedule:snapshot', load, ttl=120), 'snapshot-before-write')
+        self.assertIsNone(c.get('schedule:snapshot'), 'устаревший снапшот закэширован на весь TTL')
+
+    def test_invalidate_by_other_worker_during_factory(self):
+        import tempfile
+        from cms.core import CacheManager
+        d = tempfile.mkdtemp()
+        a, b = CacheManager(shared_dir=d), CacheManager(shared_dir=d)
+
+        def slow_load():
+            time.sleep(0.05)
+            a.invalidate_prefix('schedule:')     # воркер A записал расписание
+            time.sleep(0.05)
+            return 'stale'
+        b.get_or_set('schedule:snapshot', slow_load, ttl=120)
+        time.sleep(1.1)
+        self.assertIsNone(b.get('schedule:snapshot'))
+        b.get_or_set('schedule:snapshot', lambda: 'fresh', ttl=120)
+        self.assertEqual(b.get('schedule:snapshot'), 'fresh')
+
+
+class PreciseInvalidateTest(CmsTestCase):
+    """PERF-2: invalidate(key) сбрасывает ключ и key:*, а не всё пространство имён — и в своём процессе,
+    и в других воркерах; invalidate_prefix('ns:') по-прежнему сбрасывает всё пространство."""
+    login_as_admin = False
+
+    def test_same_process_keeps_siblings(self):
+        import tempfile
+        from cms.core import CacheManager
+        c = CacheManager(60, tempfile.mkdtemp())
+        c.set('coins:people', 1)
+        c.set('coins:orders', 2)
+        c.set('coins:orders:x', 3)
+        c.invalidate('coins:orders')
+        self.assertEqual(c.get('coins:people'), 1)
+        self.assertIsNone(c.get('coins:orders'))
+        self.assertIsNone(c.get('coins:orders:x'))
+
+    def test_other_worker_drops_only_invalidated_keys(self):
+        import tempfile
+        from cms.core import CacheManager
+        d = tempfile.mkdtemp()
+        a, b = CacheManager(60, d), CacheManager(60, d)
+        for k, v in (('coins:people', 1), ('coins:orders', 2), ('coins:orders:x', 3), ('schedule:snapshot', 4),
+                     ('schedule:logs', 5), ('all_teachers', 6), ('all_teachers:dir', 7), ('people:users', 8)):
+            b.set(k, v)
+        a.invalidate('coins:orders')
+        a.invalidate_prefix('schedule:')
+        a.invalidate('all_teachers')
+        time.sleep(1.1)  # b перечитывает штампы не чаще раза в секунду
+        self.assertEqual(b.get('coins:people'), 1)
+        self.assertEqual(b.get('people:users'), 8)
+        for k in ('coins:orders', 'coins:orders:x', 'schedule:snapshot', 'schedule:logs', 'all_teachers',
+                  'all_teachers:dir'):
+            self.assertIsNone(b.get(k), k)
+        a.invalidate()
+        b.set('x:y', 1)
+        time.sleep(1.1)
+        self.assertEqual(b.get('x:y'), 1)        # записано после полного сброса — живо
+
+    def test_issue_order_keeps_unrelated_snapshots(self):
+        from cms.core import cache
+        self.login()
+        self.get_ok('/coins/orders')
+        self.get_ok('/applicants/leads')
+        self.assertIsNotNone(cache.get('coins:people'))
+        self.assertIsNotNone(cache.get('applicants:snapshot'))
+        r = self.post('/coins/orders/ord_001/issue', {'note': ''})
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(cache.get('coins:orders'))
+        self.assertIsNotNone(cache.get('coins:people'), 'выдача заказа сбросила каталог абитуриентов')
+        self.assertIsNotNone(cache.get('applicants:snapshot'), 'выдача заказа сбросила снапшот абитуриентов')
+
+
+class TopicVariantsTest(CmsTestCase):
+    """C5: группа с «ъ/ь» — CMS шлёт сводный пуш и в топик функций (ъ/ь → '_'), и в тот, на который
+    подписано приложение (NotificationService._sanitize выбрасывает ъ/ь)."""
+    login_as_admin = False
+
+    def test_topic_variants(self):
+        from cms.core import topic_variants
+        self.assertEqual(topic_variants('schedule_group_Связь-24'),
+                         ['schedule_group_svyaz_-24', 'schedule_group_svyaz-24'])
+        self.assertEqual(topic_variants('schedule_group_ПО 24-1'), ['schedule_group_po_24-1'])
+
+    def test_schedule_batch_pushes_both_topics(self):
+        from cms import core
+        from cms.routes_schedule import ScheduleBatch
+        core.sent_pushes.clear()
+        with self.app.test_request_context('/'):
+            batch = ScheduleBatch(quiet=True)
+            batch.add({'groupId': 'Связь-24', 'day_index': 1, 'date': '2026-10-20', 'time': '08.00-08.50',
+                       'subject': 'Физика', 'teacher': 't_li', 'room': '101', 'week_type': 'always'})
+            batch.commit()
+        topics = [p['topic'] for p in core.sent_pushes]
+        self.assertIn('schedule_group_svyaz_-24', topics)
+        self.assertIn('schedule_group_svyaz-24', topics)
+
+
+class FirestoreTimeoutTest(CmsTestCase):
+    """PERF-1: вызовы Firestore ограничены по времени (retry + timeout вместо дефолтных 300 с google-api-core),
+    а после сбоя связи предохранитель FS_COOLDOWN секунд сразу отдаёт 503 — воркер не висит на каждом запросе."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        from google.api_core import retry as gretry
+        from cms import core
+        self.core = core
+        fast = gretry.Retry(predicate=gretry.if_transient_error, initial=0.1, maximum=0.5, timeout=2)
+        self.patches = [mock.patch.object(core, 'FS_RETRY', fast), mock.patch.object(core, 'FS_TIMEOUT', 2),
+                        mock.patch.object(core, 'FS_TIMEOUT_LONG', 3)]
+        for p in self.patches:
+            p.start()
+        core.reset_firestore_state()
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.core.reset_firestore_state()
+        super().tearDown()
+
+    @staticmethod
+    def _dead_client():
+        """Клиент Firestore на закрытый порт — как недоступная сеть."""
+        import os
+        from unittest import mock
+        from google.auth.credentials import AnonymousCredentials
+        from google.cloud import firestore as gfs
+        with mock.patch.dict(os.environ, {'FIRESTORE_EMULATOR_HOST': '127.0.0.1:59999'}):
+            return gfs.Client(project='demo-dead', credentials=AnonymousCredentials())
+
+    def test_helpers_fail_fast_and_trip_breaker(self):
+        from unittest import mock
+        dead = self._dead_client()
+        started = time.time()
+        with mock.patch.object(self.core, 'db', dead):
+            self.assertIsNone(self.core.count(dead.collection('users')))
+            self.assertEqual(self.core.get_docs('users', ['a', 'b']), {})
+        self.assertLess(time.time() - started, 20)
+        self.assertFalse(self.core.firestore_available(), 'после сбоя связи предохранитель не сработал')
+
+    def test_open_breaker_gives_fast_503_and_recovers(self):
+        from google.api_core import exceptions as gexc
+        self.core.note_firestore_error(gexc.ServiceUnavailable('нет связи'))
+        started = time.time()
+        r = self.client.get('/admin/users')
+        self.assertEqual(r.status_code, 503)
+        self.assertLess(time.time() - started, 3)
+        self.assertEqual(self.client.get('/static/css/app.css').status_code, 200)
+        self.core.reset_firestore_state()
+        self.get_ok('/admin/users')
+
+    def test_logout_works_during_outage(self):
+        from google.api_core import exceptions as gexc
+        self.core.note_firestore_error(gexc.DeadlineExceeded('таймаут'))
+        r = self.logout()
+        self.assertRedirectsTo(r, '/login')
+        with self.client.session_transaction() as s:
+            self.assertIsNone(s.get('uid'))
+
+    def test_role_recheck_during_outage_uses_grace_quickly(self):
+        from unittest import mock
+        dead = self._dead_client()
+        with self.client.session_transaction() as s:
+            s['role_checked_at'] = time.time() - 11 * 60
+        started = time.time()
+        with mock.patch.object(self.core, 'db', dead):
+            r = self.client.get('/ui-kit')
+        self.assertEqual(r.status_code, 200)               # отсрочка ROLE_OUTAGE_GRACE_SECONDS
+        self.assertLess(time.time() - started, 20)
+
+    def test_firestore_calls_get_retry_and_timeout(self):
+        from unittest import mock
+        calls = []
+
+        class Agg:
+            def get(self, **kw):
+                calls.append(kw)
+                raise RuntimeError('нет индекса')
+
+        class Q:
+            def count(self, alias=None):
+                return Agg()
+
+            def sum(self, field, alias=None):
+                return Agg()
+        self.core.count(Q())
+        self.core.aggregate_sum(Q(), 'price')
+        self.assertEqual(len(calls), 2)
+        for kw in calls:
+            self.assertIs(kw.get('retry'), self.core.FS_RETRY)
+            self.assertTrue(0 < kw.get('timeout') <= 60)
+        self.assertTrue(self.core.firestore_available())   # обычная ошибка (не связь) предохранитель не трогает
+        self.assertTrue(mock)
+
+
+class SearchBeyond5000Test(CmsTestCase):
+    """PERF-6: Ctrl+K ищет людей по общему снапшоту «Людей» без лимита: пользователь, чей uid в порядке
+    сортировки дальше 5000-го, находится, а у такого преподавателя есть действие «Карточка»."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from cms.core import chunked, db
+        ids = ['aaa_fill_%04d' % i for i in range(5000)]
+        for part in chunked(ids, 450):
+            b = db.batch()
+            for uid in part:
+                b.set(db.collection('users').document(uid), {'role': 'student', 'name': 'Заполнитель', 'group': 'ПО 23-1'})
+            b.commit()
+        db.collection('users').document('zzz_late_student').set({'role': 'student', 'name': 'Поздняков Тимур',
+                                                                  'group': 'ПО 24-1'})
+        db.collection('users').document('zzz_late_teacher').set({'role': 'teacher', 'name': 'Яковлев Пётр Ильич'})
+
+    def _search(self, q):
+        r = self.client.get('/api/search', query_string={'q': q})
+        self.assertEqual(r.status_code, 200)
+        return r.get_json()['results']
+
+    def test_late_uid_user_found(self):
+        people = [r for r in self._search('Поздняков') if r['type'] == 'user']
+        self.assertTrue(people and 'zzz_late_student' in people[0]['url'], people)
+
+    def test_late_uid_teacher_has_card_action(self):
+        t = [r for r in self._search('Яковлев') if r['type'] == 'teacher']
+        self.assertTrue(t, 'преподаватель не найден')
+        self.assertIn('/teachers/edit/zzz_late_teacher', ' '.join(a['url'] for a in t[0]['actions']))

@@ -1,7 +1,7 @@
 # cms/routes_admissions.py — настройки приёмной комиссии и новости абитуриентов (владелец — COINS).
 #
 # app_config/admissions (SPEC §2.8, читается приложением без входа) — пишем merge, старые поля сохраняются:
-#   phone, whatsapp, email, address, privacyUrl, about, aboutKk,
+#   phone, whatsapp ('+7XXXXXXXXXX' или '' — как normalizePhone приложения), email, address, privacyUrl, about, aboutKk,
 #   specialties [str]  = названия каталога (для старых версий приложения и фильтров), пишется синхронно с catalog,
 #   catalog [{id, title, titleKk?, description?, descriptionKk?, duration?, base?, form?, language?, places?, price?,
 #             imageUrl?}], deadline?, deadlineTitle?, deadlineTitleKk?, documents [{title, titleKk?, note?}],
@@ -20,10 +20,12 @@ from urllib.parse import urlsplit
 from firebase_admin import firestore
 from flask import abort, flash, redirect, render_template, request, url_for
 
+from .applicant_login import normalize_phone
 from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, UploadError, admin_required, audit, back_url, cache,
-                   current_admin, db, delete_storage_paths, doc_dict, flash_action, flash_error, get_docs,
-                   image_fields, images_from_uploader, images_of, local_input_value, log, now_utc, paginate_list,
-                   parse_local_datetime, sanitize_topic, storage_path_from_url, to_almaty, to_datetime, upload_image)
+                   current_admin, db, delete_storage_paths, doc_dict, flash_action, flash_error, fmt_phone, fs_opts,
+                   get_docs, image_fields, images_from_uploader, images_of, local_input_value, log, now_utc,
+                   paginate_list, parse_local_datetime, sanitize_topic, storage_path_from_url, to_almaty, to_datetime,
+                   upload_image)
 from .routes_coins import _back, _field, _int, _norm, _safe_doc_id, _str, _ts, site_root
 
 routes = Routes()
@@ -36,6 +38,10 @@ TEXT_LIMITS = {'phone': 40, 'whatsapp': 40, 'email': 120, 'address': 200, 'priva
                'appStoreUrl': 500, 'playStoreUrl': 500, 'about': 4000, 'aboutKk': 4000, 'deadlineTitle': 120,
                'deadlineTitleKk': 120}
 URL_FIELDS = ('privacyUrl', 'registerUrl', 'appStoreUrl', 'playStoreUrl')
+# Телефон и WhatsApp пишем как приложение (ApplicantValidators.normalizePhone): '+7XXXXXXXXXX' — из него
+# собираются tel: и https://wa.me/7XXXXXXXXXX (в приложении и на /join)
+PHONE_FIELDS = ('phone', 'whatsapp')
+PHONE_ERROR = 'Введите номер в формате +7 7XX XXX XX XX'   # как adm_appl_phone_invalid в приложении
 CATALOG_FIELDS = {  # поле → (подпись, лимит)
     'title': ('Название', 120), 'titleKk': ('Название (KZ)', 120), 'description': ('Описание', 2000),
     'descriptionKk': ('Описание (KZ)', 2000), 'duration': ('Срок обучения', 40), 'base': ('База', 10),
@@ -113,6 +119,9 @@ def app_data_issues(doc):
     url = _str(doc.get('registerUrl'))
     if url and not _is_http(url):
         issues.append('ссылка регистрации не начинается с http(s)://')
+    for k, label in (('phone', 'телефон'), ('whatsapp', 'WhatsApp')):
+        if _str(doc.get(k)) and normalize_phone(_str(doc.get(k))) is None:
+            issues.append('%s приёмной не распознан как номер +7…' % label)
     catalog = doc.get('catalog') if isinstance(doc.get('catalog'), list) else []
     if catalog:
         titles = [_str(c.get('title')) if isinstance(c, dict) else _str(c) for c in catalog]
@@ -125,7 +134,7 @@ def app_data_issues(doc):
 # ==================== НАСТРОЙКИ ПРИЁМНОЙ ====================
 
 def _load_admissions_doc():
-    snap = db.collection(ADMISSIONS_REF[0]).document(ADMISSIONS_REF[1]).get()
+    snap = db.collection(ADMISSIONS_REF[0]).document(ADMISSIONS_REF[1]).get(**fs_opts())
     return (snap.to_dict() or {}) if snap.exists else {}
 
 
@@ -153,6 +162,8 @@ def catalog_from_doc(doc):
 
 def _settings_values(doc):
     v = {k: _str(doc.get(k)) for k in TEXT_LIMITS}
+    for k in PHONE_FIELDS:   # '+77015550199' → '+7 701 555 01 99' (как форма настроек в приложении)
+        v[k] = fmt_phone(v[k])
     v['deadline'] = local_input_value(doc.get('deadline'))
     v['registerUrl'] = v['registerUrl'] or default_register_url()
     for k, n in quests_of(doc).items():
@@ -193,6 +204,11 @@ def parse_settings_form(existing_doc):
             v[k] = _norm_url(v[k])
     if v['email'] and not _EMAIL_RE.match(v['email']):
         errors['email'] = 'Проверьте email'
+    phones = {}
+    for k in PHONE_FIELDS:
+        phones[k] = normalize_phone(v[k]) if v[k] else ''
+        if phones[k] is None and k not in errors:
+            errors[k] = PHONE_ERROR
     v['registerUrl'] = v['registerUrl'] or default_register_url()
     v['deadline'] = _field('deadline')
     deadline = parse_local_datetime(v['deadline']) if v['deadline'] else None
@@ -288,6 +304,7 @@ def parse_settings_form(existing_doc):
         errors['faq'] = faq_errors
 
     data = {k: v[k] for k in TEXT_LIMITS}
+    data.update({k: phones[k] or '' for k in PHONE_FIELDS})
     data.update({'deadline': deadline if deadline else DELETE_FIELD, 'quests': quests, 'catalog': catalog,
                  'specialties': [c['title'] for c in catalog], 'documents': documents, 'faq': faq})
     # значения для повторного показа формы
@@ -387,7 +404,8 @@ def load_news():
         q = db.collection('applicant_news').select(
             ['title', 'description', 'content', 'category', 'createdAt', 'updatedAt', 'imageUrl', 'images'])
         return [dict(s.to_dict() or {}, id=s.id) for s in
-                q.order_by('createdAt', direction=firestore.Query.DESCENDING).limit(NEWS_LIST_LIMIT).stream()]
+                q.order_by('createdAt', direction=firestore.Query.DESCENDING).limit(NEWS_LIST_LIMIT)
+                        .stream(**fs_opts(True))]
     return cache.get_or_set('coins:anews', load, NEWS_TTL)
 
 
@@ -473,7 +491,7 @@ def applicant_news_form(news_id=None):
     if news_id:
         if not _safe_doc_id(news_id):
             abort(404)
-        doc = doc_dict(db.collection('applicant_news').document(news_id).get())
+        doc = doc_dict(db.collection('applicant_news').document(news_id).get(**fs_opts()))
         if doc is None:
             flash('Новость не найдена — возможно, её уже удалили', 'warning')
             return redirect(url_for('applicant_news'))
@@ -522,7 +540,7 @@ def applicant_news_form(news_id=None):
 def _delete_news(news_id):
     """Удалить новость и её фото (как NewsService.deleteNews). → заголовок или None (уже нет)."""
     ref = db.collection('applicant_news').document(news_id)
-    snap = ref.get()
+    snap = ref.get(**fs_opts())
     if not snap.exists:
         return None
     data = snap.to_dict() or {}

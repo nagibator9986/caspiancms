@@ -23,8 +23,9 @@ from flask import current_app, jsonify, render_template, request, session
 
 from . import conflicts
 from . import core as _core  # nav_badges не импортируем по имени: core ищет функцию nav_badges в модулях
-from .core import (ALMATY, Routes, admin_required, cache, count, csv_response, db, doc_dict, fmt_dt, json_safe, log,
-                   nav_url, now_almaty, now_utc, paginate_list, plural, to_almaty, to_datetime, today_almaty, where)
+from .core import (ALMATY, Routes, admin_required, cache, count, csv_response, db, doc_dict, fmt_dt, fs_opts, json_safe,
+                   log, nav_url, now_almaty, now_utc, paginate_list, plural, to_almaty, to_datetime, today_almaty,
+                   where)
 from .schedule_model import (DAY_NAMES_FULL, academic_week_number, current_week_type, get_all_groups,
                              get_all_teachers, load_lessons_snapshot, norm_text, room_key)
 
@@ -115,7 +116,7 @@ def _registrations(days=7):
     since = datetime(start_day.year, start_day.month, start_day.day, tzinfo=ALMATY).astimezone(timezone.utc)
     q = where(where(db.collection('users'), 'role', '==', 'applicant'), 'createdAt', '>=', since)
     per_day = Counter()
-    for snap in q.select(['createdAt']).limit(5000).stream():
+    for snap in q.select(['createdAt']).limit(5000).stream(**fs_opts(True)):
         dt = to_almaty((snap.to_dict() or {}).get('createdAt'))
         if dt:
             per_day[dt.date()] += 1
@@ -177,11 +178,13 @@ def _hm(minutes):
 
 
 def _today_lessons(snap, today):
+    """Занятия сегодня — как в приложении: занятие только с date (старый веб) идёт КАЖДУЮ неделю в этот
+    день (matchesWeekday берёт из date день недели); разовое — только явный one_off + date (conflicts.is_one_off)."""
     wd = today.weekday()
     week = current_week_type(today)
     iso = today.isoformat()
     return [l for l in snap.by_day.get(wd, [])
-            if (l['kind'] != 'dated' or l['date'] == iso) and l['week'] in ('always', week)]
+            if (not conflicts.is_one_off(l) or l['date'] == iso) and l['week'] in ('always', week)]
 
 
 def _today_schedule(now):
@@ -268,7 +271,7 @@ def _content_now():
         data = {'polls': [], 'polls_active': 0, 'polls_next_end': None, 'events': [], 'error': False}
         try:
             for d in db.collection('polls').select(['title', 'endTime', 'createdAt']).order_by(
-                    'createdAt', direction=DESC).limit(30).stream():
+                    'createdAt', direction=DESC).limit(30).stream(**fs_opts(True)):
                 p = d.to_dict() or {}
                 end = to_datetime(p.get('endTime'))
                 if end is not None and end <= now:
@@ -296,7 +299,7 @@ def _content_now():
                 where(where(evs, 'date', '>=', today.isoformat()), 'date', '<', (today + timedelta(days=8)).isoformat()),
             ]
             for q in queries:
-                for d in q.order_by('date').limit(4).stream():
+                for d in q.order_by('date').limit(4).stream(**fs_opts(True)):
                     e = d.to_dict() or {}
                     day = _event_day(e.get('date'))
                     if day is None:
@@ -318,7 +321,7 @@ def _recent_audit(limit=8):
     """Последние действия админов без входов/выходов: читаем 24 записи, берём limit."""
     def load():
         q = db.collection('cms_audit').order_by('at', direction=DESC).limit(24)
-        rows = [_audit_row(doc_dict(d)) for d in q.stream()]
+        rows = [_audit_row(doc_dict(d)) for d in q.stream(**fs_opts(True))]
         return [r for r in rows if r['action'] not in HIDDEN_FEED_ACTIONS][:limit]
     try:
         return cache.get_or_set('audit:recent', load, ttl=HOME_TTL)
@@ -408,20 +411,11 @@ def _matches(hay, words):
 
 
 def _search_users():
-    """Индекс людей для поиска (кэш 5 мин): name, email, role, group, phone, login."""
-    def load():
-        out = []
-        for d in db.collection('users').select(['name', 'email', 'role', 'group', 'phone', 'login']).limit(5000).stream():
-            u = d.to_dict() or {}
-            role = str(u.get('role') or '')
-            name = str(u.get('name') or '').strip()
-            out.append({'id': d.id, 'name': name, 'email': str(u.get('email') or ''), 'role': role,
-                        'group': str(u.get('group') or ''), 'phone': str(u.get('phone') or ''),
-                        'login': str(u.get('login') or ''),
-                        'hay': norm_text(' '.join([name, str(u.get('email') or ''), str(u.get('group') or ''),
-                                                   str(u.get('phone') or ''), str(u.get('login') or ''), d.id]))})
-        return out
-    return cache.get_or_set('search:users', load, ttl=SEARCH_TTL)
+    """Индекс людей для поиска: общий снапшот раздела «Люди» (people:users — все пользователи без лимита,
+    кэш 5 мин; сбрасывается записями в users из «Людей» и CRM). Строки: id, name, email, role, group, phone,
+    login, hay. Раньше был отдельный скан users с limit(5000) по id — поздние uid в поиск не попадали."""
+    from .routes_people import _users_snapshot  # модуль «Люди» владеет снапшотом пользователей
+    return _users_snapshot()
 
 
 def _search_content():
@@ -431,7 +425,7 @@ def _search_content():
         for coll, kind in (('news', 'news'), ('polls', 'poll')):
             try:
                 for d in db.collection(coll).select(['title', 'createdAt']).order_by(
-                        'createdAt', direction=DESC).limit(200).stream():
+                        'createdAt', direction=DESC).limit(200).stream(**fs_opts(True)):
                     x = d.to_dict() or {}
                     title = str(x.get('title') or '').strip()
                     if title:
@@ -662,7 +656,7 @@ def _audit_entries(start, end):
         if end:
             q = where(q, 'at', '<', end)
         q = q.order_by('at', direction=DESC).limit(AUDIT_SCAN_LIMIT)
-        return [_audit_row(doc_dict(d)) for d in q.stream()]
+        return [_audit_row(doc_dict(d)) for d in q.stream(**fs_opts(True))]
     return cache.get_or_set(key, load, ttl=AUDIT_TTL)
 
 

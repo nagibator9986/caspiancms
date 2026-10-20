@@ -2,14 +2,16 @@
 #
 # Вход: REST Identity Toolkit (с учётом эмулятора Auth) → verify_id_token →
 # users/{uid}.role == 'admin'. Сессия: подписанная cookie (HttpOnly, SameSite=Lax,
-# Secure в проде), 12 часов; роль перепроверяется admin_required раз в 10 минут.
+# Secure в проде), 12 часов от входа (не продлевается); роль, блокировка входа и
+# завершённые сеансы перепроверяются admin_required раз в 10 минут. Выход — только POST.
 
 import time
 
 from flask import flash, jsonify, redirect, render_template, request, session, url_for
 
-from .core import (LoginError, RateLimiter, Routes, admin_required, audit, back_url, client_ip, db, flash_action, log,
-                   safe_next_url, sign_in_with_password, view_param, wants_json)
+from .core import (LoginError, RateLimiter, Routes, admin_required, audit, back_url, client_ip, db, flash_action,
+                   fs_opts, log, new_session_id, note_firestore_error, revoke_cms_session, safe_next_url,
+                   session_expired, sign_in_with_password, view_param, wants_json)
 
 routes = Routes()
 
@@ -25,7 +27,7 @@ def _render_login(email='', next_url=None, status=200):
 def login():
     next_url = safe_next_url(request.values.get('next'))
     if request.method == 'GET':
-        if session.get('uid') and session.get('is_admin'):
+        if session.get('uid') and session.get('is_admin') and not session_expired():
             return redirect(next_url or url_for('dashboard'))
         return _render_login(next_url=next_url)
 
@@ -49,7 +51,7 @@ def login():
 
     uid = decoded['uid']
     try:
-        snap = db.collection('users').document(uid).get()
+        snap = db.collection('users').document(uid).get(**fs_opts())
         data = snap.to_dict() if snap.exists else None
     except Exception:
         log.exception('Не удалось прочитать профиль при входе')
@@ -68,6 +70,8 @@ def login():
     session['admin_name'] = (data.get('name') or '')[:120]
     session['is_admin'] = True
     session['role_checked_at'] = time.time()
+    session['login_at'] = time.time()      # абсолютный срок сессии (SESSION_HOURS)
+    session['sid'] = new_session_id()      # чтобы «Выйти» закрывал и копии этой cookie
     _login_limiter.reset(ip)
     audit('login', 'session', uid)
     flash('Добро пожаловать!', 'success')
@@ -76,8 +80,16 @@ def login():
 
 @routes.route('/logout', methods=['GET', 'POST'])
 def logout():
-    # POST (с CSRF) — из меню; GET оставлен для старых ссылок.
+    # Выход — только POST с CSRF (меню). GET не разлогинивает: ссылка или редирект с чужого сайта
+    # не должны выкидывать админа посреди работы — старые ссылки получают страницу подтверждения.
+    if request.method == 'GET':
+        if not session.get('uid'):
+            return redirect(url_for('login'))
+        return render_template('logout.html')
+    uid, sid = session.get('uid'), session.get('sid')
     session.clear()
+    if uid:
+        revoke_cms_session(uid, sid)
     flash('Вы вышли из админ-панели', 'info')
     return redirect(url_for('login'))
 
@@ -111,8 +123,9 @@ def _handle_error(e):
     else:
         title, text, icon = _ERRORS.get(code, _ERRORS[500])
     if code >= 500:
-        log.error('Ошибка %s на %s %s', code, request.method, request.path,
-                  exc_info=getattr(e, 'original_exception', None) or None)
+        original = getattr(e, 'original_exception', None)
+        note_firestore_error(original)  # необработанный таймаут Firestore тоже включает предохранитель
+        log.error('Ошибка %s на %s %s', code, request.method, request.path, exc_info=original or None)
     if wants_json():
         return jsonify({'ok': False, 'success': False, 'error': title, 'code': code}), code
     admin_layout = bool(session.get('uid')) and code not in (500, 503)

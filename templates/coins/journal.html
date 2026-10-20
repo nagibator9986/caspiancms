@@ -9,8 +9,9 @@
 {% set type_labels = dict(types) %}
 {% block content %}
 {%- set sitems = [] -%}
-{%- if stats.issued is not none %}{% set _ = sitems.append({'value': stats.issued, 'label': 'начислено', 'title': 'Коинов начислено за всё время'}) %}{% endif -%}
+{%- if stats.issued is not none %}{% set _ = sitems.append({'value': stats.issued, 'label': 'начислено', 'title': 'Коинов начислено за всё время (без возвратов за отменённые заказы)'}) %}{% endif -%}
 {%- if stats.spent is not none %}{% set _ = sitems.append({'value': stats.spent, 'label': 'потрачено', 'href': url_for('coins_orders', status='all'), 'title': 'Потрачено в магазине (с учётом возвратов)'}) %}{% endif -%}
+{%- if stats.refunds %}{% set _ = sitems.append({'value': stats.refunds, 'label': 'возвращено', 'href': url_with(type='refund', cursor=None, page=None, p=None), 'title': 'Возвращено за отменённые заказы — уже вычтено из «потрачено» и не входит в «начислено»'}) %}{% endif -%}
 {%- if stats.balance is not none %}{% set _ = sitems.append({'value': stats.balance, 'label': 'на счетах', 'title': 'Сумма балансов абитуриентов'}) %}{% endif -%}
 {%- if stats.errors %}{% set _ = sitems.append({'value': stats.errors, 'label': 'операций с ошибкой', 'tone': 'danger', 'href': url_with(status='error', cursor=None, page=None, p=None)}) %}{% endif -%}
 {%- if stats.manual_month %}{% set _ = sitems.append({'value': stats.manual_month, 'label': 'вручную за 30 дней', 'href': url_with(type='manual', cursor=None, page=None, p=None)}) %}{% endif -%}

@@ -19,10 +19,10 @@ import time
 from flask import make_response, redirect, render_template, request, session, url_for
 
 from .applicant_login import (PASSWORD_MAX, PASSWORD_MIN, RESET_PASSWORD, canonical_login, display_login,
-                              login_kind, to_auth_email)
-from .core import (Increment, SERVER_TIMESTAMP, RateLimiter, Routes, client_ip, db, fb_auth, log, public_lang,
+                              login_kind, normalize_phone, to_auth_email)
+from .core import (Increment, SERVER_TIMESTAMP, RateLimiter, Routes, client_ip, db, fb_auth, fs_opts, log, public_lang,
                    safe_url)
-from .routes_applicants import invalidate_applicants_cache, load_admissions, load_sources
+from .routes_applicants import load_admissions, load_sources, refresh_lead, wa_link
 
 routes = Routes()
 
@@ -216,7 +216,7 @@ def _referrer_uid(ref):
     if not ref:
         return None
     try:
-        snap = db.collection('referral_codes').document(ref).get()
+        snap = db.collection('referral_codes').document(ref).get(**fs_opts())
     except Exception:
         log.warning('Реферальный код %s не прочитан', ref, exc_info=True)
         return None
@@ -259,6 +259,15 @@ def validate_registration(form):
     return errors
 
 
+def admissions_contacts(adm):
+    """Кнопки «Позвонить» и «WhatsApp» как в приложении (_AdmissionsCard): tel — номер +7XXXXXXXXXX, иначе
+    только цифры и «+»; WhatsApp — https://wa.me/7XXXXXXXXXX (ApplicantValidators.whatsappUrl), а если номер не
+    распознан — кнопки нет. → (tel или '', wa или '')."""
+    phone = str(adm.get('phone') or '').strip()
+    tel = (normalize_phone(phone) or re.sub(r'[^\d+]', '', phone)) if phone else ''
+    return tel, wa_link(str(adm.get('whatsapp') or '').strip()) or ''
+
+
 def _context(code, lang):
     sources = {}
     try:
@@ -275,13 +284,14 @@ def _context(code, lang):
     adm = load_admissions()
     ua = request.headers.get('User-Agent', '')
     platform = 'ios' if re.search(r'iPhone|iPad|iPod', ua) else ('android' if 'Android' in ua else '')
+    adm_tel, adm_wa = admissions_contacts(adm)
     return {
         'lang': lang, 't': TEXTS[lang], 'code': code, 'source': source, 'welcome': welcome,
         'source_title': (str(source.get('title') or code) if source else ''),
         'privacy_url': safe_url(adm.get('privacyUrl'), default=''),
         'app_store': safe_url(adm.get('appStoreUrl'), default=''),
         'play_store': safe_url(adm.get('playStoreUrl'), default=''),
-        'adm_phone': str(adm.get('phone') or '').strip(), 'adm_whatsapp': str(adm.get('whatsapp') or '').strip(),
+        'adm_tel': adm_tel, 'adm_wa': adm_wa,
         'platform': platform,
     }
 
@@ -393,7 +403,8 @@ def _register(code, ref, ctx):
         return _form_error(ctx, ref, {}, 503, 'err_server')
 
     _created.hit(ip)
-    invalidate_applicants_cache()
+    # новый лид — в снапшот точечно; источники и настройки приёмной (нужны самой /join) не сбрасываем
+    refresh_lead(user.uid)
     log.info('Регистрация /join: %s (источник %s, ip %s)', user.uid, doc['source'], ip)
     session.pop('join_ts', None)
     session['join_done'] = {'login': display_login(email), 'coins': ctx['welcome'], 'source': ctx['source_title'],

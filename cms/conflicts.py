@@ -78,8 +78,9 @@ QUALITY = OrderedDict([
                         'Преподаватель из коллекции teachers — приложение его не покажет.')),
     ('no_teacher', ('warning', 'Нет преподавателя', 'Поле teacher пустое.')),
     ('no_subject', ('warning', 'Нет дисциплины', 'Поле subject пустое.')),
-    ('week_unknown', ('warning', 'Неизвестный тип недели',
-                      'Значение week_type не распознано — считается «каждую неделю».')),
+    ('week_unknown', ('critical', 'Тип недели не по формату приложения',
+                      'Приложение понимает только always / numerator / denominator (или пусто) — с таким '
+                      'week_type занятие не видно при фильтре недели. В накладках CMS считает его как указано.')),
     ('unknown_group', ('warning', 'Группы нет в справочнике', 'Группы нет в списке групп (groups_list).')),
     ('off_hours', ('warning', 'Вне учебного дня', 'Занятие раньше 07:00 или позже 21:00.')),
     ('no_room', ('info', 'Нет аудитории', 'Аудитория не указана — накладки аудиторий не проверяются.')),
@@ -94,6 +95,7 @@ FIXABLE = OrderedDict([
     ('teacher_by_name', 'Заменить ФИО на uid преподавателя'),
     ('day_mismatch', 'Переписать date по day_index (как показывает приложение)'),
     ('date_timestamp', 'Записать день как day_index + строку date'),
+    ('week_unknown', 'Записать тип недели ключом приложения (always / numerator / denominator)'),
 ])
 
 
@@ -519,9 +521,18 @@ def fix_for(code, l):
     if code == 'teacher_by_name':
         flags = l.get('teacher_flags') or ()
         if l.get('teacher_uid') and 'by_name' in flags and 'ambiguous' not in flags:
-            field = 'teacherId' if (raw.get('teacherId') and not raw.get('teacher')) else 'teacher'
-            return {field: l['teacher_uid']}
+            # всегда поле teacher: приложение строит расписание преподавателя по where('teacher', '==', uid);
+            # старый teacherId убираем — функции onSchedule* берут teacherId раньше teacher (как plan_update)
+            from .core import DELETE_FIELD
+            fields = {'teacher': l['teacher_uid']}
+            if 'teacherId' in raw:
+                fields['teacherId'] = DELETE_FIELD
+            return fields
         return None
+    if code == 'week_unknown':
+        from .schedule_model import week_type_suggestion
+        canon = week_type_suggestion(raw.get('week_type'))
+        return {'week_type': canon} if canon else None
     if code in ('day_mismatch', 'date_timestamp') and l.get('weekday') is not None:
         from .schedule_model import day_fields  # «сегодня» — по Алматы
         return day_fields(l['weekday'])
@@ -695,10 +706,10 @@ ACKS_COLLECTION = 'schedule_conflict_acks'
 
 
 def _known_groups():
-    from .core import cache, db
+    from .core import cache, db, fs_opts
 
     def load():
-        return [d.id for d in db.collection('groups_list').select([]).stream()]
+        return [d.id for d in db.collection('groups_list').select([]).stream(**fs_opts(True))]
     return cache.get_or_set(GROUPS_KEY, load)
 
 
@@ -735,11 +746,11 @@ def get_analysis(force=False):
 
 def load_acks():
     """{hash: отметка} из schedule_conflict_acks (кэш 5 мин; сбрасывается при принятии/возврате)."""
-    from .core import cache, db
+    from .core import cache, db, fs_opts
 
     def load():
         out = {}
-        for snap in db.collection(ACKS_COLLECTION).limit(5000).stream():
+        for snap in db.collection(ACKS_COLLECTION).limit(5000).stream(**fs_opts(True)):
             d = snap.to_dict() or {}
             d['id'] = snap.id
             out[d.get('hash') or snap.id] = d

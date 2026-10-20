@@ -32,9 +32,9 @@ from flask import Response, flash, g, jsonify, redirect, render_template, reques
 from . import conflicts as conflicts_engine
 from . import schedule_model as sm
 from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, admin_required, audit, back_url, cache, chunked,
-                   csv_response, db, doc_dict, flash_action, fmt_dt, get_docs, humanize_ago, log, next_target,
-                   now_almaty, paginate_list, plural, safe_next_url, send_push, url_with, view_param,
-                   where)
+                   csv_response, db, doc_dict, flash_action, fmt_dt, fs_opts, get_docs, humanize_ago, log, next_target,
+                   now_almaty, paginate_list, plural, safe_next_url, send_push_many, topic_variants, url_with,
+                   view_param, where)
 from .schedule_model import (CALL_SCHEDULE, DAY_NAMES_FULL, DAY_SHORT, WEEK_LABELS, WEEK_TYPES,
                              build_teacher_index, call_slots, current_week_type, day_fields, get_all_groups,
                              get_all_rooms, get_all_subjects, get_all_teachers, get_week_parity, group_sort_key,
@@ -229,10 +229,11 @@ def focus_day(columns, today_wd):
 _SEV_RANK = {'critical': 0, 'warning': 1}
 
 
-def conflict_marks():
+def conflict_marks(with_status=False):
     """Накладки из движка (cms.conflicts) для подсветки там, где правят расписание.
 
-    → (marks, by_group, by_teacher):
+    → (marks, by_group, by_teacher) (+ engine_ok при with_status=True — движок отработал; иначе страницы
+    подсвечивают пересечения запасным _overlap_ids, который про принятые накладки не знает):
       marks      — {id занятия: {'severity': худшая, 'items': ['Преподаватель занят: ВТ 24-1 13:00–13:50', …]}};
       by_group   — {группа: {'critical': n, 'warning': n, 'dims': Counter(dim)}} — уникальные накладки;
       by_teacher — {ключ преподавателя: {'critical': n, 'warning': n}} (вкладка «Преподаватели»).
@@ -241,7 +242,7 @@ def conflict_marks():
         analysis = conflicts_engine.get_analysis()
     except Exception:
         log.exception('Накладки для подсветки не посчитаны')
-        return {}, {}, {}
+        return ({}, {}, {}, False) if with_status else ({}, {}, {})
     try:
         acks = conflicts_engine.load_acks() or {}
     except Exception:
@@ -274,7 +275,7 @@ def conflict_marks():
             teachers[c['key']][c['hash']] = sev
     by_group = {g: dict(Counter(v.values()), dims=group_dims[g]) for g, v in groups.items()}
     by_teacher = {k: dict(Counter(v.values())) for k, v in teachers.items()}
-    return marks, by_group, by_teacher
+    return (marks, by_group, by_teacher, True) if with_status else (marks, by_group, by_teacher)
 
 
 def group_conflicts_url(gname, info):
@@ -378,7 +379,7 @@ def _known_group(group):
     if group in get_all_groups():
         return True
     try:
-        return db.collection('groups_list').document(group).get().exists
+        return db.collection('groups_list').document(group).get(**fs_opts()).exists
     except Exception:
         log.exception('Проверка группы %s не удалась', group)
         return False
@@ -503,6 +504,13 @@ def _summary(counter):
     return ', '.join(parts)
 
 
+STALE_ROW_TEXT = 'Занятие изменено или удалено другим пользователем — обновите страницу'
+
+
+class PartialCommitError(RuntimeError):
+    """Массовая запись прервалась посередине: часть порций уже в Firestore, остальное — нет."""
+
+
 class ScheduleBatch:
     """Массовая запись в schedules: данные и журнал — в одних батчах (≤ MAX_BATCH_OPS операций).
 
@@ -603,41 +611,80 @@ class ScheduleBatch:
             batch.commit()
 
     def commit(self, notify_users=True):
-        """Записать всё. → counts. Исключения Firestore пробрасываются (экран покажет ошибку)."""
+        """Записать всё. → counts. Сбой до первой записанной порции — исключение Firestore как есть
+        (ничего не записано); сбой позже — PartialCommitError (часть уже в базе), при этом notify:false
+        снимается с того, что успело записаться, иначе функции молча пропускали бы все будущие правки этих пар."""
         if not len(self):
             return self.counts
         logs_coll = db.collection('schedule_logs')
         ops = list(self._writes) + [('set', logs_coll.document(), e) for e in self._logs]
+        phases = [ops] + ([[('delete', ref, None) for ref in self._deletes]] if self._deletes else [])
+        committed = 0
         try:
-            self._commit_ops(ops)
-            if self._deletes:
-                self._commit_ops([('delete', ref, None) for ref in self._deletes])
+            for phase in phases:
+                for part in chunked(phase, MAX_BATCH_OPS):
+                    self._commit_ops(part)
+                    committed += 1
+        except Exception as e:
+            if not committed:
+                raise
+            if self.quiet:
+                self._heal_notify(self._notify_refs(deleted_too=True))
+            raise PartialCommitError(str(e)) from e
         finally:
             invalidate_schedule_caches()
         if self.quiet and CLEAR_NOTIFY_AFTER_WRITE:
-            written = [ref for kind, ref, _d in self._writes if kind in ('set', 'update')]
+            written = self._notify_refs()
             try:
                 self._commit_ops([('update', ref, {'notify': DELETE_FIELD}) for ref in written])
             except Exception:
-                log.exception('Не удалось снять notify:false с %d занятий', len(written))
+                log.exception('Не удалось снять notify:false с %d занятий пачкой — снимаем по одному', len(written))
+                self._heal_notify(written)
         if self.quiet and notify_users:
             self.send_pushes()
         return self.counts
 
+    def _notify_refs(self, deleted_too=False):
+        """Ссылки, на которые писался notify:false: записанные (set/update) и — после сбоя — помеченные
+        к удалению (удаление могло не пройти)."""
+        kinds = ('set', 'update', 'mark') if deleted_too else ('set', 'update')
+        return [ref for kind, ref, _d in self._writes if kind in kinds]
+
+    @staticmethod
+    def _heal_notify(refs):
+        """Снять notify:false по одному документу (батч упал бы целиком на уже удалённом/не созданном).
+        NotFound — документа нет (не создан или удалён) — пропускаем; другая ошибка — база недоступна,
+        дальше не пытаемся (лог)."""
+        healed = 0
+        for ref in refs:
+            try:
+                ref.update({'notify': DELETE_FIELD})
+                healed += 1
+            except Exception as e:
+                if e.__class__.__name__ == 'NotFound':
+                    continue
+                log.exception('notify:false не снят с %s (и остальных %d)', ref.id, len(refs) - healed)
+                return healed
+        return healed
+
     def send_pushes(self):
-        """Один пуш на группу и на преподавателя (D15)."""
+        """Один пуш на группу и на преподавателя (D15) — все одной пачкой (send_push_many). Группе с «ъ/ь»
+        в названии — в оба топика: функций и приложения (они расходятся, см. core.topic_variants)."""
+        messages = []
         for gname, counter in self.groups.items():
             text = _summary(counter)
             if text:
-                send_push('Изменения в расписании', 'Группа %s: %s.' % (gname, text),
-                          topic='schedule_group_%s' % gname, data={'type': 'schedule', 'group': gname})
+                for topic in topic_variants('schedule_group_%s' % gname):
+                    messages.append({'title': 'Изменения в расписании', 'body': 'Группа %s: %s.' % (gname, text),
+                                     'topic': topic, 'data': {'type': 'schedule', 'group': gname}})
         for uid, counter in self.teachers.items():
             text = _summary(counter)
             if text:
                 groups = ', '.join(sorted(self.teacher_groups.get(uid) or [], key=group_sort_key))
                 body = text[:1].upper() + text[1:] + (' (%s)' % groups if groups else '') + '.'
-                send_push('Ваше расписание изменилось', body, topic='schedule_teacher_%s' % uid,
-                          data={'type': 'schedule'})
+                messages.append({'title': 'Ваше расписание изменилось', 'body': body,
+                                 'topic': 'schedule_teacher_%s' % uid, 'data': {'type': 'schedule'}})
+        send_push_many(messages)
 
 
 def _merge(old, upd):
@@ -993,7 +1040,7 @@ def schedule():
                   day=day, week=week, week_filters=WEEK_FILTERS, day_names=DAY_NAMES_FULL, day_short=DAY_SHORT,
                   day_options=[(d, DAY_NAMES_FULL[d]) for d in range(7)], selected_group=selected_group)
 
-    marks, conf_groups, _conf_teachers = conflict_marks()
+    marks, conf_groups, _conf_teachers, engine_ok = conflict_marks(with_status=True)
     if not selected_group:
         groups = _filter_groups(all_groups, q, course, major)
         cards = []
@@ -1020,9 +1067,10 @@ def schedule():
     lessons_all = snap.by_group.get(selected_group, [])
     lessons = [l for l in lessons_all if week_matches(l['week'], week, cur) and (day is None or l['weekday'] == day)]
     view = view_param('schedule_group', ('week', 'list'), 'week')
-    overlap_ids, overlap_pairs = _overlap_ids(lessons_all)
     group_marks = {l['id']: marks[l['id']] for l in lessons_all if l['id'] in marks}
-    # подсветка: накладки движка (по всему колледжу) + пересечения внутри группы (на случай, если движок недоступен)
+    # подсветка: накладки движка (по всему колледжу, без принятых); пересечения внутри группы — только
+    # запасной путь, если движок недоступен (про «принятые» накладки он не знает)
+    overlap_ids, overlap_pairs = _overlap_ids(lessons_all) if not engine_ok else (set(), 0)
     for lid in overlap_ids:
         group_marks.setdefault(lid, {'severity': 'critical', 'items': ['Пересекается с другим занятием группы']})
     conf_info = conf_groups.get(selected_group) or {}
@@ -1068,7 +1116,7 @@ def _load_logs():
     """Хвост журнала (кэш 60 с; сбрасывается вместе со снапшотом при любой записи CMS)."""
     def load():
         q = db.collection('schedule_logs').order_by('changed_at', direction='DESCENDING').limit(LOG_FETCH_LIMIT)
-        return [doc_dict(s) for s in q.stream()]
+        return [doc_dict(s) for s in q.stream(**fs_opts(True))]
     return cache.get_or_set('schedule:logs', load, ttl=60)
 
 
@@ -1298,6 +1346,11 @@ def handle_schedule_builder_post():
         created.append((batch.add(lesson_doc(data)), data))
     try:
         batch.commit()
+    except PartialCommitError:  # повтор формы добавил бы уже записанные занятия второй раз
+        log.exception('Конструктор: запись прервалась посередине')
+        flash('Сохранена только часть занятий группы %s — связь с базой прервалась. Проверьте неделю группы '
+              'и добавьте недостающие.' % group, 'warning')
+        return redirect(url_for('schedule', group=group))
     except Exception:
         log.exception('Конструктор: запись не удалась')
         flash('Не удалось сохранить занятия. Попробуйте ещё раз.', 'error')
@@ -1319,7 +1372,8 @@ def handle_schedule_builder_post():
 def _fresh_group_docs(group):
     """Свежие документы группы из Firestore (для редактора и сохранения — без кэша, чтобы не
     затереть правки, сделанные в приложении за последние минуты)."""
-    return {s.id: (s.to_dict() or {}) for s in where(db.collection('schedules'), 'groupId', '==', group).stream()}
+    return {s.id: (s.to_dict() or {}) for s in where(db.collection('schedules'), 'groupId', '==', group)
+            .stream(**fs_opts(True))}
 
 
 @routes.route('/schedule/edit_group/<group_id>')
@@ -1405,13 +1459,18 @@ def schedule_update_group():
         log.exception('update_group: чтение не удалось')
         return jsonify({'error': 'Не удалось прочитать расписание группы. Попробуйте ещё раз.'}), 503
 
-    plans, errors, seen = [], [], set()
+    plans, errors, seen, stale = [], [], set(), []
     for i, l in enumerate(incoming):
         key = str(l.get('key') or l.get('id') or i)
         lesson_id = str(l.get('id') or '')
         if lesson_id and lesson_id in seen:
             continue
         old = existing.get(lesson_id) if lesson_id else None
+        if lesson_id and old is None:
+            # занятие удалили или перенесли в другую группу, пока была открыта вкладка: создавать его
+            # заново (воскрешать удалённое / дублировать перенесённое) нельзя
+            stale.append({'key': key, 'messages': [STALE_ROW_TEXT]})
+            continue
         data, errs = lesson_from_input(l, old=old, group=group)
         if errs:
             errors.append({'key': key, 'messages': errs})
@@ -1423,6 +1482,8 @@ def schedule_update_group():
                 plans.append(('update', lesson_id, old, fields, data, key))
         else:
             plans.append(('add', None, None, lesson_doc(data), data, key))
+    if stale:
+        return jsonify({'error': STALE_ROW_TEXT + ' — ничего не сохранено', 'errors': stale + errors}), 409
     if errors:
         return jsonify({'error': 'Проверьте отмеченные занятия — ничего не сохранено', 'errors': errors}), 400
 
@@ -1439,6 +1500,17 @@ def schedule_update_group():
             batch.delete(doc_id, existing[doc_id])
     try:
         counts = batch.commit()
+    except PartialCommitError:
+        # часть порций уже в базе: «Попробуйте ещё раз» добавил бы новые строки второй раз —
+        # перезагружаем редактор со свежими данными и честно говорим, что сохранилось не всё
+        log.exception('update_group: запись прервалась посередине')
+        message = ('Сохранена только часть изменений группы %s — связь с базой прервалась. Проверьте неделю '
+                   'и повторите оставшиеся правки.' % group)
+        flash(message, 'warning')
+        audit('schedule_update_group', 'schedule', group, {'partial': True})
+        nxt = safe_next_url(payload.get('next'))
+        return jsonify({'success': False, 'partial': True, 'message': message,
+                        'redirect': url_for('schedule_edit_group', group_id=group, next=nxt)}), 200
     except Exception:
         log.exception('update_group: запись не удалась')
         return jsonify({'error': 'Не удалось сохранить расписание. Попробуйте ещё раз.'}), 500
@@ -1470,7 +1542,7 @@ def schedule_delete_item(doc_id):
     ref = db.collection('schedules').document(doc_id)
     group = ''
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
         if not snap.exists:
             flash('Занятие не найдено — возможно, его уже удалили', 'warning')
         else:
@@ -1570,6 +1642,11 @@ def schedule_copy_group():
         batch.add(doc)
     try:
         counts = batch.commit()
+    except PartialCommitError:
+        log.exception('Копирование расписания %s → %s прервалось посередине', source, target)
+        flash('Скопирована только часть расписания %s → %s — связь с базой прервалась. Проверьте неделю группы %s, '
+              'прежде чем копировать снова.' % (source, target, target), 'warning')
+        return redirect(back)
     except Exception:
         log.exception('Копирование расписания %s → %s не удалось', source, target)
         flash('Не удалось скопировать расписание. Попробуйте ещё раз.', 'error')
@@ -1670,7 +1747,7 @@ def _lesson_history(item_id):
     """Журнал одного занятия (запрос по равенству — индекс не нужен)."""
     try:
         q = where(db.collection('schedule_logs'), 'schedule_id', '==', item_id).limit(30)
-        entries = [doc_dict(s) for s in q.stream()]
+        entries = [doc_dict(s) for s in q.stream(**fs_opts(True))]
     except Exception:
         log.exception('История занятия %s не загрузилась', item_id)
         return []
@@ -1699,7 +1776,7 @@ def schedule_edit(schedule_id):
     Пуш об изменении шлёт функция onScheduleUpdate (одно занятие — один пуш, как раньше)."""
     ref = db.collection('schedules').document(schedule_id)
     try:
-        snap = ref.get()
+        snap = ref.get(**fs_opts())
     except Exception:
         log.exception('Чтение занятия %s не удалось', schedule_id)
         flash('Не удалось загрузить занятие. Попробуйте ещё раз.', 'error')
@@ -1724,6 +1801,9 @@ def schedule_edit(schedule_id):
         flash('Изменений нет', 'info')
         return target
     fields['updatedAt'] = SERVER_TIMESTAMP
+    if 'notify' in old:
+        # notify:false «залип» после сбоя массовой записи — снимаем: эту правку функция разошлёт пушем
+        fields['notify'] = DELETE_FIELD
     try:
         batch = db.batch()
         batch.update(ref, fields)
@@ -2160,12 +2240,13 @@ def schedule_teachers():
     week = week_param()
     # по умолчанию — таблица (SCH-7); выбор запоминается (ui.segmented(remember='schedule_teachers'))
     view = view_param('schedule_teachers', ('table', 'cards'), 'table')
-    marks, _cg, conf_teachers = conflict_marks()
+    marks, _cg, conf_teachers, engine_ok = conflict_marks(with_status=True)
     known = get_all_teachers()
     cards = []
     total_overlap = 0
     for tkey, b in _teacher_buckets(snap, cur, key, q, day, week).items():
-        ids, pairs = _overlap_ids(b['all'])
+        # запасная подсветка пересечений — только если движок накладок недоступен (принятые он не учитывает)
+        ids, pairs = _overlap_ids(b['all']) if not engine_ok else (set(), 0)
         ids = set(ids) | {l['id'] for l in b['all'] if l['id'] in marks}
         info = conf_teachers.get(tkey) or {}
         conf = info.get('critical', 0) + info.get('warning', 0)

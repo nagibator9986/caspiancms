@@ -478,7 +478,11 @@
         if (o) item.orig = o;
         payload.lessons.push(item);
       });
-      if (!payload.lessons.length && !payload.deleted_ids.length) { toast('Изменений нет', 'info'); return; }
+      if (!payload.lessons.length && !payload.deleted_ids.length) {
+        if (form && CC.markClean) CC.markClean(form);   // правки отменены вручную — сохранять нечего
+        toast('Изменений нет', 'info');
+        return;
+      }
       function go() {
         saving = true;
         if (btn) btn.disabled = true;
@@ -512,10 +516,7 @@
     if (form) {
       form.addEventListener('submit', function (e) {
         if (mode === 'group') {   // правка недели: JSON-сохранение (Ctrl+S и кнопка «Сохранить»)
-          e.preventDefault();
-          // app.js уже снял «несохранённые изменения» (форма «ушла») — вернуть, пока JSON не сохранён
-          var st = refreshCounters();
-          if (st.changed || st.added || st.deleted) markDirty();
+          e.preventDefault();     // форма остаётся «несохранённой», пока сервер не ответил (CC.markClean в save)
           save(e.submitter || qs('[data-cc-save]', form));
           return;
         }
@@ -704,7 +705,9 @@
     }
     function step(dir) {
       var i = buttons.indexOf(current()) + dir;
-      if (i >= 0 && i < buttons.length) show(buttons[i]);
+      if (i < 0 || i >= buttons.length) return false;
+      show(buttons[i]);
+      return true;
     }
     nav._schStep = step;
     buttons.forEach(function (b) { b.addEventListener('click', function () { show(b); }); });
@@ -717,15 +720,16 @@
       x0 = y0 = null;
       if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && nav.offsetParent !== null) step(dx < 0 ? 1 : -1);
     }, { passive: true });
-    // ← → — только на телефоне (на компьютере стрелки прокручивают страницу и таблицы)
+    // ← → — дни на телефоне. Действие стрелки отменяем, только если день переключился: иначе (полоска дней
+    // скрыта — окно расширили — или день крайний) стрелки по-прежнему прокручивают страницу и таблицы.
     if (!keysBound && CC.hotkey && window.matchMedia && window.matchMedia('(max-width: 767.98px)').matches) {
       keysBound = true;
-      var move = function (dir) {
+      var move = function (e, dir) {
         var n = qsa('[data-sch-dayswitch]').filter(function (x) { return x.offsetParent !== null; })[0];
-        if (n && n._schStep) n._schStep(dir);
+        if (n && n._schStep && n._schStep(dir)) e.preventDefault();
       };
-      CC.hotkey('ArrowLeft', function () { move(-1); }, 'Предыдущий день', { group: 'Расписание' });
-      CC.hotkey('ArrowRight', function () { move(1); }, 'Следующий день', { group: 'Расписание' });
+      CC.hotkey('ArrowLeft', function (e) { move(e, -1); }, 'Предыдущий день', { group: 'Расписание', preventDefault: false });
+      CC.hotkey('ArrowRight', function (e) { move(e, 1); }, 'Следующий день', { group: 'Расписание', preventDefault: false });
     }
   }
 

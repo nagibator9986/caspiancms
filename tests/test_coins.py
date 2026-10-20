@@ -1,8 +1,10 @@
 # tests/test_coins.py — Caspian Coin (магазин, заказы, кампании, журнал), приёмная и новости абитуриентов (COINS).
 #
 # Контракт с Cloud Functions (SPEC §2.5–2.7, D8): CMS меняет у заказа только статус reserved → issued/cancelled
-# (+ issuedAt/issuedBy | cancelledAt/cancelledBy, note, updatedAt) и НЕ пишет в coin_wallets, не создаёт
-# purchase/refund-операции; ручная операция — ровно {uid, amount, type:'manual', reason, createdBy, createdAt};
+# (+ issuedAt/issuedBy | cancelledAt/cancelledBy, updatedAt), зависший заказ (без status > 15 мин) — только
+# закрывает (cancelled); заметки админов — в coin_order_notes/{orderId}, не в заказе (его читает абитуриент);
+# НЕ пишет в coin_wallets, не создаёт purchase/refund-операции; ручная операция — ровно {uid, amount, type:'manual',
+# reason, createdBy, createdAt}; коды кампаний и QR-источников не совпадают;
 # кампания: id = код ^[A-Z0-9]{4,16}$, claimsCount = 0 при создании и не меняется при правке; приёмная — merge
 # в app_config/admissions, specialties = названия каталога; новости абитуриентов — схема news + createdAt.
 
@@ -326,7 +328,8 @@ class OrdersTest(CmsTestCase):
         self.assertEqual(o['status'], 'issued')
         self.assertEqual(o['issuedBy'], ADMIN['uid'])
         self.assertIsNotNone(o['issuedAt'])
-        self.assertEqual(o['note'], 'Выдано на стенде')
+        self.assertNotIn('note', o)                             # заметка — не в заказе (его читает абитуриент)
+        self.assertEqual(self.doc('coin_order_notes', 'ord_001')['note'], 'Выдано на стенде')
         self.assertEqual(o['price'], 800)                       # снимок не тронут
         self.assertEqual(self.wallets(), wallets)               # кошельки пишет только функция
         self.assertEqual(len(self.docs('coin_transactions')), txs)
@@ -366,15 +369,57 @@ class OrdersTest(CmsTestCase):
         self.assertEqual(self.doc('coin_orders', 'ord_007')['status'], 'rejected')
 
     def test_note_set_and_clear(self):
+        # заметка «видна только админам»: coin_order_notes/{orderId} (клиентам закрыта правилами по умолчанию),
+        # а не coin_orders/{id}.note — заказ абитуриент читает целиком
         self.post('/coins/orders/ord_005/note', {'note': '  размер уточнить  '})
-        self.assertEqual(self.doc('coin_orders', 'ord_005')['note'], 'размер уточнить')
+        self.assertNotIn('note', self.doc('coin_orders', 'ord_005'))
+        n = self.doc('coin_order_notes', 'ord_005')
+        self.assertIsNotNone(n)
+        self.assertEqual((n['note'], n['uid'], n['updatedBy']), ('размер уточнить', 'ap_005', ADMIN['uid']))
+        self.assertIsNotNone(n['updatedAt'])
+        self.assertIn('размер уточнить', self.get_ok('/coins/orders?status=issued'))   # в CMS видна как раньше
         self.post('/coins/orders/ord_005/note', {'note': ''})
-        self.assertNotIn('note', self.doc('coin_orders', 'ord_005'))
+        self.assertIsNone(self.doc('coin_order_notes', 'ord_005'))
         self.post('/coins/orders/ord_005/note', {'note': 'x' * 501})
-        self.assertNotIn('note', self.doc('coin_orders', 'ord_005'))
+        self.assertIsNone(self.doc('coin_order_notes', 'ord_005'))
+        self.post('/coins/orders/ghost_order/note', {'note': 'заказа нет'})
+        self.assertIsNone(self.doc('coin_order_notes', 'ghost_order'))
+
+    def test_legacy_order_notes_are_moved(self):
+        # старые заметки лежат в самом заказе (документ доступен абитуриенту): показываем, переносим при новой заметке,
+        # при выдаче/отмене и кнопкой «Перенести»
+        from cms.core import db
+        for oid, note in (('ord_002', 'старая заметка'), ('ord_003', 'легаси'), ('ord_004', 'выдать лично')):
+            db.collection('coin_orders').document(oid).update({'note': note})
+        html = self.get_ok('/coins/orders?status=all')
+        self.assertIn('старая заметка', html)
+        self.assertIn('доступна абитуриенту', html)
+        self.post('/coins/orders/ord_002/note', {'note': 'новая'})
+        self.assertNotIn('note', self.doc('coin_orders', 'ord_002'))          # DELETE_FIELD
+        self.assertEqual(self.doc('coin_order_notes', 'ord_002')['note'], 'новая')
+        self.post('/coins/orders/ord_003/issue')                               # без новой заметки — переносится
+        self.assertNotIn('note', self.doc('coin_orders', 'ord_003'))
+        self.assertEqual(self.doc('coin_order_notes', 'ord_003')['note'], 'легаси')
+        r = self.post('/coins/orders/notes/migrate', {'next': '/coins/orders?status=all'})
+        self.assertRedirectsTo(r, '/coins/orders?status=all')
+        self.assertNotIn('note', self.doc('coin_orders', 'ord_004'))
+        self.assertEqual(self.doc('coin_order_notes', 'ord_004')['note'], 'выдать лично')
+        self.assertEqual(self.doc('coin_order_notes', 'ord_004')['uid'], 'ap_002')
+        self.assertEqual(self.doc('coin_order_notes', 'ord_002')['note'], 'новая')   # новую не перезаписали
+        html = self.get_ok('/coins/orders?status=all')
+        self.assertNotIn('доступна абитуриенту', html)
+        self.assertIn('выдать лично', html)
+
+    def test_account_delete_removes_order_notes(self):
+        self.post('/coins/orders/ord_005/note', {'note': 'Позвонить маме'})
+        self.assertIsNotNone(self.doc('coin_order_notes', 'ord_005'))
+        self.post('/applicants/ap_005/delete', {'confirm': 'удалить'})
+        self.assertIsNone(self.doc('users', 'ap_005'))
+        self.assertIsNone(self.doc('coin_order_notes', 'ord_005'))
 
     def test_bulk_issue_skips_processed(self):
-        r = self.post('/coins/orders/bulk', {'action': 'issue', 'ids': ['ord_001', 'ord_003', 'ord_004']})
+        r = self.post('/coins/orders/bulk', {'action': 'issue', 'ids': ['ord_001', 'ord_003', 'ord_004'],
+                                             'note': 'Ярмарка'})
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.doc('coin_orders', 'ord_001')['status'], 'issued')
         self.assertEqual(self.doc('coin_orders', 'ord_003')['status'], 'issued')
@@ -382,6 +427,60 @@ class OrdersTest(CmsTestCase):
         msg = ' '.join(t for _, t in self.flashes())
         self.assertIn('Выдано заказов: 2', msg)
         self.assertIn('пропущено 1', msg)
+        for oid in ('ord_001', 'ord_003'):
+            self.assertNotIn('note', self.doc('coin_orders', oid))
+            self.assertEqual(self.doc('coin_order_notes', oid)['note'], 'Ярмарка')
+        self.assertIsNone(self.doc('coin_order_notes', 'ord_004'))             # пропущенный не тронут
+
+    # ---------- зависшие заказы: без status дольше 15 минут (функция не обработала) ----------
+    def _add_order(self, oid, minutes_ago):
+        from datetime import timedelta
+        from cms.core import db
+        db.collection('coin_orders').document(oid).set({
+            'uid': 'ap_008', 'productId': 'prod_mug',
+            'createdAt': datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)})
+
+    def test_stuck_orders_filter_badge_and_cancel(self):
+        self._add_order('ord_stuck', 20)
+        self._add_order('ord_fresh', 3)
+        html = self.get_ok('/coins/orders')
+        self.assertRegex(html, r'Зависли\s*<span class="cc-chip__count">1</span>')
+        html = self.get_ok('/coins/orders?status=stuck')
+        self.assertIn('o-ord_stuck', html)
+        self.assertNotIn('o-ord_fresh', html)
+        self.assertIn('action="/coins/orders/ord_stuck/cancel"', html)
+        self.assertIn('коины не списывались', html)                # честный текст: возвращать нечего
+        pending = self.get_ok('/coins/orders?status=pending')
+        self.assertIn('o-ord_fresh', pending)
+        self.assertNotIn('o-ord_stuck', pending)
+        wallets, txs = self.wallets(), len(self.docs('coin_transactions'))
+        r = self.post('/coins/orders/ord_stuck/cancel', {'next': '/coins/orders?status=stuck'})
+        self.assertRedirectsTo(r, '/coins/orders?status=stuck')
+        o = self.doc('coin_orders', 'ord_stuck')
+        self.assertEqual((o['status'], o['cancelledBy']), ('cancelled', ADMIN['uid']))
+        self.assertIsNotNone(o['cancelledAt'])
+        self.assertIsNotNone(o['updatedAt'])
+        self.assertEqual(set(o), {'uid', 'productId', 'createdAt', 'status', 'cancelledAt', 'cancelledBy',
+                                  'updatedAt'})
+        self.assertEqual(self.wallets(), wallets)                  # CMS не пишет кошельки и операции
+        self.assertEqual(len(self.docs('coin_transactions')), txs)
+        self.assertIn('не списывались', self.flashes()[-1][1])
+        self.assertTrue(any(e.get('entityId') == 'ord_stuck' for e in self.audit_entries('cancel')))
+        # моложе 15 минут функция ещё может обработать заказ — не трогаем
+        self.post('/coins/orders/ord_fresh/cancel')
+        self.assertNotIn('status', self.doc('coin_orders', 'ord_fresh'))
+        self.assertIn('обрабатывается', self.flashes()[-1][1])
+
+    def test_stuck_order_with_charge_is_not_closed(self):
+        # списание order_<id> уже есть, а статуса нет: отмена без статуса reserved коины не вернёт — отказ
+        from cms.core import db
+        self._add_order('ord_half', 30)
+        db.collection('coin_transactions').document('order_ord_half').set({
+            'uid': 'ap_008', 'amount': -300, 'type': 'purchase', 'orderId': 'ord_half', 'applied': True,
+            'createdAt': datetime.now(timezone.utc)})
+        self.post('/coins/orders/ord_half/cancel')
+        self.assertNotIn('status', self.doc('coin_orders', 'ord_half'))
+        self.assertIn('уже списаны', self.flashes()[-1][1])
 
     def test_sidebar_badge_follows_issue(self):
         self.assertRegex(self.get_ok('/coins/shop'), r'Заказы</span>\s*<span class="cc-nav-badge[^"]*">3<')
@@ -390,7 +489,8 @@ class OrdersTest(CmsTestCase):
 
     def test_csv_export_is_safe(self):
         from cms.core import db
-        db.collection('coin_orders').document('ord_002').update({'note': '=HYPERLINK("http://x")'})
+        db.collection('coin_orders').document('ord_002').update({'note': '=HYPERLINK("http://x")'})   # старое место
+        self.post('/coins/orders/ord_003/note', {'note': '@SUM(1)'})
         r = self.client.get('/coins/orders.csv?status=all')
         self.assertEqual(r.status_code, 200)
         rows = _csv_rows(r)
@@ -398,6 +498,7 @@ class OrdersTest(CmsTestCase):
         self.assertEqual(len(rows) - 1, 7)
         note = [row for row in rows if row[0] == 'ord_002'][0][12]
         self.assertTrue(note.startswith("'="), note)
+        self.assertEqual([row for row in rows if row[0] == 'ord_003'][0][12], "'@SUM(1)")
 
 
 # ==================== КАМПАНИИ ====================
@@ -456,7 +557,30 @@ class CampaignsTest(CmsTestCase):
                 self.assertIn('Проверьте поля формы', r.get_data(as_text=True))
         self.assertIsNone(self.doc('coin_campaigns', 'QUIZ27'))
 
-    def test_edit_never_touches_claims_count(self):
+    def test_create_rejects_qr_source_code(self):
+        # код кампании = код QR-источника → правила отклонят регистрацию старой версии приложения с этим кодом
+        r = self.post('/coins/campaigns/new', self.form(code='stand-1'))      # → STAND1
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('QR-источник', r.get_data(as_text=True))
+        self.assertIsNone(self.doc('coin_campaigns', 'STAND1'))
+        self.assertEqual(self.post('/coins/campaigns/new', self.form(code='STAND2')).status_code, 302)
+        self.assertIsNotNone(self.doc('coin_campaigns', 'STAND2'))
+
+    def test_code_suggestions_avoid_qr_sources(self):
+        # сгенерированный/предложенный код не совпадает ни с кампанией, ни с QR-источником
+        from cms.routes_coins import taken_codes
+        self.assertTrue({'DOD2026', 'SPRING25', 'STAND1', 'OPENDAY'} <= taken_codes())
+
+    def test_existing_code_clash_is_flagged(self):
+        # совпадения, появившиеся до проверки, видны на обоих списках
+        from cms.core import db
+        db.collection('applicant_sources').document('QUIZ2026').set({
+            'title': 'Квиз-стенд', 'channel': 'event', 'active': True, 'welcomeCoins': 0, 'scans': 0,
+            'registrations': 0})
+        self.assertIn('QUIZ2026 есть и у кампании, и у QR-источника', self.get_ok('/coins/campaigns'))
+        self.assertIn('QUIZ2026 есть и у кампании, и у QR-источника', self.get_ok('/applicants/sources'))
+        self.assertNotIn('есть и у кампании', self.get_ok('/coins/journal'))
+
         r = self.post('/coins/campaigns/DOD2026/edit', self.form(code='HACK', title='ДОД — обновлено', amount='120',
                                                                   claimsCount='0'))
         self.assertRedirectsTo(r, '/coins/campaigns/DOD2026')
@@ -594,6 +718,21 @@ class JournalTest(CmsTestCase):
                 self.assertIn('error', [c for c, _ in self.flashes()])
         self.assertEqual(self.manual_docs(), [])
 
+    def test_stats_refunds_are_not_issued(self):
+        # возврат за отменённый заказ (type 'refund', amount > 0) — не начисление: отдельная строка
+        from cms.routes_coins import _journal_stats
+        txs = self.docs('coin_transactions')
+        issued = sum(t['amount'] for t in txs if t.get('amount', 0) > 0 and t.get('type') != 'refund')
+        refunds = sum(t['amount'] for t in txs if t.get('type') == 'refund')
+        self.assertEqual(refunds, 300)                          # в сиде: refund_ord_006
+        stats = _journal_stats()
+        self.assertEqual(stats['issued'], issued)
+        self.assertEqual(stats['refunds'], refunds)
+        purchases = -sum(t['amount'] for t in txs if t.get('type') == 'purchase')
+        self.assertEqual(stats['spent'], purchases - refunds)  # «потрачено» — за вычетом возвратов, как раньше
+        html = self.get_ok('/coins/journal')
+        self.assertIn('<b class="cc-num">300</b> возвращено', html)
+
     def test_csv_export(self):
         rows = _csv_rows(self.client.get('/coins/journal.csv?type=manual'))
         self.assertEqual(rows[0][:3], ['Дата', 'Тип', 'Коины'])
@@ -653,6 +792,28 @@ class AdmissionsTest(CmsTestCase):
         self.assertEqual(d['deadline'].astimezone(timezone.utc).replace(tzinfo=None), datetime(2027, 6, 30, 13, 0))
         self.assertEqual(d['updatedBy'], ADMIN['uid'])
         self.assertTrue(self.audit_entries('update'))
+
+    def test_phones_normalized_like_app(self):
+        # телефон и WhatsApp — как ApplicantValidators.normalizePhone (+7XXXXXXXXXX): иначе ссылка wa.me битая
+        self.post('/admissions', self.base_form(phone='8 (7292) 30-30-30', whatsapp='8 701 555 01 99'))
+        d = self.doc('app_config', 'admissions')
+        self.assertEqual((d['phone'], d['whatsapp']), ('+77292303030', '+77015550199'))
+        self.assertIn('value="+7 701 555 01 99"', self.get_ok('/admissions'))   # в форме — в удобном виде
+        self.post('/admissions', self.base_form(whatsapp=''))
+        self.assertEqual(self.doc('app_config', 'admissions')['whatsapp'], '')
+        for field in ('phone', 'whatsapp'):
+            for bad in ('12345', 'звоните', '+1 202 555 0100'):
+                with self.subTest(field=field, bad=bad):
+                    r = self.post('/admissions', self.base_form(**{field: bad}))
+                    self.assertEqual(r.status_code, 200)
+                    self.assertIn('Введите номер в формате +7 7XX XXX XX XX', r.get_data(as_text=True))
+        d = self.doc('app_config', 'admissions')
+        self.assertEqual((d['phone'], d['whatsapp']), ('+77292303030', ''))
+
+    def test_app_data_issues_flags_bad_phone(self):
+        from cms.routes_admissions import app_data_issues
+        self.assertEqual(len(app_data_issues({'whatsapp': 'звоните'})), 1)
+        self.assertEqual(app_data_issues({'whatsapp': '+7 701 555 01 99', 'phone': '8 7292 30 30 30'}), [])
 
     def test_clear_deadline_removes_field(self):
         self.post('/admissions', self.base_form(deadline=''))
@@ -840,3 +1001,58 @@ class PureHelpersTest(unittest.TestCase):
         self.assertEqual(csv_cell(-20), -20)
         self.assertEqual(csv_cell('обычный'), 'обычный')
         self.assertTrue(re.match(r'^\d{2}\.\d{2}\.\d{4}', csv_cell(datetime(2026, 1, 2, tzinfo=timezone.utc))))
+
+
+class ProductPhotoOrderSnapshotTest(CmsTestCase):
+    """C2: фото, на которое ссылается снимок imageUrl в заказе, при замене обложки не удаляется из Storage."""
+    fresh_seed_each_test = True
+
+    def test_replaced_cover_kept_when_order_references_it(self):
+        from cms.core import db
+        before = self.doc('coin_products', 'prod_hoodie')
+        cover, second = before['images'][0], before['images'][1]
+        db.collection('coin_orders').document('ord_001').update({'imageUrl': cover['url']})   # как orderProductSnapshot
+        state = [{'kind': 'new', 'idx': 0}]                 # убрали обе старые, загрузили новую
+        form = {'title': 'Худи', 'titleKk': '', 'description': '', 'descriptionKk': '', 'price': '800', 'stock': '12',
+                'stock_orig': '12', 'limitPerUser': '1', 'variants': 'S\nM', 'active': '1',
+                'images__state': json.dumps(state), 'images': _img('new.png')}
+        r = self.post('/coins/shop/prod_hoodie/edit', form, content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 302)
+        after = self.doc('coin_products', 'prod_hoodie')
+        self.assertEqual(len(after['images']), 1)
+        self.assertTrue(_blob_exists(cover['path']), 'удалено фото, которое показывают «Мои заказы»')
+        self.assertFalse(_blob_exists(second['path']))     # на него заказы не ссылаются — удалено
+
+
+class AmbiguousPhoneRecipientTest(CmsTestCase):
+    """C3: телефон в профиле не уникален — неоднозначный номер не начисляет коины «первому найденному»."""
+    fresh_seed_each_test = True
+
+    def test_shared_phone_is_rejected(self):
+        from cms.core import cache, db
+        for uid in ('ap_012', 'ap_013'):
+            db.collection('users').document(uid).update({'phone': '+77019998877'})
+        cache.invalidate('coins:people')
+        before = {u: len(self.docs('coin_transactions', uid=u)) for u in ('ap_012', 'ap_013')}
+        r = self.post('/coins/journal/award', {'recipients': '8 701 999 88 77', 'amount': '25', 'reason': 'Квиз'})
+        self.assertEqual(r.status_code, 302)
+        after = {u: len(self.docs('coin_transactions', uid=u)) for u in ('ap_012', 'ap_013')}
+        self.assertEqual(before, after, 'коины ушли одному из абитуриентов с общим номером')
+        text = ' '.join(t for _c, t in self.flashes())
+        self.assertIn('нескольких абитуриентов', text)
+
+    def test_unique_phone_still_resolves(self):
+        from cms.core import cache, db
+        db.collection('users').document('ap_012').update({'phone': '+77019998866'})
+        cache.invalidate('coins:people')
+        self.post('/coins/journal/award', {'recipients': '8 701 999 88 66', 'amount': '25', 'reason': 'Квиз'})
+        self.assertTrue([t for t in self.docs('coin_transactions', uid='ap_012') if t.get('amount') == 25])
+
+    def test_resolve_recipient_raises_on_ambiguous(self):
+        from cms.routes_coins import AmbiguousRecipient, resolve_recipient
+        directory = {'uidAidar': {'login': 'aidar.k', 'phone': '+77011234567'},
+                     'uidAigerim': {'login': 'aigerim.k', 'phone': '+77011234567'}}
+        with self.assertRaises(AmbiguousRecipient) as ctx:
+            resolve_recipient('8 701 123 45 67', directory)
+        self.assertEqual(sorted(ctx.exception.uids), ['uidAidar', 'uidAigerim'])
+        self.assertEqual(resolve_recipient('aigerim.k', directory), 'uidAigerim')   # логин — однозначно

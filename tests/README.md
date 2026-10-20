@@ -14,10 +14,13 @@ tests/run_tests.sh 18400 tests.test_applicants        # один модуль
 tests/run_tests.sh 18400 tests.test_smoke tests.test_applicants
 ```
 
-* Поднимает Firestore + Auth + Storage эмуляторы (`firebase emulators:exec`, проект `demo-caspian`)
+* Поднимает Firestore + Auth + Storage эмуляторы (`firebase emulators:exec`, проект `demo-caspian-<PORT_BASE>`)
   на портах `PORT_BASE..PORT_BASE+5` (hub, logging, firestore, firestore-ws, auth, storage; Flask для
   скриншотов — `PORT_BASE+6`). UI эмулятора выключен. Временный `firebase.json` и правила
   «разрешить всё» создаются во временном каталоге и удаляются.
+* Параллельные прогоны на разных `PORT_BASE` не мешают друг другу: у каждого свой demo-проект (реестр хаба CLI
+  ведётся по id проекта) и свой `TMPDIR` для CLI (эмулятор Storage держит файлы в `$TMPDIR/firebase/storage` и
+  чистит их при остановке — раньше соседний прогон падал с «An unexpected error has occurred»).
 * Прод-ключ **не используется**: при `FIRESTORE_EMULATOR_HOST` `cms.core` работает с анонимными кредами.
   Без эмулятора `tests/base.py` пропускает интеграционные тесты, а `tests/seed.py` отказывается работать.
 * Пути к интерпретатору/CLI: `CMS_PYTHON`, `FIREBASE_BIN`, `CMS_CHROMIUM` (или файл `tests/.env.local`,
@@ -27,6 +30,10 @@ tests/run_tests.sh 18400 tests.test_smoke tests.test_applicants
 * Порты агентов: FOUNDATION 18000, SCHEDULE 18100, CONTENT 18200, PEOPLE 18300, APPLICANTS 18400,
   COINS 18500, CONFLICTS 18600, финальная проверка 18700.
 * Чистые модули тестируются и без эмулятора: `python -m unittest tests.test_applicant_login tests.test_schedule_model`.
+* `tests/test_ui_foundation.py` — общие компоненты в браузере (Playwright + Chromium, `CMS_CHROMIUM`): стенд из
+  фрагмента разметки и настоящих `app.css`/`app.js` (без Flask и эмуляторов, сеть не нужна) — «·» в строках-карточках,
+  панель массовых действий, `CC.hotkey`, `data-dirty-guard`, ширина пилюль фильтров, `.cc-row-quick`, «‹ назад» на
+  телефоне. Без Playwright (Python 3.10, прод) — пропускается. Новое поведение `app.css`/`app.js` — тест сюда.
 
 ### Сид (`tests/seed.py`)
 
@@ -109,7 +116,8 @@ from .core import (Routes, admin_required, csrf_exempt, db, bucket, fb_auth, cac
                    images_from_uploader, image_fields, images_of, delete_storage_paths, UploadError,
                    now_almaty, today_almaty, to_almaty, fmt_dt, parse_local_datetime, local_input_value,
                    send_push, sanitize_topic, csv_response, RateLimiter, client_ip, safe_next_url, redirect_back,
-                   json_safe, safe_url, flash_error, log, SERVER_TIMESTAMP, Increment, ArrayUnion, DELETE_FIELD)
+                   json_safe, safe_url, flash_error, log, SERVER_TIMESTAMP, Increment, ArrayUnion, DELETE_FIELD,
+                   csv_cell, send_push_many, topic_variants, fs_opts, note_firestore_error, firestore_available)
 ```
 
 **Маршруты.** В модуле `routes = Routes()`, декоратор `@routes.route(rule, methods=[...])` (+ `.get`, `.post`,
@@ -119,14 +127,15 @@ from .core import (Routes, admin_required, csrf_exempt, db, bucket, fb_auth, cac
 
 | функция | что делает |
 |---|---|
-| `admin_required(f)` | нет сессии → `/login?next=…` (для `/api/*` и JSON — 401); роль перечитывается раз в 10 мин; разжалованный → 403 + выход; `g.admin` |
+| `admin_required(f)` | нет сессии → `/login?next=…` (для `/api/*` и JSON — 401); сессия живёт 12 ч от входа (`login_at`, не продлевается); раз в 10 мин перепроверяются роль, Firebase Auth (`disabled`, «Завершить сеансы») и выход этой сессии (`cms_sessions/{uid}.revoked`); не прошёл → 403 + выход; `g.admin` |
 | `current_admin()` | `{'uid','email','name'}` |
 | CSRF | все POST/PUT/PATCH/DELETE проверяются автоматически: поле `csrf_token` или заголовок `X-CSRF-Token`. В шаблоне `{{ csrf_token() }}` / `{{ ui.csrf_field() }}`; `app.js` сам добавляет поле в `form[method=post]` и заголовок в `fetch`/XHR. `@csrf_exempt` — только для вебхуков |
 | `db`, `bucket`, `fb_auth` | Firestore client, Storage bucket, `firebase_admin.auth` (ленивая инициализация; эмулятор/прод — по env) |
 | `where(q, field, op, value)` | `q.where(filter=FieldFilter(...))` без предупреждений |
-| `cache` | `get(key, default)`, `set(key, value, ttl=None)`, `get_or_set(key, factory, ttl=None)` (кэширует и `None`/пустое), `invalidate(key=None)` (ключ и `key:*`), `invalidate_prefix('ns:')`. TTL по умолчанию 300 с. Межпроцессная инвалидация по пространству имён (часть ключа до `:`) — другие воркеры PythonAnywhere сбрасывают в течение 1 с. Ключи модулей называйте `<модуль>:<что>` (`applicants:snapshot`) |
+| `cache` | `get(key, default)`, `set(key, value, ttl=None)`, `get_or_set(key, factory, ttl=None)` (кэширует и `None`/пустое; сброс во время расчёта делает значение устаревшим), `invalidate(key=None)` (ровно ключ и `key:*` — соседние ключи пространства живут), `invalidate_prefix('ns:')` (всё пространство), `replace(key, update)` (точечно обновить закэшированное без пересчёта: свой процесс получает новое значение, `key:*` сбрасываются, другие воркеры сбрасывают свою копию). TTL по умолчанию 300 с. Межпроцессная инвалидация — тем же префиксом, другие воркеры PythonAnywhere сбрасывают в течение 1 с. Ключи модулей называйте `<модуль>:<что>` (`applicants:snapshot`); производные данные — `<ключ>:<что>` (`applicants:snapshot:analytics:…`), чтобы сбрасывались вместе с ним |
 | `audit(action, entity, entity_id=None, details=None)` | запись в `cms_audit` (`at, by, byUid, action, entity, entityId, details`); никогда не бросает |
 | `count(query, default=None)` / `aggregate_sum(query, field, default=None)` | aggregation count()/sum(); ошибка → лог + default |
+| `fs_opts(long=False)` | kwargs таймаутов для чтений Firestore: `.get(**fs_opts())`, `.stream(**fs_opts(True))`, `db.get_all(refs, **fs_opts())` — повторы только на временных ошибках и не дольше 15 с (вместо 300 с по умолчанию). `note_firestore_error(e)` — сбой связи включает предохранитель: 30 с все страницы сразу отдают 503 (`firestore_available()`), бейджи не пересчитываются |
 | `paginate(query, page_size=25, cursor=None)` | курсорная пагинация (нужен `order_by`), `Page`: `.items` (снапшоты), `.dicts()`, `.next_cursor`, `.has_next`, `.has_prev`, `.number` (из `?p=`). В шаблоне `{{ ui.pagination(page) }}` (ссылки `?cursor=…&p=…`) |
 | `paginate_list(items, page, per_page=25)` | нумерованная пагинация списка из кэша → `ListPage` (`.items .page .pages .total`); `?page=` |
 | `get_docs(collection, ids, field_paths=None)` | `db.get_all` пачками → `{id: dict}` (вместо N+1) |
@@ -142,9 +151,11 @@ from .core import (Routes, admin_required, csrf_exempt, db, bucket, fb_auth, cac
 | время | `ALMATY` (UTC+5), `now_almaty()`, `today_almaty()`, `to_datetime(v)`, `to_almaty(v)`, `fmt_dt(v, fmt, default)`, `parse_local_datetime('2026-10-20T09:00')` (ввод по Алматы → UTC), `local_input_value(v)`, `humanize_ago(v)` |
 | форматирование | `plural(n, 'голос', 'голоса', 'голосов')`, `fmt_num`, `fmt_pct(part, total)`, `fmt_phone`, `safe_url` (только http/https/mailto/tel/относительные), `json_safe` |
 | `send_push(title, body, topic=None, token=None, data=None)` | FCM; топик через `sanitize_topic` (порт `functions/index.js`). В эмуляторе пишет в `core.sent_pushes` |
-| `csv_response(filename, header, rows, delimiter=';')` | CSV с BOM для Excel |
-| `RateLimiter(limit, window)` | `.hit(key)` → False при превышении, `.blocked(key)`, `.reset(key)`; `client_ip()` |
-| `safe_next_url(url)`, `redirect_back(default_endpoint)` | защита от open redirect |
+| `send_push_many([{title, body, topic\|token, data}])` | много пушей одним махом (`messaging.send_each` по 500) — участники событий, сводки расписания; → сколько доставлено |
+| `topic_variants(name)` | топики группы: как функции и как подписывается приложение (расходятся при «ъ/ь» в названии) — групповой пуш шлите во все |
+| `csv_response(filename, header, rows, delimiter=';')` | CSV с BOM для Excel; строки с опасным началом (`= + - @` таб, CR) экранируются апострофом (`csv_cell` — то же для одной ячейки + bool → да/нет) |
+| `RateLimiter(limit, window)` | `.hit(key)` → False при превышении, `.blocked(key)`, `.reset(key)`; `client_ip()` — `X-Real-IP` (ставит прокси PythonAnywhere), иначе адрес соединения; `X-Forwarded-For` не используется |
+| `safe_next_url(url)`, `redirect_back(default_endpoint)` | защита от open redirect: только путь этого сайта, без управляющих символов и обратного слеша |
 | `flash_error(message, exc)` | flash('…', 'error') + исключение в лог (пользователю `str(e)` не показываем) |
 | `stub_page(...)` | временная заглушка «раздел в разработке» (удалите при реализации) |
 
@@ -243,7 +254,7 @@ label)` / `CC.peek(url)`. Запрос идёт с заголовком `X-CC-Pa
 
 | макрос | сигнатура / назначение |
 |---|---|
-| `page_header` | `(title, subtitle=None, actions=None, icon=None, meta=None, back=None)` + caller. Кнопки `actions` по умолчанию **light**; основную (одну!) помечайте `'variant': 'primary'` (и `'attrs': {'data-cc-hotkey': 'n'}`). `{'menu': [...]}` в `actions` → ⋯. `icon` не рисуется (совместимость). `meta` — разметка рядом с h1 (`ui.week_now(...)`, бейдж). `back` — `{'href', 'label'}` → «‹ Новости» над h1 (на телефоне скрывается, если в топбаре та же ссылка «‹ Новости» — её адрес с фильтрами переходит в топбар). Подзаголовок — одна строка, на телефоне скрыт; на телефоне у второстепенных кнопок видна только иконка |
+| `page_header` | `(title, subtitle=None, actions=None, icon=None, meta=None, back=None)` + caller. Кнопки `actions` по умолчанию **light**; основную (одну!) помечайте `'variant': 'primary'` (и `'attrs': {'data-cc-hotkey': 'n'}`). `{'menu': [...]}` в `actions` → ⋯. `icon` не рисуется (совместимость). `meta` — разметка рядом с h1 (`ui.week_now(...)`, бейдж). `back` — `{'href', 'label'}` → «‹ Новости» над h1 (на телефоне скрывается, если в топбаре ссылка с той же подписью «‹ Новости» или тем же адресом — её адрес с фильтрами/`next=` переходит в топбар, остаётся одна). Подзаголовок — одна строка, на телефоне скрыт; на телефоне у второстепенных кнопок видна только иконка |
 | `header_menu` | `(items, label='Ещё действия')` — ⋯ для редких действий. item: `{label, href, icon, attrs}` \| `{label, action, fields, confirm, ok, danger, icon}` (POST с CSRF) \| `{divider: True}` \| `{header: '…'}`. Опасные — последними, после разделителя |
 | `summary_line` | `(items)` — `[{value, label, href, tone, title}]` или `[(value, label)]` → «5 новостей · 4 за 30 дней». Вместо рядов KPI на всех страницах, кроме Обзора, Аналитики приёма и Накладок |
 | `stat_card` / `stat_strip` | `(label, value, icon=None, trend=None, href=None, meta=None, tone=None)` / `(items)` — KPI; иконка нейтральная, `tone` (`danger`/`warning`/`success`/`info`) — только состояние: цвет иконки и полоса слева. На телефоне ряд прокручивается |
@@ -413,15 +424,18 @@ delete_storage_paths(res.removed_paths)
 `.cc-details`, `.cc-avatar(--sm|--lg)`, `.cc-empty`, `.cc-skeleton`, `.cc-skel`, `.cc-kv`, `.cc-timeline`, `.cc-bar(--brand|success|info|warning|danger)`,
 `.cc-uploader`, `.cc-kbd`, `.cc-link-quiet`, `.cc-public__*`, `.cc-error`, утилиты `.cc-muted .cc-subtle .cc-num .cc-truncate .cc-nowrap .cc-no-print .min-w-0`.
 
-Фильтры: `.cc-filters` (старая панель), `.cc-filters--inline`, `.cc-filters__search`, `.cc-fsel(.is-active)` (пилюля),
-`.cc-fswitch`, `.cc-filters__toggle`, `.cc-filters__sheet`, `.cc-filters__reset`, `.cc-filters__submit` (скрыта при JS),
+Фильтры: `.cc-filters` (старая панель), `.cc-filters--inline`, `.cc-filters__search`, `.cc-fsel(.is-active)` (пилюля
+по ширине выбранного значения: `field-sizing: content`, в браузерах без него ширину ставит `app.js`), `.cc-fswitch`, `.cc-filters__toggle`, `.cc-filters__sheet`, `.cc-filters__reset`, `.cc-filters__submit` (скрыта при JS),
 `.cc-filter-tags` (чипы активных фильтров на телефоне — строит `app.js`).
 
 Таблицы: `.cc-table-wrap(--sticky)`, `.cc-table(--compact|--stack)`, `.cc-cell-main`, `.cc-cell-sub`, `.cc-cell-primary`,
-`.cc-cell-meta`, `td[data-label]`, `.cc-col-optional` (скрыта в стеке), `.cc-col-xl|lg|md` (скрыты, если **таблица** уже
+`.cc-cell-meta` (в карточке — строка «A · B»: « · » только между видимыми мета-ячейками, скрытые и пустые между ними
+пропускаются), `.cc-cell-empty` (пустая ячейка — «—» на компьютере, в карточке скрыта; ячейку из одних пробелов и `td:empty`
+так же обрабатывает `app.js`/CSS), `td[data-label]`, `.cc-col-optional` (скрыта в стеке), `.cc-col-xl|lg|md` (скрыты, если **таблица** уже
 1100/900/700 px — считает `app.js`; в стеке `.cc-table--stack` на телефоне они **не** скрываются — колонку, которая
 дублирует данные карточки или пуста, помечайте ещё и `.cc-col-optional`), `.cc-num-col`, `.cc-select`, `.cc-sticky-col`, `.cc-row-link`, `.cc-row-menu`,
-`.cc-row-quick`, `.cc-actions` (никогда не скрывать), `tr.is-selected`, `tr[data-href]`, `.cc-truncate-cell`, `.cc-table-empty`.
+`.cc-row-quick` (на компьютере видна при наведении/фокусе на ближайшую «строку»: `tr`, `li`, `article` или `[data-cc-row]`),
+`.cc-actions` (никогда не скрывать), `tr.is-selected`, `tr[data-href]`, `.cc-truncate-cell`, `.cc-table-empty`.
 
 Действия и формы: `.cc-bulkbar(.is-visible)`, `.cc-savebar(.is-dirty)`, `.cc-form-layout` + `.cc-form-aside`, `.cc-form-errors`,
 `.cc-peek`, `.cc-nav-sep`, `.cc-nav-badge--danger|brand|muted`. Модульные стили — `static/css/<модуль>.css`
@@ -440,8 +454,10 @@ document.addEventListener('cc:content-loaded', function (e) { initMyWidgets(e.de
 CC.onInit(function (root) { … });             // инициализатор для документа и для каждого вставленного фрагмента
 CC.progress.start(); CC.progress.done();
 CC.hotkey('BracketLeft', prevGroup, 'Предыдущая группа', {group: 'Расписание'});   // e.code, работает в RU-раскладке; видно в «?»
+CC.hotkey('ArrowLeft', function (e) { if (prevDay()) e.preventDefault(); }, 'Предыдущий день', {preventDefault: false});
+                                              // не отменять действие клавиши (стрелки прокручивают) — обработчик решает сам
 CC.view.remember('schedule_teachers', 'cards');   // cookie cc_view_<key>
-CC.validateForm(form) → bool;  CC.markClean(form);  CC.clearSelection('newsBulk');  CC.selection('newsBulk') → ['id1', …]
+CC.validateForm(form) → bool;  CC.markClean(form);  CC.markDirty(form);  CC.clearSelection('newsBulk');  CC.selection('newsBulk') → ['id1', …]
 CC.filterItems(targetEl, 'запрос') → число видимых;  CC.plural(3, ['новость', 'новости', 'новостей'])
 CC.chartColors();  CC.chartNeutral();  CC.chartNeutralStrong();  CC.chartHighlight();  CC.applyChartDefaults();
 CC.store.get/set/del(key);  CC.session.get/set/del(key);   // localStorage / sessionStorage в try/catch
@@ -463,7 +479,7 @@ CC.openPalette();  CC.showHotkeys();  CC.setTheme('dark');  CC.cssVar('--cc-bran
 | `[data-cc-view][data-cc-view-value]` | клик ставит cookie вида (`ui.segmented(remember=…)`) |
 | `textarea[data-cc-ctrl-enter]` | Ctrl/⌘+Enter отправляет форму |
 | `form[novalidate]` (POST) | клиентская проверка перед отправкой (русские тексты под полями, фокус на первое; фото не теряются); `form[data-cc-novalidate]` — отключить |
-| `form[data-dirty-guard]` | предупреждение при уходе + индикатор в `savebar`; Ctrl+S сохраняет |
+| `form[data-dirty-guard]` | предупреждение при уходе + индикатор в `savebar`; Ctrl+S сохраняет. Флаг снимается отправкой, которую никто не отменил (и `form.submit()`). **JSON-сохранение:** в своём `submit` — `e.preventDefault()` (форма остаётся «несохранённой»), после успешного ответа — `CC.markClean(form)`, при ошибке ничего не делать; правка без `input`/`change` (перестановка, удаление строки) — `CC.markDirty(form)` |
 | `form[data-cc-draft="news:new"]` | черновик полей в браузере (раз в 2 с), плашка «Восстановить черновик» |
 | `.modal[data-cc-open-on-load]` | открыть модалку при загрузке (`ui.modal_form(open=True)`) |
 | прежние: `data-confirm` (+ `-title`, `-ok`, `-variant="primary"`), `data-table-search`, `data-sortable` + `th[data-sort]`, `tr[data-href]` (Ctrl/⌘/Shift/средняя кнопка — новая вкладка), `data-copy`, `data-autosubmit` (в шторке на телефоне — нет), `data-password-toggle`, `data-loading` | без изменений |

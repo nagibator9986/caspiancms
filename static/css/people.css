@@ -49,9 +49,7 @@
 .pp-unit { display: none; }
 @media (max-width: 575.98px) {
   .cc-table--stack .pp-unit { display: inline; font-weight: 400; }
-  /* пустые ячейки (td.pp-empty) в карточке не показываем; если пустая — первая мета, у следующей не нужен « · » */
-  .cc-table--stack > tbody > tr > td.pp-empty { display: none !important; }
-  .cc-table--stack > tbody > tr > td.cc-cell-primary + td.pp-empty + td.cc-cell-meta::before { content: none; }
+  /* пустые ячейки — td.cc-cell-empty (app.css): в карточке скрыты, « · » ставится только между видимыми */
   .pp-users .cc-cell-primary, .pp-teachers .cc-cell-primary { min-width: 0; max-width: none; }
   .cc-table--stack .pp-clip { max-width: none; white-space: normal; }
 }

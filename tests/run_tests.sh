@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Тесты CMS на эмуляторах Firebase (Firestore + Auth + Storage, проект demo-caspian).
+# Тесты CMS на эмуляторах Firebase (Firestore + Auth + Storage, проект demo-caspian-<PORT_BASE>).
 #
 #   tests/run_tests.sh [PORT_BASE] [модули unittest…]
 #   tests/run_tests.sh 18000                          # все тесты (discover)

@@ -706,3 +706,58 @@ if os.environ.get('FIRESTORE_EMULATOR_HOST'):
             r = self.post('/schedule/conflicts/fix', {'code': 'bad_time'})
             self.assertEqual(r.status_code, 302)
             self.assertIn('нельзя исправить', ' '.join(t for _c, t in self.flashes()))
+
+
+class WeekUnknownLikeAppTest(unittest.TestCase):
+    """DATA-7: неканонический week_type — критичная проблема качества («в приложении не видно»),
+    синоним можно исправить массово на канонический ключ."""
+
+    def test_aliases_and_empty_are_critical_and_fixable(self):
+        for raw, canon in (('Числитель', 'numerator'), ('з', 'denominator'), ('', 'always'), ('Always', 'always')):
+            with self.subTest(raw=raw):
+                l = L('x', week=raw)
+                q = [x for x in cf.analyze([l]).quality if x['code'] == 'week_unknown']
+                self.assertEqual(len(q), 1)
+                self.assertEqual(q[0]['severity'], 'critical')
+                self.assertTrue(q[0]['fixable'])
+                self.assertEqual(cf.fix_for('week_unknown', l), {'week_type': canon})
+        odd = L('x', week='odd')
+        self.assertIsNone(cf.fix_for('week_unknown', odd))      # во что исправить — непонятно
+        self.assertIn('week_unknown', cf.FIXABLE)
+
+
+class FixTeacherFieldTest(unittest.TestCase):
+    """DATA-4: «ФИО → uid» пишет поле teacher (приложение ищет where teacher == uid) и убирает teacherId."""
+
+    def test_teacher_id_only(self):
+        from cms.core import DELETE_FIELD
+        l = normalize_lesson('x', {'groupId': 'ПО 24-1', 'day_index': 2, 'time': '13.00-13.50', 'subject': 'Физика',
+                                   'room': '204', 'teacherId': 'Смирнова Елена Викторовна'}, INDEX)
+        self.assertEqual(cf.fix_for('teacher_by_name', l), {'teacher': 't_smirnova', 'teacherId': DELETE_FIELD})
+
+    def test_both_fields(self):
+        from cms.core import DELETE_FIELD
+        l = normalize_lesson('x', {'groupId': 'ПО 24-1', 'day_index': 2, 'time': '13.00-13.50', 'subject': 'Физика',
+                                   'room': '204', 'teacher': 'Смирнова Елена Викторовна', 'teacherId': 'old'}, INDEX)
+        self.assertEqual(cf.fix_for('teacher_by_name', l), {'teacher': 't_smirnova', 'teacherId': DELETE_FIELD})
+
+
+if os.environ.get('FIRESTORE_EMULATOR_HOST'):
+
+    class FixTeacherByNameEmuTest(CmsTestCase):
+        fresh_seed_each_test = True
+
+        def test_fix_writes_teacher_field_that_app_queries(self):
+            from cms.core import db
+            from cms.schedule_model import day_fields, invalidate_schedule_caches
+            doc = {'groupId': 'ПО 23-1', 'time': '17.55-18.45', 'subject': 'Математика',
+                   'teacherId': 'Иванова Анна Сергеевна', 'room': '101', 'week_type': 'always'}
+            doc.update(day_fields(5))
+            db.collection('schedules').document('rev_tid').set(doc)
+            invalidate_schedule_caches()
+            r = self.post('/schedule/conflicts/fix', {'code': 'teacher_by_name'})
+            self.assertEqual(r.status_code, 302)
+            after = self.doc('schedules', 'rev_tid')
+            # приложение: расписание преподавателя = where('teacher', '==', uid); функции берут teacherId раньше teacher
+            self.assertIn('rev_tid', [d['id'] for d in self.docs('schedules', teacher='t_ivanova')], after)
+            self.assertNotIn('teacherId', after)

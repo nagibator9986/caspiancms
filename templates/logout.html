@@ -1,0 +1,30 @@
+{% extends "public/base_public.html" %}
+{# GET /logout (старые ссылки): выход только кнопкой — POST с CSRF, чтобы чужой сайт не мог разлогинить админа. #}
+{% block title %}Выход · Caspian College{% endblock %}
+{% block body_class %}cc-auth-page{% endblock %}
+{% block body %}
+<div class="cc-auth">
+    <aside class="cc-auth__aside" aria-hidden="true">
+        <div class="cc-auth__brand">
+            <img src="{{ static_url('img/logo.png') }}" alt="" width="56" height="56">
+            <span><b>Caspian College</b><small>Админ-панель</small></span>
+        </div>
+        <div class="cc-auth__foot">© Caspian College</div>
+    </aside>
+    <main class="cc-auth__main" id="cc-main">
+        <div class="cc-auth__card">
+            <div class="cc-auth__mobile-brand">
+                <img src="{{ static_url('img/logo.png') }}" alt="" width="48" height="48">
+                <span><b>Caspian College</b><small>Админ-панель</small></span>
+            </div>
+            <h1>Выйти из админ-панели?</h1>
+            <p class="cc-lead">Несохранённые изменения на открытых вкладках пропадут.</p>
+            <form method="post" action="{{ url_for('logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-primary btn-lg w-100"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Выйти</span></button>
+            </form>
+            <a class="btn btn-ghost w-100 mt-2" href="{{ url_for('dashboard') }}">Остаться</a>
+        </div>
+    </main>
+</div>
+{% endblock %}

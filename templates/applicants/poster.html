@@ -57,7 +57,7 @@
     </div>
     <footer class="ap-poster__foot">
         <span class="ap-poster__url">{{ url|replace('https://', '')|replace('http://', '') }}</span>
-        {% if adm.phone %}<span><i class="bi bi-telephone" aria-hidden="true"></i> Приёмная: {{ adm.phone }}</span>{% endif %}
+        {% if adm.phone %}<span><i class="bi bi-telephone" aria-hidden="true"></i> Приёмная: {{ adm.phone|phone }}</span>{% endif %}
     </footer>
 </article>
 </div>
