@@ -18,6 +18,7 @@
 import io
 import re
 import zipfile
+from collections import OrderedDict
 from datetime import date, datetime
 from unittest import mock
 
@@ -826,3 +827,227 @@ class AcceptedConflictsHighlightTest(_ScheduleCase):
             html = self.get_ok('/schedule?group=%D0%9F%D0%9E+25-1&view=list')
         row = re.search(r'<tr class="([^"]*)" data-href="[^"]*/schedule/edit/cf_grp_sub_a', html)
         self.assertIn('is-conflict', row.group(1))
+
+
+# ==================== БЛАНКИ ДЛЯ ПЕЧАТИ ====================
+
+_MARK_RE = re.compile(r'class="sch-sheet__mark sch-sheet__mark--(numerator|denominator)" title=')
+_SHEET_RE = re.compile(r'<section class="sch-sheet sch-sheet--(\w+)" style="--sch-row: ([\d.]+)mm" data-rows="(\d+)"')
+
+
+def _sheets(html):
+    """[(класс плотности, высота строки мм, строк)] бланков страницы."""
+    return [(d, float(r), int(n)) for d, r, n in _SHEET_RE.findall(html)]
+
+
+def _week_of(doc):
+    w = doc.get('week_type') or 'always'
+    return w if w in ('always', 'numerator', 'denominator') else 'always'
+
+
+class SheetLayoutTest(CmsTestCase):
+    """Плотность бланка по числу строк (считает сервер): группа всегда на одном листе A4."""
+    login_as_admin = False
+
+    @staticmethod
+    def _by_day(counts):
+        return OrderedDict((d, [{}] * n) for d, n in enumerate(counts) if n)
+
+    def test_density_grows_with_rows(self):
+        from cms.routes_schedule import sheet_layout
+        cases = [((2, 1, 1, 1), 'roomy'), ((3, 3, 3, 3, 3), 'normal'), ((4, 4, 4, 4, 5), 'compact'),
+                 ((5, 5, 5, 5, 6), 'dense'), ((6, 6, 6, 6, 6, 4), 'tight'), ((8, 8, 8, 8, 8, 8), 'ultra')]
+        rows = []
+        for counts, density in cases:
+            with self.subTest(rows=sum(counts)):
+                lay = sheet_layout(self._by_day(counts))
+                self.assertEqual(lay['density'], density)
+                self.assertEqual(lay['rows'], sum(counts))
+                rows.append(float(lay['row_mm']))
+        self.assertEqual(rows, sorted(rows, reverse=True), 'чем больше пар, тем ниже строка')
+        self.assertLessEqual(rows[0], 19.0, 'мало пар — строки выше, но без растягивания на весь лист')
+
+    def test_rows_fit_one_sheet(self):
+        from cms.routes_schedule import PRINT_BODY_MM, PRINT_DENSITY, sheet_layout
+        natural = {name: nat for name, _lim, nat, _cap, _pt in PRINT_DENSITY}
+        for n in range(1, 61):
+            for kind in ('group', 'teacher'):
+                lay = sheet_layout(self._by_day([n]), kind)
+                if lay['density'] != 'ultra':
+                    self.assertLessEqual(n * natural[lay['density']], PRINT_BODY_MM[kind], (n, kind, lay))
+
+    def test_teacher_sheet_is_denser_than_group(self):
+        """У бланка преподавателя в шапке ещё ФИО — тот же объём уходит в более плотный класс раньше."""
+        from cms.routes_schedule import sheet_layout
+        by_day = self._by_day((5, 5, 5, 4, 4))
+        self.assertEqual(sheet_layout(by_day)['density'], 'compact')
+        self.assertEqual(sheet_layout(by_day, 'teacher')['density'], 'dense')
+
+    def test_short_day_name_only_when_needed(self):
+        from cms.routes_schedule import sheet_layout
+        lay = sheet_layout(self._by_day((6, 6, 6, 6, 6, 1)))   # суббота — одна пара в плотном бланке
+        self.assertEqual(lay['day_labels'][5], 'Сб')
+        self.assertEqual(lay['day_labels'][0], 'Понедельник')
+        lay = sheet_layout(self._by_day((2, 2)))
+        self.assertEqual(lay['day_labels'], {0: 'Понедельник', 1: 'Вторник'})
+
+
+class PrintSheetsTest(CmsTestCase):
+    """/schedule/print — как старый бумажный бланк; /schedule/print/teacher — бланк преподавателя."""
+
+    def test_group_sheet_like_old_blank(self):
+        html = self.get_ok('/schedule/print?group=' + GROUP)
+        self.assertIn('Расписание занятий', html)
+        self.assertIn('Группа: ' + GROUP, html)
+        self.assertIn('<th scope="col" colspan="2">Время</th>', html)
+        self.assertIn('<th scope="col">Ауд.</th>', html)
+        # день — один вертикальный столбец на все пары дня
+        days = re.findall(r'<th scope="rowgroup" rowspan="(\d+)" class="sch-sheet__day"[^>]*><span>([^<]+)</span>', html)
+        self.assertEqual([d for _n, d in days], ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'])
+        # ФИО преподавателя — жирным, под дисциплиной
+        self.assertRegex(html, r'<span class="sch-sheet__subject">Физика[^<]*(<span[^>]*>[ЧЗ]</span>)?</span>'
+                               r'<span class="sch-sheet__sep"> — </span><b class="sch-sheet__who">Ахметова Динара Маратовна</b>')
+        self.assertEqual(len(_sheets(html)), 1)
+        docs = [d for d in self.docs('schedules', groupId=GROUP) if _weekday_of(d) is not None]
+        self.assertEqual(_sheets(html)[0][2], len(docs))
+        self.assertEqual(sum(int(n) for n, _d in days), len(docs))
+
+    def test_marks_only_on_weekly_pairs_and_true_legend(self):
+        from cms import schedule_model as sm
+        html = self.get_ok('/schedule/print?group=' + GROUP)
+        docs = self.docs('schedules', groupId=GROUP)
+        expected = sorted(_week_of(d) for d in docs if _week_of(d) != 'always')
+        self.assertTrue(expected, 'в сиде у группы есть пары числителя и знаменателя')
+        self.assertEqual(sorted(_MARK_RE.findall(html)), expected)
+        # легенда — правда по schedule_model: числитель = нечётная учебная неделя
+        self.assertIn('— числитель (нечётная неделя)', html)
+        self.assertIn('— знаменатель (чётная неделя)', html)
+        for d in (date(2026, 9, 1), date(2026, 9, 8), date(2026, 10, 20), date(2027, 2, 2)):
+            with self.subTest(d=d):
+                odd = sm.academic_week_number(d) % 2 == 1
+                self.assertEqual(sm.current_week_type(d), 'numerator' if odd else 'denominator')
+        cur = sm.current_week_type()
+        self.assertIn('Текущая неделя: <b>%s</b> · %d-я учебная неделя' % (sm.WEEK_LABELS[cur].upper(),
+                                                                         sm.academic_week_number(sm.today_almaty())), html)
+
+    def test_current_week_filter_has_no_marks(self):
+        from cms import schedule_model as sm
+        cur = sm.current_week_type()
+        html = self.get_ok('/schedule/print?week=current&group=' + GROUP)
+        self.assertFalse(_MARK_RE.findall(html))
+        self.assertIn('Только пары этой недели: %s' % sm.WEEK_LABELS[cur].lower(), html)
+        docs = self.docs('schedules', groupId=GROUP)
+        self.assertEqual(_sheets(html)[0][2], sum(1 for d in docs if _week_of(d) in ('always', cur)))
+
+    def test_all_groups_one_sheet_each(self):
+        html = self.get_ok('/schedule/print')
+        sheets = _sheets(html)
+        self.assertGreaterEqual(len(sheets), 11)
+        self.assertEqual(len(re.findall(r'aria-label="Расписание группы ', html)), len(sheets))
+
+    def test_missing_group_is_404(self):
+        r = self.client.get('/schedule/print?group=НЕТ 99-9')
+        self.assertEqual(r.status_code, 404)
+        html = r.get_data(as_text=True)
+        self.assertIn('Группа не найдена', html)
+        self.assertFalse(_sheets(html))
+        html = self.get_ok('/schedule/print?group=НЕТ 99-9&group=' + GROUP)   # одна из двух есть — бланк + подсказка
+        self.assertEqual(len(_sheets(html)), 1)
+        self.assertIn('Нет таких групп: НЕТ 99-9', html)
+
+    def test_orphan_uid_not_printed(self):
+        html = self.get_ok('/schedule/print?group=ВТ 25-1п')
+        sheet = html[html.index('data-sch-sheets'):html.index('</main>')]
+        self.assertIn('Веб-разработка', sheet)
+        self.assertNotIn('uid_deleted_teacher_7', sheet)
+
+    def test_teacher_sheet(self):
+        html = self.get_ok('/schedule/print/teacher?teacher=t_li')
+        self.assertIn('Расписание преподавателя', html)
+        self.assertIn('<p class="sch-sheet__name">Ли Сергей Николаевич</p>', html)
+        self.assertIn('Дисциплина и группа', html)
+        self.assertIn('sch-sheet__day', html)
+        # поток (тот же день, время, дисциплина и аудитория у двух групп) — одна строка
+        self.assertIn('<b class="sch-sheet__who">ИС 23-1, ПО 23-1</b>', html)
+        self.assertEqual(len(_sheets(html)), 1)
+
+    def test_teacher_sheet_by_uid_key_or_fio_is_same(self):
+        rows = []
+        for t in ('t_smirnova', 'uid:t_smirnova', 'Смирнова Елена Викторовна'):
+            html = self.get_ok('/schedule/print/teacher?teacher=' + t)
+            self.assertIn('Смирнова Елена Викторовна', html)
+            rows.append(_sheets(html)[0][2])
+        self.assertEqual(len(set(rows)), 1, rows)
+        self.assertGreater(rows[0], 10)
+
+    def test_several_teachers_and_missing(self):
+        html = self.get_ok('/schedule/print/teacher?teacher=t_li&teacher=t_kim')
+        self.assertEqual(len(_sheets(html)), 2)
+        html = self.get_ok('/schedule/print/teacher?teacher=t_li&teacher=nobody_here')
+        self.assertEqual(len(_sheets(html)), 1)
+        self.assertIn('Не найдены в расписании: nobody_here', html)
+        r = self.client.get('/schedule/print/teacher?teacher=nobody_here')
+        self.assertEqual(r.status_code, 404)
+        self.assertIn('Преподаватель не найден', r.get_data(as_text=True))
+
+    def test_all_teachers_without_params(self):
+        html = self.get_ok('/schedule/print/teacher')
+        self.assertGreaterEqual(len(_sheets(html)), 11)
+        html = self.get_ok('/schedule/print/teacher?q=Иванова')
+        self.assertEqual(len(_sheets(html)), 1)
+
+    def test_teacher_page_links_to_sheet(self):
+        html = self.get_ok('/schedule/teachers?teacher=uid:t_li')
+        self.assertRegex(html, r'href="/schedule/print/teacher\?teacher=uid(:|%3A)t_li"')
+        self.assertIn('Бланк для печати', html)
+        self.assertIn('/schedule/print/teacher', self.get_ok('/schedule/teachers'))
+
+    def test_print_css_contract(self):
+        """Печать: лист без полей принтера (поля внутри листа), каждая группа с новой страницы, день
+        вертикально, на бланке только чёрный и тёмно-серый (не светлее #333) — без бледного серого."""
+        import os
+        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'css', 'schedule.css'),
+                  encoding='utf-8') as fh:
+            css = fh.read()
+        self.assertRegex(css, r'@page sch-blank \{ size: A4 portrait; margin: 0; \}')
+        self.assertIn('page: sch-blank', css)
+        self.assertRegex(css, r'\.sch-sheet \{[^}]*break-after: page')
+        self.assertIn('writing-mode: vertical-rl', css)
+        section = css[css.index('Бланки для печати'):css.index('Мобильные доводки')]
+        colors = set(re.findall(r'(?<![-\w])color:\s*([^;}]+)', section))
+        self.assertTrue(colors)
+        self.assertLessEqual(colors, {'#000', '#333', 'inherit'}, colors)
+
+
+class PrintDensityTest(_ScheduleCase):
+    """Много пар — плотный бланк на одном листе; мало — крупный, строки выше."""
+
+    def _add(self, group, n):
+        from cms import core
+        from tests.seed import _lesson
+        slots = ['08.00-08.50', '08.55-09.45', '10.00-10.50', '10.55-11.45', '12.05-12.55', '13.00-13.50']
+        b = core.db.batch()
+        for i in range(n):
+            b.set(core.db.collection('schedules').document('print_%s_%02d' % (group[:2], i)),
+                  _lesson(group, (i // 6) % 6, slots[i % 6], 't_ivanova', 'Математика', '101',
+                          ('always', 'numerator', 'denominator')[i % 3] if i >= 36 else 'always'))
+        b.commit()
+        core.cache.invalidate()
+
+    def test_many_pairs_dense_single_sheet(self):
+        self._add('ПЛОТ 26-1', 34)
+        html = self.get_ok('/schedule/print?group=ПЛОТ 26-1')
+        self.assertEqual(_sheets(html), [('tight', 7.0, 34)])
+        # Пн–Сб по 6 пар: дни не рвутся (свой tbody), названия полностью
+        self.assertEqual(html.count('<tbody class="sch-sheet__dayrows">'), 6)
+        self.assertIn('<span>Суббота</span>', html)
+        self._add('ПЛОТ 26-1', 48)
+        density, row, n = _sheets(self.get_ok('/schedule/print?group=ПЛОТ 26-1'))[0]
+        self.assertEqual((density, n), ('ultra', 48))
+        self.assertLess(row, 7.0)
+
+    def test_few_pairs_roomy(self):
+        self._add('МАЛО 26-1', 3)
+        density, row, n = _sheets(self.get_ok('/schedule/print?group=МАЛО 26-1'))[0]
+        self.assertEqual((density, n), ('roomy', 3))
+        self.assertEqual(row, 19.0)

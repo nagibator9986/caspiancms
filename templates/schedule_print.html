@@ -1,72 +1,120 @@
 {% extends 'base.html' %}
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
-{# Бланки расписания для печати (владелец — SCHEDULE): одна группа — один лист A4. «Сохранить как PDF» — в окне печати. #}
-{% block title %}Бланки расписания{% endblock %}
+{# Бланки расписания для печати (владелец — SCHEDULE): kind='group' — группы (/schedule/print),
+   kind='teacher' — преподаватели (/schedule/print/teacher). Один владелец — один лист A4, как старый бумажный
+   бланк: «Расписание занятий», день вертикально, время, дисциплина и ФИО жирным, аудитория. Плотность листа
+   (s.layout) считает сервер; на экране — предпросмотр листов, панель сверху на печать не попадает. #}
+{% block title %}{{ 'Бланки преподавателей' if kind == 'teacher' else 'Бланки расписания' }}{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
 {% block body_class %}sch-print-page{% endblock %}
 
 {% block content %}
+{% set is_teacher = kind == 'teacher' %}
+{% set week_word = current_week_label|upper %}
+{% set parity = 'нечётная' if current_week == 'numerator' else 'чётная' %}
 <div class="cc-no-print">
-    {% set back_href = url_for('schedule', group=selected[0]) if selected|length == 1 else url_for('schedule') %}
-    {% call ui.page_header('Бланки для печати', subtitle=sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · одна группа на листе A4',
-                           back={'href': back_href, 'label': selected[0] if selected|length == 1 else 'Расписание групп'}) %}
-        <button type="button" class="btn btn-primary" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать / PDF</span></button>
+    {% if is_teacher %}
+        {% set single_key = sheets[0].key if selected and sheets|length == 1 else None %}
+        {% set back = {'href': url_for('schedule_teachers', teacher=single_key) if single_key else url_for('schedule_teachers'),
+                       'label': sheets[0].name if single_key else 'Расписание преподавателей'} %}
+        {% set subtitle = sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · один преподаватель на листе A4' %}
+    {% else %}
+        {% set one = selected[0] if selected|length == 1 and not missing else None %}
+        {% set back = {'href': url_for('schedule', group=one) if one else url_for('schedule'), 'label': one or 'Расписание групп'} %}
+        {% set subtitle = sheets|length ~ ' ' ~ sheets|length|plural('бланк', 'бланка', 'бланков') ~ ' · одна группа на листе A4' %}
+    {% endif %}
+    {% call ui.page_header('Бланки для печати', subtitle=subtitle, back=back) %}
+        {% if sheets %}<button type="button" class="btn btn-primary" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать / PDF</span></button>{% endif %}
     {% endcall %}
-    {% call ui.filters_bar(inline=True, ignore=('group', 'course', 'major', 'q'), id='schPrintFilters') %}
-        {{ ui.filter_select('week', 'Какие пары', [('current', 'Только текущая неделя (' ~ current_week_label|lower ~ ')')], week, all_label='Все недели (Ч и З с пометками)') }}
+    {% if sheets or not missing %}
+    {% call ui.filters_bar(inline=True, ignore=('teacher', 'q') if is_teacher else ('group', 'course', 'major', 'q'), id='schPrintFilters') %}
+        {{ ui.filter_select('week', 'Какие пары', [('current', 'Текущая неделя (' ~ current_week_label|lower ~ ')')], week, all_label='Все недели') }}
     {% endcall %}
-    {{ ui.hint('В окне печати выберите «Сохранить как PDF», чтобы отправить бланки в мессенджер.', icon='lightbulb', dismiss='sch-print-pdf') }}
+    {% endif %}
+    {% if missing and sheets %}
+    {{ ui.hint(('Не найдены в расписании: ' if is_teacher else 'Нет таких групп: ') ~ missing|join(', ') ~ '.', icon='exclamation-triangle', tone='warning') }}
+    {% endif %}
+    {% if sheets %}
+    {{ ui.hint('В окне печати выберите «Сохранить как PDF», чтобы отправить бланки в мессенджер. Поля оставьте «По умолчанию» — отступы уже есть на листе.', icon='lightbulb', dismiss='sch-print-pdf') }}
+    {% endif %}
 </div>
 
 {% if not sheets %}
-<section class="cc-card">{{ ui.empty_state('printer', 'Нечего печатать', 'По выбранным фильтрам нет групп с расписанием.', {'label': 'К расписанию', 'href': url_for('schedule'), 'icon': 'arrow-left', 'variant': 'light'}) }}</section>
+<section class="cc-card">
+    {% if missing %}
+        {% if is_teacher %}
+        {{ ui.empty_state('person-x', 'Преподаватель не найден', '«' ~ missing|join('», «') ~ '» нет в расписании и в справочнике преподавателей.', {'label': 'К преподавателям', 'href': url_for('schedule_teachers'), 'icon': 'arrow-left', 'variant': 'light'}) }}
+        {% else %}
+        {{ ui.empty_state('printer', 'Группа не найдена', '«' ~ missing|join('», «') ~ '» нет в расписании и в справочнике групп.', {'label': 'К расписанию', 'href': url_for('schedule'), 'icon': 'arrow-left', 'variant': 'light'}) }}
+        {% endif %}
+    {% else %}
+    {{ ui.empty_state('printer', 'Нечего печатать', 'По выбранным фильтрам нет ' ~ ('преподавателей' if is_teacher else 'групп') ~ ' с расписанием.', {'label': 'К расписанию', 'href': url_for('schedule_teachers' if is_teacher else 'schedule'), 'icon': 'arrow-left', 'variant': 'light'}) }}
+    {% endif %}
+</section>
 {% endif %}
 
-<div class="sch-sheets">
+{% if sheets %}
+<div class="sch-sheets" data-sch-sheets>
 {% for s in sheets %}
-<section class="sch-sheet" aria-label="Расписание группы {{ s.group }}">
-    <header class="sch-sheet__head">
-        <img src="{{ static_url('img/logo.png') }}" alt="" width="44" height="44" class="sch-sheet__logo">
-        <div>
-            <div class="sch-sheet__org">Caspian College · расписание занятий</div>
-            <h2 class="sch-sheet__group">Группа {{ s.group }}</h2>
-        </div>
-        <div class="sch-sheet__week">
-            {% if week == 'current' %}Неделя: <b>{{ current_week_label|lower }}</b>{% else %}Сейчас идёт: <b>{{ current_week_label|lower }}</b>{% endif %}
-            <span>{{ week_number }}-я учебная неделя</span>
-        </div>
-    </header>
-    {% if s.count %}
-    <table class="sch-sheet__table">
-        <thead><tr><th>День</th><th>Время</th><th>Дисциплина и преподаватель</th><th>Ауд.</th></tr></thead>
-        <tbody>
-        {% for d, ls in s.by_day.items() %}
-            {% for l in ls %}
-            <tr class="{{ 'sch-sheet__row--first' if loop.first }}">
-                {% if loop.first %}<th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day">{{ day_names[d] }}</th>{% endif %}
-                <td class="sch-sheet__time cc-num">{{ (l|sch_time)|time_range }}</td>
-                <td>
-                    <b>{{ l.subject }}</b>{% if l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}
-                    {% if l|sch_teacher %}<div class="sch-sheet__teacher">{{ l|sch_teacher }}</div>{% endif %}
-                </td>
-                <td class="sch-sheet__room">{{ l.room }}</td>
-            </tr>
+{% set lay = s.layout %}
+<section class="sch-sheet sch-sheet--{{ lay.density }}" style="--sch-row: {{ lay.row_mm }}mm" data-rows="{{ lay.rows }}"
+         aria-label="{{ ('Расписание преподавателя ' if is_teacher else 'Расписание группы ') ~ s.name }}">
+    <div class="sch-sheet__page">
+        <header class="sch-sheet__head">
+            <p class="sch-sheet__stamp">Сформировано<br>{{ generated }}</p>
+            <h2 class="sch-sheet__title">{{ 'Расписание преподавателя' if is_teacher else 'Расписание занятий' }}</h2>
+            {% if is_teacher %}<p class="sch-sheet__name">{{ s.name }}</p>{% endif %}
+            <p class="sch-sheet__week">
+                {%- if week == 'current' %}Неделя: <b>{{ week_word }}</b> · {{ week_number }}-я учебная неделя · {{ week_dates }}
+                {%- else %}Текущая неделя: <b>{{ week_word }}</b> · {{ week_number }}-я учебная неделя{% endif -%}
+            </p>
+        </header>
+        {% if s.count %}
+        <table class="sch-sheet__table">
+            <colgroup><col class="sch-sheet__c-day"><col class="sch-sheet__c-time"><col><col class="sch-sheet__c-room"></colgroup>
+            <thead><tr>
+                <th scope="col" colspan="2">Время</th>
+                <th scope="col">{% if is_teacher %}Дисциплина и группа{% else %}Группа: {{ s.name }}{% endif %}</th>
+                <th scope="col">Ауд.</th>
+            </tr></thead>
+            {% for d, ls in s.by_day.items() %}
+            <tbody class="sch-sheet__dayrows">
+                {% for l in ls %}
+                {# uid, которого нет в справочнике, на бумагу не печатаем #}
+                {% set who = l.groups|join(', ') if is_teacher else ('' if 'orphan' in (l.teacher_flags or []) else l|sch_teacher) %}
+                <tr>
+                    {% if loop.first %}
+                    {% set label = lay.day_labels[d] %}
+                    <th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day"{% if label != day_names[d] %} title="{{ day_names[d] }}"{% endif %}><span>{{ label }}</span></th>
+                    {% endif %}
+                    <td class="sch-sheet__time">{{ (l|sch_time)|time_range }}</td>
+                    <td class="sch-sheet__lesson">
+                        <span class="sch-sheet__subject">{{ l.subject or '—' }}{% if week != 'current' and l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}" title="{{ 'Числитель' if l.week == 'numerator' else 'Знаменатель' }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}</span>
+                        {%- if who %}<span class="sch-sheet__sep"> — </span><b class="sch-sheet__who">{{ who }}</b>{% endif %}
+                    </td>
+                    <td class="sch-sheet__room">{{ l.room }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
             {% endfor %}
-        {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="cc-muted">У группы пока нет занятий.</p>
-    {% endif %}
-    <footer class="sch-sheet__foot">
-        <span><span class="sch-sheet__mark sch-sheet__mark--numerator">Ч</span> числитель</span>
-        <span><span class="sch-sheet__mark sch-sheet__mark--denominator">З</span> знаменатель</span>
-        <span>без пометки — каждую неделю</span>
-        <span class="ms-auto">Сформировано {{ generated }}</span>
-    </footer>
+        </table>
+        {% else %}
+        <p class="sch-sheet__empty">{{ 'У преподавателя' if is_teacher else 'У группы' }}{{ ' на этой неделе' if week == 'current' }} нет занятий.</p>
+        {% endif %}
+        <footer class="sch-sheet__foot">
+            <p class="sch-sheet__legend">
+                {%- if week == 'current' %}Только пары этой недели: {{ current_week_label|lower }} ({{ parity }} неделя) и пары «каждую неделю».
+                {%- else %}<span><span class="sch-sheet__mark sch-sheet__mark--numerator">Ч</span> — числитель (нечётная неделя)</span>
+                <span><span class="sch-sheet__mark sch-sheet__mark--denominator">З</span> — знаменатель (чётная неделя)</span>
+                <span>без пометки — каждую неделю</span>{% endif -%}
+            </p>
+        </footer>
+    </div>
+    <div class="sch-sheet__probe" aria-hidden="true"></div>
 </section>
 {% endfor %}
 </div>
+{% endif %}
 {% endblock %}

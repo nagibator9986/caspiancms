@@ -22,6 +22,9 @@
     {'header': 'Экспорт'},
     {'label': 'Excel с нагрузкой (.xlsx)', 'href': url_for('schedule_teachers_export', format='xlsx', teacher=c.key), 'icon': 'file-earmark-excel'},
     {'label': 'CSV', 'href': url_for('schedule_teachers_export', format='csv', teacher=c.key), 'icon': 'filetype-csv'},
+    {'divider': True},
+    {'header': 'Печать'},
+    {'label': 'Бланк для печати', 'href': url_for('schedule_print_teacher', teacher=c.key, week='current' if week == 'current' else None), 'icon': 'file-earmark-text'},
     {'label': 'Печать страницы', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
 ] %}
 {% set by_day_counts = {} %}{% for d, ls in c.by_day.items() %}{% set _ = by_day_counts.update({d: ls|length}) %}{% endfor %}
@@ -94,6 +97,7 @@
         {'header': 'Экспорт с текущими фильтрами'},
         {'label': 'Excel с нагрузкой (.xlsx)', 'href': url_for('schedule_teachers_export', format='xlsx', **export_args), 'icon': 'file-earmark-excel'},
         {'label': 'CSV', 'href': url_for('schedule_teachers_export', format='csv', **export_args), 'icon': 'filetype-csv'},
+        {'label': 'Бланки для печати / PDF', 'href': url_for('schedule_print_teacher', q=q or None, week='current' if week == 'current' else None), 'icon': 'file-earmark-text'},
         {'label': 'Печать страницы', 'href': '#', 'icon': 'printer', 'attrs': {'data-print': ''}},
     ], 'label': 'Экспорт'},
 ]) }}

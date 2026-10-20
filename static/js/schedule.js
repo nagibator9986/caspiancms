@@ -733,6 +733,37 @@
     }
   }
 
+  // ---------- Бланки для печати (/schedule/print, /schedule/print/teacher) ----------
+  // Один владелец — всегда один лист A4: плотность (шрифт, высота строк) задаёт сервер по числу пар; если длинные
+  // названия всё же не влезли — ужимаем содержимое листа (zoom; ширина остаётся во весь лист). Мерка — невидимый
+  // .sch-sheet__probe высотой с печатную область: отношение высот не зависит от масштаба предпросмотра.
+  function fitSheets() {
+    qsa('.sch-sheet').forEach(function (sheet) {
+      var page = qs('.sch-sheet__page', sheet), probe = qs('.sch-sheet__probe', sheet);
+      if (!page || !probe) return;
+      page.style.zoom = '';
+      var avail = probe.getBoundingClientRect().height, h = page.getBoundingClientRect().height;
+      if (avail > 0 && h > avail) page.style.zoom = String(Math.max(0.5, Math.floor(avail / h * 985) / 1000));
+    });
+  }
+  // Предпросмотр на узком экране: листы шириной 210 мм уменьшаются до ширины контента (только экран — см. CSS).
+  function previewSheets() {
+    var wrap = qs('[data-sch-sheets]'), sheet = wrap && qs('.sch-sheet', wrap);
+    if (!sheet) return;
+    wrap.style.removeProperty('--sch-preview');
+    var avail = wrap.clientWidth, w = sheet.offsetWidth;
+    if (avail > 0 && w > avail) wrap.style.setProperty('--sch-preview', (avail / w).toFixed(3));
+  }
+  function initSheets() {
+    if (!qs('[data-sch-sheets]')) return;
+    fitSheets();
+    previewSheets();
+    window.addEventListener('load', fitSheets);
+    window.addEventListener('beforeprint', fitSheets);
+    window.addEventListener('resize', debounce(previewSheets, 150));
+    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(fitSheets);
+  }
+
   onInit(function (root) {
     qsa('[data-editor]', root).forEach(initEditor);
     qsa('form[data-lesson-form]', root).forEach(initLessonForm);
@@ -740,6 +771,7 @@
   });
 
   onReady(function () {
+    initSheets();
     // соседние группы: [ и ]
     var page = qs('.sch-group-page');
     if (page && CC.hotkey) {

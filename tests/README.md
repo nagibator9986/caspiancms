@@ -108,6 +108,30 @@ tests/run_screens.sh 18500 $S/shots/coins "/coins/orders|name:orders_confirm|cli
 ответа и JS-ошибки страницы. CDN (Bootstrap, иконки, шрифты) грузятся через Python requests (TLS проверяется)
 и кэшируются в `OUT_DIR/.cdn-cache`. Смотрите PNG (Read) и правьте видимые проблемы.
 
+### Печать в PDF (`tests/run_print.sh`, `tests/print_pdf.py`)
+
+```bash
+tests/run_print.sh PORT_BASE OUT_DIR /path1 /path2 …
+tests/run_print.sh 18100 $S/print '/schedule/print?group=ПО 24-1' '/schedule/print' '/schedule/print/teacher?teacher=t_li'
+PRINT_DEMO=1 tests/run_print.sh 18100 $S/print '/schedule/print?group=ТБ 25-1' '/schedule/print?group=ПЛОТ 25-1'
+```
+
+Как «Печать → Сохранить как PDF» в Chrome: эмуляторы + сид + Flask, вход админом, для каждого пути
+`page.pdf(format='A4', print_background=True, prefer_css_page_size=True)` с полями Chrome по умолчанию (0.4in;
+`@page` страницы важнее) → `<slug>.pdf` и PNG каждой страницы `<slug>_p<N>.png` (110 dpi). В выводе — число страниц,
+размер листа, печатная область (лист минус поля `@page`), `! шире печатной области: …` (что принтер срежет справа/слева),
+для бланков расписания — строки, класс плотности, мм из 273 и сработала ли страховка `zoom` в `schedule.js`.
+`PRINT_DEMO=1` добавляет демо-группы: «ПЛОТ 25-1» (48 пар — предел одного листа) и «ТБ 25-1» (21 пара с длинными
+названиями, как бумажный бланк). Растеризация — pymupdf, только в venv инструментов: `"$CMS_PYTHON" -m pip install pymupdf`
+(в `requirements.txt` его нет; без модуля скрипт объяснит, что поставить). Смотрите PNG (Read).
+
+**Бланки расписания** (`/schedule/print?group=…`, `/schedule/print/teacher?teacher=<uid|uid:…|ФИО>`, можно несколько;
+`week=current` — только текущая неделя без пометок Ч/З; несуществующая группа/преподаватель — 404): один владелец — один
+лист A4 как старый бумажный бланк. `@page sch-blank { margin: 0 }`, поля 12 мм — внутри `.sch-sheet` (колонтитулы Chrome
+не печатаются, принтер с непечатаемыми полями ничего не срежет). Плотность — `routes_schedule.sheet_layout()` по числу
+строк (`PRINT_DENSITY`: roomy → normal → compact → dense → tight → ultra), страховка на длинные названия — `fitSheets()`
+в `schedule.js`. Меняете вёрстку бланка — проверьте `tests/run_print.sh` (см. «занято … из 273 мм»).
+
 ## 3. API ядра — `cms/core.py` (только чтение для модулей)
 
 ```python

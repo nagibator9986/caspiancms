@@ -24,6 +24,7 @@ import io
 import re
 import zipfile
 from collections import Counter, OrderedDict, defaultdict
+from datetime import timedelta
 from urllib.parse import parse_qs, quote, urlparse
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -33,8 +34,8 @@ from . import conflicts as conflicts_engine
 from . import schedule_model as sm
 from .core import (DELETE_FIELD, SERVER_TIMESTAMP, Routes, admin_required, audit, back_url, cache, chunked,
                    csv_response, db, doc_dict, flash_action, fmt_dt, fs_opts, get_docs, humanize_ago, log, next_target,
-                   now_almaty, paginate_list, plural, safe_next_url, send_push_many, topic_variants, url_with,
-                   view_param, where)
+                   now_almaty, paginate_list, plural, safe_next_url, send_push_many, set_nav_active, topic_variants,
+                   url_with, view_param, where)
 from .schedule_model import (CALL_SCHEDULE, DAY_NAMES_FULL, DAY_SHORT, WEEK_LABELS, WEEK_TYPES,
                              build_teacher_index, call_slots, current_week_type, day_fields, get_all_groups,
                              get_all_rooms, get_all_subjects, get_all_teachers, get_week_parity, group_sort_key,
@@ -2343,12 +2344,98 @@ def schedule_teachers_export():
 
 
 # ==================== ПЕЧАТЬ ====================
+# Бланк — лист A4 (книжная) как старый бумажный: «Расписание занятий», таблица [день вертикально][время]
+# [дисциплина / преподаватель][ауд.], ФИО жирным. @page без полей (Chrome не печатает колонтитулы с адресом),
+# поля 12 мм — внутри листа: принтер с непечатаемыми полями 4–5 мм ничего не срежет.
+# Один владелец (группа, преподаватель) — ВСЕГДА один лист: плотность (шрифт, отступы) и высота строки
+# считаются здесь по числу строк; страховка на длинные названия — schedule.js ужимает лист (zoom).
+
+# Высота под строки пар, мм: 297 − 2×12 (поля) − шапка, заголовок таблицы и легенда (≈ 29 мм) − запас; у бланка
+# преподавателя в шапке ещё строка с ФИО.
+PRINT_BODY_MM = {'group': 238.0, 'teacher': 232.0}
+# (класс плотности, до строк, высота строки по содержимому мм, потолок высоты строки мм, кегль pt) — по мерке
+# Chromium (tests/run_print.sh). До dense дисциплина и ФИО — двумя строками, как старый бланк; tight/ultra —
+# одной строкой через «—». Берётся первый класс, в который строки влезают и по числу, и по высоте.
+PRINT_DENSITY = (
+    ('roomy', 12, 13.7, 19.0, 13),
+    ('normal', 18, 11.8, 14.0, 12),
+    ('compact', 24, 10.3, 11.0, 10.5),
+    ('dense', 28, 8.6, 9.0, 10),
+    ('tight', 40, 6.0, 7.0, 10.5),
+    ('ultra', None, 4.6, 6.0, 9.5),
+)
+
+
+def sheet_layout(by_day, kind='group'):
+    """Плотность бланка: {'density', 'row_mm', 'rows', 'day_labels': {день: подпись}}.
+
+    Мало пар — крупный шрифт и строки выше (до потолка класса, без растягивания на весь лист), много —
+    плотнее (шрифт и отступы меньше, с 29 строк дисциплина и преподаватель — в одну строку), чтобы владелец
+    ВСЕГДА помещался на один лист. Название дня пишется вертикально (полужирным, кеглем класса): строки дня
+    могут подрасти под полное название не больше чем в полтора раза, иначе — «Пн»."""
+    body = PRINT_BODY_MM.get(kind, PRINT_BODY_MM['group'])
+    rows = sum(len(ls) for ls in by_day.values())
+    density, _limit, natural, cap, pt = PRINT_DENSITY[-1]
+    for tier in PRINT_DENSITY:
+        if (tier[1] is None or rows <= tier[1]) and rows * tier[2] <= body:
+            density, _limit, natural, cap, pt = tier
+            break
+    row = min(cap, max(natural, body / max(rows, 1)))
+
+    def need(d):  # мм по высоте под название дня: ~0.2 мм на пункт кегля на букву + отступы
+        return len(DAY_NAMES_FULL[d]) * pt * 0.2 + 3
+
+    full = {d: need(d) <= len(ls) * row * 1.5 for d, ls in by_day.items()}
+    total = sum(max(len(ls) * row, need(d) if full[d] else 0) for d, ls in by_day.items())
+    labels = {d: DAY_NAMES_FULL[d] if full[d] and total <= body else DAY_SHORT[d] for d in by_day}
+    if total > body:  # полные названия не влезли — сокращаем только короткие дни
+        labels = {d: DAY_NAMES_FULL[d] if len(ls) * row >= need(d) else DAY_SHORT[d] for d, ls in by_day.items()}
+    return {'density': density, 'row_mm': '%.1f' % row, 'rows': rows, 'day_labels': labels}
+
+
+def _print_week():
+    """?week=current — только текущая неделя (пометки Ч/З тогда не нужны)."""
+    return 'current' if (request.args.get('week') or '').strip() == 'current' else ''
+
+
+def _week_dates(today):
+    """'19.10–25.10.2026' — неделя (Пн–Вс) даты today."""
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return '%s–%s' % (monday.strftime('%d.%m'), sunday.strftime('%d.%m.%Y'))
+
+
+def _print_context(week, wk):
+    return dict(week=week, day_names=DAY_NAMES_FULL, generated=fmt_dt(now_almaty()),
+                week_dates=_week_dates(_today()), **wk)
+
+
+def _stream_rows(lessons):
+    """Бланк преподавателя: одна пара у нескольких групп (поток — тот же день, время, дисциплина,
+    аудитория и неделя) — одна строка «ВТ 24-1, ВТ 25-1п»."""
+    out, seen = [], {}
+    for l in sorted(lessons, key=sm.lesson_sort_key):
+        k = (l['weekday'], l['start'], l['end'], lesson_time(l), norm_text(l['subject']),
+             l['room_key'] or norm_text(l['room']), l['week'])
+        if k in seen:
+            row = seen[k]
+            if l['groupId'] and l['groupId'] not in row['groups']:
+                row['groups'].append(l['groupId'])
+            continue
+        row = dict(l, groups=[l['groupId']] if l['groupId'] else [])
+        seen[k] = row
+        out.append(row)
+    for row in out:
+        row['groups'].sort(key=group_sort_key)
+    return out
+
 
 @routes.route('/schedule/print')
 @admin_required
 def schedule_print():
-    """Бланки расписания групп для печати (A4, одна группа — одна страница). Фильтры: group
-    (можно несколько), course, major, q, week=current — только текущая неделя."""
+    """Бланки расписания групп для печати (A4, одна группа — один лист). Фильтры: group
+    (можно несколько), course, major, q, week=current — только текущая неделя. Несуществующая
+    группа — 404 с пустым состоянием."""
     wk = week_context()
     cur = wk['current_week']
     snap = load_lessons_snapshot()
@@ -2356,17 +2443,81 @@ def schedule_print():
     course = (request.args.get('course') or '').strip()
     major = (request.args.get('major') or '').strip()
     q = (request.args.get('q') or '').strip()
-    week = 'current' if request.args.get('week') == 'current' else ''
-    groups = selected or _filter_groups(snap.groups(), q, course, major)
+    week = _print_week()
+    known = set(get_all_groups()) | set(snap.groups())
+    missing = [x for x in selected if x not in known]
+    groups = [x for x in selected if x in known] if selected else _filter_groups(snap.groups(), q, course, major)
     sheets = []
     for gname in sorted(groups, key=lambda x: (group_sort_key(x), x)):
         lessons = [l for l in snap.by_group.get(gname, [])
                    if week_matches(l['week'], week, cur) and l['weekday'] is not None]
         if lessons or selected:
-            sheets.append({'group': gname, 'by_day': _by_day(lessons), 'count': len(lessons)})
-    return render_template('schedule_print.html', sheets=sheets, week=week, course=course, major=major, q=q,
-                           selected=selected, all_groups=get_all_groups(), day_names=DAY_NAMES_FULL,
-                           generated=fmt_dt(now_almaty()), **wk)
+            by_day = _by_day(lessons)
+            sheets.append({'name': gname, 'by_day': by_day, 'count': len(lessons), 'layout': sheet_layout(by_day)})
+    status = 404 if selected and not sheets else 200
+    return render_template('schedule_print.html', kind='group', sheets=sheets, course=course, major=major, q=q,
+                           selected=selected, missing=missing, **_print_context(week, wk)), status
+
+
+def _print_teacher_key(raw, snap):
+    """?teacher= : uid, ключ 'uid:…'/'name:…' или ФИО → ключ снапшота (как API преподавателя);
+    преподаватель из справочника без занятий — его ключ (пустой бланк); неизвестный — ''."""
+    key = _teacher_key_param(raw)
+    if key in snap.by_teacher:
+        return key
+    resolved = resolve_teacher(raw, snap.teacher_index)['key'] or ''
+    if resolved in snap.by_teacher:
+        return resolved
+    for k in (key, resolved):
+        if k.startswith('uid:') and snap.teacher_index.name(k[4:]):
+            return k
+    return ''
+
+
+@routes.route('/schedule/print/teacher')
+@admin_required
+def schedule_print_teacher():
+    """Бланки преподавателей для печати (A4, один преподаватель — один лист). ?teacher= — uid, ключ
+    или ФИО (можно несколько); без него — все преподаватели из расписания (поиск ?q= по ФИО).
+    week=current — только текущая неделя. ФИО и занятия — как на странице преподавателя (снапшот,
+    uid и ФИО текстом — один человек; поток у нескольких групп — одна строка)."""
+    set_nav_active('schedule_teachers')
+    wk = week_context()
+    cur = wk['current_week']
+    snap = load_lessons_snapshot()
+    week = _print_week()
+    q = (request.args.get('q') or '').strip()
+    selected = [x.strip() for x in request.args.getlist('teacher') if x.strip()]
+    keys, missing = [], []
+    for raw in selected:
+        key = _print_teacher_key(raw, snap)
+        if not key:
+            missing.append(raw)
+        elif key not in keys:
+            keys.append(key)
+    if not selected:
+        qn = norm_text(q)
+        keys = [k for k, name in snap.teachers() if not qn or qn in norm_text(name)]
+    known = get_all_teachers()
+    sheets = []
+    for key in keys:
+        all_lessons = snap.by_teacher.get(key, [])
+        uid = key[4:] if key.startswith('uid:') else ''
+        name = ((teacher_label(all_lessons[0]) if all_lessons else '') or snap.teacher_index.name(uid)
+                or key.split(':', 1)[-1])
+        if uid and uid not in known and name == uid:
+            name = 'Удалённый преподаватель (id %s)' % uid
+        lessons = [l for l in all_lessons if week_matches(l['week'], week, cur) and l['weekday'] is not None]
+        if not lessons and not selected:
+            continue
+        by_day = _by_day(_stream_rows(lessons))
+        sheets.append({'name': name, 'key': key, 'by_day': by_day, 'count': len(lessons),
+                       'layout': sheet_layout(by_day, 'teacher')})
+    if not selected:
+        sheets.sort(key=lambda s: norm_name(s['name']))
+    status = 404 if selected and not sheets else 200
+    return render_template('schedule_print.html', kind='teacher', sheets=sheets, q=q, selected=selected,
+                           missing=missing, **_print_context(week, wk)), status
 
 
 # ==================== API ====================

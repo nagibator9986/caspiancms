@@ -1241,11 +1241,13 @@ html:not(.cc-js) .cc-bulkbar { position: static; transform: none; margin-top: 12
 /* ----------------------------- Печать ----------------------------- */
 @media print {
   .cc-sidebar, .cc-topbar, .cc-toasts, .cc-skip, .cc-page-header__actions, .cc-filters, .cc-no-print, .modal, .offcanvas,
-  .cc-bulkbar, .cc-savebar, .cc-row-menu, .cc-hint__close, .cc-filter-tags { display: none !important; }
+  .cc-bulkbar, .cc-savebar, .cc-row-menu, .cc-hint__close, .cc-filter-tags, .cc-page-header__back { display: none !important; }
   .cc-shell { display: block; background: #fff; }
   .cc-content { padding: 0; }
   body { background: #fff; font-size: 12px; }
   .cc-card, .cc-stat, .card { box-shadow: none !important; border-color: #ccc !important; break-inside: avoid; }
+  /* длинный список (ui.list_card) не переносим целиком на следующий лист — иначе первая страница пустая */
+  .cc-card.cc-list { break-inside: auto; }
   .cc-table thead th { position: static; }
   .cc-table-wrap--sticky { max-height: none; overflow: visible; }
   a { color: inherit; text-decoration: none; }
