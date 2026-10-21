@@ -42,6 +42,9 @@ NEW_ENDPOINTS = {
     'schedule_conflicts': '/schedule/conflicts',
     'schedule_free_rooms': '/schedule/free-rooms',
     'audit_log': '/audit',
+    'academic_calendar': '/academic-calendar',
+    'academic_calendar_upload': '/academic-calendar/upload',
+    'academic_calendar_delete': '/academic-calendar/delete/<group_name>',
     'ui_kit': '/ui-kit',
 }
 

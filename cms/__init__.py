@@ -16,6 +16,7 @@ MODULES = [
     'routes_auth',        # вход/выход, страницы ошибок (FOUNDATION)
     'routes_home',        # дашборд, аудит (PEOPLE)
     'routes_people',      # пользователи, преподаватели, группы, дисциплины, администрация (PEOPLE)
+    'routes_calendar',    # академический календарь: PDF на группу (PEOPLE; зависит от routes_people)
     'routes_content',     # новости, опросы, события, клубы, товары, обратная связь (CONTENT)
     'routes_schedule',    # расписание (SCHEDULE)
     'routes_rooms',       # аудиторный фонд, накладки, свободные аудитории (CONFLICTS)

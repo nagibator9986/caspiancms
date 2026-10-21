@@ -43,6 +43,7 @@
                 <tr data-href="{{ sched_url }}">
                     <td class="cc-cell-primary">
                         <a class="cc-row-link cc-cell-main" href="{{ sched_url }}">{{ g.name }}</a>
+                        {% if g.calendar %}<i class="bi bi-file-earmark-pdf pp-cal-ind" role="img" title="Загружен академический календарь" aria-label="Загружен академический календарь"></i>{% endif %}
                         {% if not g.in_directory %}<span class="pp-warn-text pp-inline-note">нет в справочнике</span>{% endif %}
                     </td>
                     <td class="cc-cell-meta cc-num-col cc-col-md{{ ' cc-cell-empty' if not g.course }}" data-value="{{ g.course or 0 }}">{% if g.course %}{{ g.course }}<span class="pp-unit"> курс</span>{% else %}<span class="cc-subtle">—</span>{% endif %}</td>
@@ -53,6 +54,7 @@
                         {%- set menu = [
                             {'label': 'Расписание группы', 'href': sched_url, 'icon': 'calendar-week'},
                             {'label': 'Студенты группы', 'href': students_url, 'icon': 'people'},
+                            {'label': 'Академический календарь', 'href': nav_url('academic_calendar', q=g.name), 'icon': 'calendar-range'},
                             {'label': 'Добавить студента', 'href': url_for('admin_add_user', role='student', group=g.name, next=here()), 'icon': 'person-plus'},
                             {'label': 'Переименовать…', 'href': '#', 'icon': 'pencil', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#groupRename', 'data-pp-rename': g.name}},
                         ] -%}

@@ -1230,6 +1230,7 @@ def _rewrite_schedules(field, match, new_value):
 # ==================== ГРУППЫ ====================
 
 _YEAR_RE = re.compile(r'(\d{2,4})\s*-\s*\d')
+CALENDAR_FOLDER = 'academic_calendars'   # Storage: academic_calendars/<slug>/<unixMillis>.pdf (routes_calendar)
 
 
 def _group_course(name):
@@ -1258,6 +1259,17 @@ def _groups_directory():
     return cache.get_or_set(GROUPS_DIR_KEY, load)
 
 
+def _calendar_paths(data):
+    """Путь объекта PDF академического календаря из groups_list/{группа}.academicCalendar → [путь] или [].
+    Только свой каталог academic_calendars/: чужие файлы по ошибочному полю не удаляем."""
+    cal = (data or {}).get('academicCalendar')
+    if not isinstance(cal, dict):
+        return []
+    path = str(cal.get('path') or '') or storage_path_from_url(cal.get('url')) or ''
+    parts = path.split('/')
+    return [path] if len(parts) > 1 and parts[0] == CALENDAR_FOLDER and all(parts) and '..' not in parts else []
+
+
 def _group_name_problem(name):
     if not name:
         return 'Введите название группы'
@@ -1283,6 +1295,7 @@ def _group_rows():
             'lessons': len(lessons), 'load': _fmt_load(sum(_week_weight(l) for l in lessons)),
             'teachers': len({l['teacher_key'] for l in lessons if l['teacher_key']}),
             'course': _group_course(name), 'major': _group_major(name), 'hay': norm_text(name),
+            'calendar': isinstance((directory.get(name) or {}).get('academicCalendar'), dict),
         })
     return rows
 
@@ -1405,10 +1418,14 @@ def group_rename():
 @routes.route('/groups/delete/<group_name>', methods=['POST'])
 @admin_required
 def group_delete(group_name):
-    """Удалить группу из справочника; у студентов группа очищается. Занятия расписания остаются
-    (их удаляют в разделе «Расписание», чтобы случайно не стереть сетку)."""
+    """Удалить группу из справочника; у студентов группа очищается, PDF академического календаря удаляется
+    из Storage. Занятия расписания остаются (их удаляют в разделе «Расписание», чтобы случайно не стереть сетку)."""
     try:
-        db.collection('groups_list').document(group_name).delete()
+        group_ref = db.collection('groups_list').document(group_name)
+        group_snap = group_ref.get(**fs_opts())
+        files = _calendar_paths(group_snap.to_dict() if group_snap.exists else None)
+        group_ref.delete()
+        delete_storage_paths(files)   # PDF календаря уходит вместе с группой (объекта уже нет — не беда)
         refs = [d.reference for d in where(db.collection('users'), 'group', '==', group_name).select([])
                 .stream(**fs_opts(True))]
         for part in chunked(refs, 450):

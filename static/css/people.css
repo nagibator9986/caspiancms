@@ -35,6 +35,7 @@
 .pp-teachers .pp-groups-line .pp-clip { max-width: 170px; }
 .pp-group-cell { white-space: nowrap; }
 .pp-inline-note { margin-left: 8px; font-size: 12px; }
+.pp-cal-ind { margin-left: 6px; color: var(--cc-icon-subtle); font-size: 14px; vertical-align: -1px; }
 .pp-groups td.cc-cell-meta a { font-weight: inherit; }
 
 /* Подсказка «есть ещё N абитуриентов» под панелью фильтров */

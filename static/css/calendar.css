@@ -1,0 +1,88 @@
+/* ==========================================================================
+   Раздел «Академический календарь» (PEOPLE): PDF на каждую группу.
+   Только токены --cc-* (светлая и тёмная тема), префикс классов .cal-.
+   Общие компоненты (таблица-карточка, фильтры, модалка, бейджи, подсказки) — в app.css; здесь только то, чего там нет:
+   ячейка файла, заметка «нет в справочнике», выбор групп в модалке загрузки.
+   Бренд не используется: цвет — только состояние (warning у «Не загружен»), выбранное — --cc-brand-tint.
+   ========================================================================== */
+
+/* ----------------------------- Таблица ----------------------------- */
+.cal-table .cc-cell-primary { min-width: 180px; }
+.cal-note { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--cc-warning-fg); cursor: help; }
+.cal-cell-file { min-width: 220px; max-width: 420px; }
+
+/* Файл: иконка PDF (нейтральная) + название (подпись или имя файла) и мелкая строка «имя · размер · версия» */
+.cal-file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cal-file__icon {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+  border-radius: var(--cc-radius-sm); background: var(--cc-surface-2); color: var(--cc-icon-subtle); font-size: 18px;
+}
+.cal-file__name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; overflow: hidden;
+  overflow-wrap: anywhere; font-weight: 600; line-height: 1.3;
+}
+.cal-file__meta { display: flex; flex-wrap: wrap; line-height: 1.3; }
+/* « · » — в конце предыдущего сегмента (не в начале строки при переносе и не внутри обрезанного имени файла) */
+.cal-seg { display: inline-flex; min-width: 0; white-space: nowrap; }
+.cal-seg:not(:last-child)::after { content: '·'; margin: 0 6px; color: var(--cc-icon-subtle); }
+.cal-file__fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.cal-by { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 575.98px) {
+  .cal-table .cc-cell-primary { min-width: 0; }
+  .cc-table--stack .cal-cell-file { max-width: none; min-width: 0; margin: 6px 0 2px; }
+  .cc-table--stack .cal-file { gap: 8px; }
+  .cc-table--stack .cal-file__icon { width: 32px; height: 32px; font-size: 16px; }
+  /* на телефоне имя файла — отдельной строкой, «размер · версия» под ним (без висящей « · » в конце строки) */
+  .cc-table--stack .cal-seg:has(.cal-file__fname) { flex: 0 0 100%; }
+  .cc-table--stack .cal-seg:has(.cal-file__fname)::after { content: none; }
+  .cc-table--stack .cal-file__fname { max-width: 100%; }
+  .cc-table--stack .cal-file__name { -webkit-line-clamp: 2; line-clamp: 2; }
+  .cc-table--stack .cal-by { display: none; }
+  .cc-table--stack .cal-note { display: inline-block; }
+}
+
+/* ----------------------------- Модалка загрузки ----------------------------- */
+#calUpload .modal-dialog { --bs-modal-width: 640px; }
+.cal-picker__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.cal-picker__count { font-size: var(--cc-fs-xs); color: var(--cc-text-muted); white-space: nowrap; }
+.cal-picker__count b { color: var(--cc-text); font-weight: 700; }
+.cal-picker__tools { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.cal-picker__quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-picker__quick .btn .bi { color: var(--cc-icon-subtle); }
+
+.cal-picker__list {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; align-content: start;
+  max-height: 232px; overflow-y: auto; padding: 4px; background: var(--cc-surface);
+  border: 1px solid var(--cc-border-strong); border-radius: var(--cc-radius-sm);
+}
+.cal-picker__list.is-invalid { border-color: var(--cc-danger); }
+.cal-group {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 34px; padding: 4px 8px; margin: 0;
+  border-radius: var(--cc-radius-xs); cursor: pointer; font-size: var(--cc-fs-base); line-height: 1.3;
+  transition: background-color var(--cc-dur-fast);
+}
+.cal-group:hover { background: var(--cc-row-hover); }
+.cal-group:has(input:checked) { background: var(--cc-brand-tint); }
+.cal-group:has(input:focus-visible) { box-shadow: var(--cc-shadow-focus); }
+.cal-group .form-check-input { flex: 0 0 auto; margin: 0; width: 16px; height: 16px; cursor: pointer; }
+.cal-group:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.cal-group:has(input:disabled) .form-check-input { cursor: not-allowed; }
+.cal-group__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cal-group__meta {
+  margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px;
+  color: var(--cc-text-muted); white-space: nowrap;
+}
+.cal-group__meta .bi { color: var(--cc-success); font-size: 12px; }
+.cal-picker__empty { grid-column: 1 / -1; margin: 0; padding: 14px 8px; text-align: center; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.cal-picker__empty.is-hidden { display: none; }
+.cal-picker__note { margin-top: 8px; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.cal-picker__note[hidden] { display: none; }
+.cal-picker__note b { color: var(--cc-warning-fg); font-weight: 600; }
+
+@media (max-width: 575.98px) {
+  .cal-picker__list { grid-template-columns: minmax(0, 1fr); max-height: 260px; }
+  .cal-group { min-height: 40px; }
+  .cal-group .form-check-input { width: 20px; height: 20px; }
+  .cal-picker__quick .btn { min-height: 36px; }
+}

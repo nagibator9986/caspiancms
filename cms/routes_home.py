@@ -52,6 +52,7 @@ ACTION_LABELS = {
     'schedule_update_group': 'Правка недели группы', 'schedule_delete_group': 'Удаление расписания группы',
     'schedule_copy': 'Копирование расписания', 'schedule_bulk': 'Массовая правка расписания',
     'cache_invalidate': 'Сброс кэша', 'ack': 'Накладка принята', 'unack': 'Накладка возвращена',
+    'upload': 'Загрузка', 'replace': 'Замена файла',
 }
 ENTITY_LABELS = {
     'session': 'Сеанс', 'user': 'Пользователь', 'teacher': 'Преподаватель', 'group': 'Группа',
@@ -62,7 +63,7 @@ ENTITY_LABELS = {
     'coin_campaigns': 'Кампания', 'coin_campaign': 'Кампания', 'coin_products': 'Товар за коины',
     'coin_product': 'Товар за коины', 'coin_orders': 'Заказ', 'coin_order': 'Заказ',
     'coin_transactions': 'Коины', 'coin_transaction': 'Коины', 'admissions': 'Приёмная',
-    'conflict': 'Накладка', 'schedule_conflict_acks': 'Накладка',
+    'conflict': 'Накладка', 'schedule_conflict_acks': 'Накладка', 'academic_calendar': 'Академический календарь',
 }
 DETAIL_LABELS = {
     'role': 'Роль', 'name': 'Имя', 'email': 'Email', 'title': 'Название', 'count': 'Количество', 'ids': 'Объекты',
@@ -70,6 +71,7 @@ DETAIL_LABELS = {
     'changes': 'Изменения', 'rows': 'Строк', 'format': 'Формат', 'value': 'Значение', 'group': 'Группа',
     'subject': 'Дисциплина', 'note': 'Заметка', 'amount': 'Сумма', 'reason': 'Причина', 'login': 'Логин',
     'phone': 'Телефон', 'course': 'Курс', 'failed': 'Ошибки', 'names': 'Названия', 'photo': 'Фото',
+    'groups': 'Группы', 'file': 'Файл', 'size': 'Размер, байт', 'notify': 'Уведомление', 'version': 'Версия',
 }
 # Объект журнала → (endpoint, имя параметра) для ссылки «открыть» (удалённые объекты не ссылаются).
 ENTITY_LINKS = {
@@ -77,7 +79,7 @@ ENTITY_LINKS = {
     'applicant': ('applicant_detail', 'uid'), 'applicant_crm': ('applicant_detail', 'uid'),
     'news': ('news_form', 'news_id'), 'poll': ('poll_form', 'poll_id'), 'event': ('event_form', 'event_id'),
     'club': ('club_form', 'club_id'), 'product': ('product_form', 'product_id'),
-    'management': ('administration_edit', 'admin_id'),
+    'management': ('administration_edit', 'admin_id'), 'academic_calendar': ('academic_calendar', 'q'),
 }
 GROUP_ACTIONS = {'schedule_create', 'schedule_update_group', 'schedule_copy', 'schedule_bulk'}
 PERIODS = [('', 'Всё время'), ('today', 'Сегодня'), ('7', '7 дней'), ('30', '30 дней'), ('custom', 'Свои даты')]

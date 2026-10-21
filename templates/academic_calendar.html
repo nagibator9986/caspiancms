@@ -1,0 +1,144 @@
+{# Академический календарь (PEOPLE): PDF-календарь учебного года на каждую группу. Данные: routes_calendar.academic_calendar.
+   Загрузка — модалка #calUpload (файл + группы + «Уведомить студентов»); «Заменить…» в меню строки открывает её с группой.
+   Студенты видят календарь своей группы в профиле приложения. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Академический календарь{% endblock %}
+{% block styles %}{{ ui.css('calendar') }}{% endblock %}
+{% block scripts %}{{ ui.js('calendar') }}{% endblock %}
+{% block content %}
+{{ ui.page_header('Академический календарь', 'PDF учебного года для каждой группы — студенты открывают его в профиле приложения', [
+    {'label': 'Загрузить календарь', 'icon': 'cloud-arrow-up', 'variant': 'primary', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#calUpload', 'data-cc-hotkey': 'n'}},
+]) }}
+
+{% if stats.groups %}
+{% set summary = [(stats.groups, plural(stats.groups, 'группа', 'группы', 'групп'))] %}
+{% if stats.with %}{% set _ = summary.append({'value': stats.with, 'label': 'с календарём', 'tone': 'success', 'href': url_with(state='has')}) %}{% endif %}
+{% if stats.without %}{% set _ = summary.append({'value': stats.without, 'label': 'без календаря', 'tone': 'warning', 'href': url_with(state='none'), 'title': 'Студенты этих групп не увидят календарь в приложении'}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+{% endif %}
+
+{% if stats.groups and not stats.with %}
+{{ ui.hint('Календари ещё не загружены. Нажмите «Загрузить календарь», выберите PDF и отметьте группы — один файл можно сразу отправить всему курсу.', icon='lightbulb', dismiss='calendar-first') }}
+{% endif %}
+
+{% call ui.list_card() %}
+    {% call ui.filters_bar(search={'name': 'q', 'value': q, 'placeholder': 'Группа или название файла', 'label': 'Поиск группы', 'filter': '#calTable'}, inline=True) %}
+        {{ ui.filter_select('major', 'Специальность', majors, major) }}
+        {{ ui.filter_select('course', 'Курс', courses, course) }}
+        {{ ui.filter_select('state', 'Календарь', states, state) }}
+    {% endcall %}
+    {% if rows %}
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--stack cal-table" id="calTable" data-sortable>
+            <thead><tr>
+                <th data-sort="text">Группа</th>
+                <th data-sort="text">Календарь</th>
+                <th data-sort="num" class="cc-col-md">Обновлён</th>
+                <th class="cc-actions"><span class="visually-hidden">Действия</span></th>
+            </tr></thead>
+            <tbody>
+            {% for g in rows %}
+                {%- set cal = g.cal -%}
+                {%- set upload_attrs = {'data-bs-toggle': 'modal', 'data-bs-target': '#calUpload', 'data-cal-group': g.name, 'data-cal-has': '1' if cal else '0'} -%}
+                <tr>
+                    <td class="cc-cell-primary">
+                        <span class="cc-cell-main">{{ g.name }}</span>
+                        {% if not g.in_directory %}<span class="cal-note" title="Группа есть в расписании или у студентов — при загрузке календаря её запись в справочнике создастся сама">нет в справочнике</span>{% endif %}
+                        <div class="cc-cell-sub">{% if g.course %}{{ g.course }} курс{% else %}курс не определён{% endif %}{% if g.students %} · {{ g.students }} {{ plural(g.students, 'студент', 'студента', 'студентов') }}{% endif %}</div>
+                    </td>
+                    <td class="cal-cell-file" data-value="{{ (cal.title or cal.file_name)|lower if cal else '' }}">
+                    {% if cal %}
+                        <div class="cal-file">
+                            <span class="cal-file__icon" aria-hidden="true"><i class="bi bi-file-earmark-pdf"></i></span>
+                            <div class="min-w-0">
+                                <a class="cal-file__name" href="{{ cal.url }}" target="_blank" rel="noopener noreferrer" title="Открыть PDF в новой вкладке: {{ cal.file_name }}">{{ cal.title or cal.file_name }}</a>
+                                <div class="cc-cell-sub cal-file__meta">{% if cal.title %}<span class="cal-seg"><span class="cal-file__fname" title="{{ cal.file_name }}">{{ cal.file_name }}</span></span>{% endif %}{% if cal.size_label %}<span class="cal-seg">{{ cal.size_label }}</span>{% endif %}{% if cal.version > 1 %}<span class="cal-seg">версия {{ cal.version }}</span>{% endif %}</div>
+                            </div>
+                        </div>
+                    {% else %}
+                        {{ ui.badge('none', 'Не загружен', 'warning', 'exclamation-circle') }}
+                    {% endif %}
+                    </td>
+                    <td class="cc-col-md cc-nowrap{{ ' cc-cell-empty' if not cal }}" data-label="Обновлён" data-value="{{ cal.uploaded_at|dt('%Y%m%d%H%M', '0') if cal else '0' }}">
+                    {% if cal and cal.uploaded_at %}{{ cal.uploaded_at|dateonly }}{% if cal.uploaded_by %}<div class="cc-cell-sub cal-by" title="Загрузил: {{ cal.uploaded_by }}">{{ cal.uploaded_by }}</div>{% endif %}
+                    {% else %}<span class="cc-subtle">—</span>{% endif %}
+                    </td>
+                    <td class="cc-actions">
+                        {%- if cal -%}
+                        {{ ui.row_menu([
+                            {'label': 'Открыть PDF', 'href': cal.url, 'icon': 'box-arrow-up-right', 'attrs': {'target': '_blank', 'rel': 'noopener noreferrer'}},
+                            {'label': 'Заменить…', 'href': '#', 'icon': 'arrow-repeat', 'attrs': upload_attrs},
+                            {'label': 'Группа в «Группах»', 'href': url_for('groups', q=g.name), 'icon': 'collection'},
+                            {'divider': True},
+                            {'label': 'Удалить календарь', 'action': url_for('academic_calendar_delete', group_name=g.name), 'fields': {'next': here()}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
+                             'confirm': 'Удалить академический календарь группы «' ~ g.name ~ '»? Файл будет удалён, студенты группы больше не увидят его в приложении.'},
+                        ], label='Действия: ' ~ g.name, quick={'label': 'Открыть PDF', 'href': cal.url, 'icon': 'box-arrow-up-right', 'attrs': {'target': '_blank', 'rel': 'noopener noreferrer'}}) }}
+                        {%- else -%}
+                        {{ ui.row_menu([
+                            {'label': 'Загрузить…', 'href': '#', 'icon': 'cloud-arrow-up', 'attrs': upload_attrs},
+                            {'label': 'Группа в «Группах»', 'href': url_for('groups', q=g.name), 'icon': 'collection'},
+                        ], label='Действия: ' ~ g.name, quick={'label': 'Загрузить календарь', 'href': '#', 'icon': 'cloud-arrow-up', 'attrs': upload_attrs}) }}
+                        {%- endif -%}
+                    </td>
+                </tr>
+            {% endfor %}
+                <tr data-table-empty class="is-hidden"><td colspan="4" class="cc-table-empty">Групп не найдено</td></tr>
+            </tbody>
+        </table>
+    </div>
+    {% elif q or major or course or state %}
+        {{ ui.empty_filtered(url_for('academic_calendar')) }}
+    {% else %}
+        {{ ui.empty_state('collection', 'Групп пока нет', 'Календарь прикрепляется к группе — сначала создайте группу в разделе «Группы».', {'label': 'К группам', 'href': url_for('groups'), 'icon': 'arrow-right'}) }}
+    {% endif %}
+{% endcall %}
+
+{# ----- Загрузка: модалка ----- #}
+{% call ui.modal_form('calUpload', 'Загрузить календарь', url_for('academic_calendar'), submit='Загрузить', enctype='multipart/form-data', open=open_modal) %}
+    <input type="hidden" name="next" value="{{ next_target() or here() }}">
+    {% if errors.get('_form') %}{{ ui.hint(errors['_form'], icon='exclamation-octagon', tone='danger') }}{% endif %}
+    {{ ui.field('file', 'PDF-файл', 'file', required=True, error=errors.get('file'),
+                attrs={'accept': 'application/pdf,.pdf', 'data-cal-file': '', 'data-max-mb': max_mb},
+                help='Один файл до ' ~ max_mb ~ ' МБ — его можно сразу загрузить нескольким группам.') }}
+    {{ ui.field('title', 'Подпись для студентов', value=values.title, error=errors.get('title'),
+                attrs={'maxlength': title_max, 'autocomplete': 'off'}, placeholder='Например: 2026–2027 учебный год',
+                help='Необязательно. Если пусто, студент увидит «Академический календарь».') }}
+
+    <div class="mb-3 cal-picker" data-cal-picker data-max="{{ max_groups }}" id="f-groups">
+        <div class="cal-picker__head">
+            <label class="form-label cc-required mb-0" for="calGroupSearch">Группы</label>
+            <span class="cal-picker__count" aria-live="polite">выбрано <b class="cc-num" data-cal-count>{{ values.groups|length }}</b> из {{ max_groups }}</span>
+        </div>
+        <div class="cal-picker__tools">
+            <div class="cc-search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="form-control" type="search" id="calGroupSearch" placeholder="Найти группу" aria-label="Найти группу в списке" aria-controls="calGroupList" autocomplete="off" data-cc-filter="#calGroupList" data-cal-search>
+            </div>
+            <div class="cal-picker__quick" role="group" aria-label="Быстрый выбор">
+                <button type="button" class="btn btn-light btn-sm" data-cal-pick="missing" title="Отметить группы, у которых календаря ещё нет"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>Все без календаря</span></button>
+                {% for c in course_numbers %}<button type="button" class="btn btn-light btn-sm" data-cal-pick="course:{{ c }}" title="Отметить все группы {{ c }} курса" aria-label="Отметить все группы {{ c }} курса"><span>{{ c }} курс</span></button>{% endfor %}
+                <button type="button" class="btn btn-ghost btn-sm" data-cal-pick="clear"><span>Снять выбор</span></button>
+            </div>
+        </div>
+        <div class="cal-picker__list{{ ' is-invalid' if errors.get('groups') }}" id="calGroupList" role="group" aria-label="Группы">
+            {% for g in all_rows %}
+            <label class="cal-group" data-search="{{ g.hay }}">
+                <input class="form-check-input" type="checkbox" name="groups" value="{{ g.name }}" data-course="{{ g.course or '' }}" data-has="{{ 1 if g.cal else 0 }}"{{ ' checked' if g.name in values.groups }}>
+                <span class="cal-group__name">{{ g.name }}</span>
+                {% if g.cal %}<span class="cal-group__meta" title="Календарь уже есть — будет заменён"><i class="bi bi-check2-circle" aria-hidden="true"></i>есть</span>
+                {% elif not g.in_directory %}<span class="cal-group__meta" title="Группы нет в справочнике — запись создастся при загрузке">не в справочнике</span>{% endif %}
+            </label>
+            {% else %}
+            <p class="cal-picker__empty">Групп пока нет — создайте их в разделе «Группы».</p>
+            {% endfor %}
+            <p class="cal-picker__empty is-hidden" data-cc-filter-empty hidden>Группы не найдены</p>
+        </div>
+        {% if errors.get('groups') %}<div class="invalid-feedback d-block" id="f-groups-error">{{ errors['groups'] }}</div>{% endif %}
+        <div class="cal-picker__note" data-cal-note hidden></div>
+    </div>
+
+    {{ ui.field('notify', 'Уведомить студентов', 'switch', value=values.notify, id='cal-notify', classes='mb-0',
+                help='Студенты выбранных групп получат пуш: «Для группы … загружен новый календарь».') }}
+{% endcall %}
+{% endblock %}
