@@ -1,0 +1,86 @@
+{# Перевод на следующий курс (PEOPLE): предпросмотр → «Перевести» → при необходимости «Отменить перевод».
+   Данные: routes_promote.promote_courses. Пользовательские данные (ФИО, группа) — только автоэкранирование Jinja. #}
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{% block title %}Перевод на следующий курс{% endblock %}
+{% block content %}
+{% set c = plan.counts %}
+{% set back = {'href': url_for('admin_users', role='student'), 'label': 'Студенты'} %}
+{{ ui.page_header('Перевод на следующий курс', 'Курс +1 для студентов всех групп, кроме нынешнего первого курса (набор ' ~ start ~ ' года)',
+    [{'label': 'Скачать список (CSV)', 'href': url_for('promote_courses', format='csv'), 'icon': 'download'}] if c.move else None, back=back) }}
+
+{% set summary = [] %}
+{% if c.move %}{% set _ = summary.append({'value': c.move, 'label': 'к переводу', 'tone': 'success'}) %}{% endif %}
+{% set _ = summary.append((c.up_to_date, 'уже на своём курсе')) %}
+{% set _ = summary.append((c.first_year, 'первый курс (не меняется)')) %}
+{% if c.graduated %}{% set _ = summary.append({'value': c.graduated, 'label': 'выпуск (не меняется)'}) %}{% endif %}
+{% if c.review %}{% set _ = summary.append({'value': c.review, 'label': 'проверить вручную', 'tone': 'warning'}) %}{% endif %}
+{{ ui.summary_line(summary) }}
+
+{{ ui.hint('Переводятся только те, у кого сохранённый курс на 1 меньше курса группы по году набора (например, «ПО 25-1»: был 1 → станет 2). Остальное не меняется: '
+           'сначала скачайте список — это резервная копия. Повторный запуск безопасен: уже переведённые не изменятся.', icon='info-circle') }}
+
+{% if c.move %}
+{% call ui.list_card() %}
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--compact cc-table--stack">
+            <thead><tr>
+                <th>Группа</th>
+                <th>Курс</th>
+                <th class="cc-num-col">Студентов</th>
+            </tr></thead>
+            <tbody>
+            {% for g in groups %}
+                <tr>
+                    <td class="cc-cell-primary"><span class="cc-cell-main">{{ g.group }}</span></td>
+                    <td class="cc-cell-meta">{{ g.old }} → <b>{{ g.new }}</b></td>
+                    <td class="cc-cell-meta cc-num-col">{{ g.count }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endcall %}
+
+<div class="d-flex flex-wrap gap-2 mt-3">
+    {{ ui.confirm_button(url_for('promote_courses_apply'), 'Перевести ' ~ c.move ~ ' ' ~ plural(c.move, 'студента', 'студента', 'студентов') ~ ' на +1 курс',
+        'Перевести на следующий курс ' ~ c.move ~ ' ' ~ plural(c.move, 'студента', 'студента', 'студентов') ~ ' в ' ~ groups|length ~ ' ' ~ plural(groups|length, 'группе', 'группах', 'группах') ~ '? Группы набора ' ~ start ~ ' года (первый курс) не меняются.',
+        variant='primary', icon='mortarboard', size='md', ok='Перевести', title='Перевод на следующий курс', fields={'expected': c.move, 'year': start}) }}
+</div>
+{% else %}
+{{ ui.empty_state('check2-circle', 'Переводить некого', 'Все студенты нужных групп уже на своих курсах — менять ничего не нужно.') }}
+{% endif %}
+
+{% if plan.review %}
+{% call ui.card('Проверить вручную (' ~ plan.review|length ~ ')', icon='exclamation-triangle', subtitle='Не меняются — исправьте курс в карточке студента или через массовое действие «Курс»', classes='mt-4') %}
+    <div class="cc-table-wrap">
+        <table class="cc-table cc-table--compact cc-table--stack">
+            <thead><tr><th>Студент</th><th>Группа</th><th>Курс сейчас</th><th>Курс группы</th><th>Почему</th></tr></thead>
+            <tbody>
+            {% for r in plan.review[:200] %}
+                <tr>
+                    <td class="cc-cell-primary"><a class="cc-cell-main" href="{{ url_for('admin_users', q=r.name or r.id, role='student') }}">{{ r.name or r.id }}</a></td>
+                    <td class="cc-cell-meta">{{ r.group or '—' }}</td>
+                    <td class="cc-cell-meta">{{ r.course or '—' }}</td>
+                    <td class="cc-cell-meta">{{ r.expected or '—' }}</td>
+                    <td class="cc-cell-meta">{{ reasons[r.reason] }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if plan.review|length > 200 %}<p class="cc-muted small mt-2">Показаны первые 200 из {{ plan.review|length }}.</p>{% endif %}
+{% endcall %}
+{% endif %}
+
+{% if promoted_back %}
+<div class="mt-4">
+    {{ ui.hint('В этом году уже переведено студентов: ' ~ promoted_back ~ '. Если перевод сделан по ошибке — его можно отменить: курс вернётся на 1 назад.', icon='arrow-counterclockwise', tone='warning') }}
+    <div class="mt-2">
+        {{ ui.confirm_button(url_for('promote_courses_rollback'), 'Отменить перевод (' ~ promoted_back ~ ')',
+            'Отменить перевод этого года? У ' ~ promoted_back ~ ' ' ~ plural(promoted_back, 'студента', 'студента', 'студентов') ~ ' курс вернётся на 1 назад.',
+            variant='outline-danger', icon='arrow-counterclockwise', size='md', ok='Отменить перевод') }}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

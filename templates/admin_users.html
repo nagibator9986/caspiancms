@@ -12,6 +12,7 @@
     {'menu': [
         {'label': 'Скачать CSV по фильтрам', 'href': url_with(format='csv', page=None), 'icon': 'download'},
         {'label': 'Перечитать из базы', 'href': url_with(refresh=1), 'icon': 'arrow-clockwise'},
+        {'label': 'Перевод на следующий курс…', 'href': url_for('promote_courses'), 'icon': 'mortarboard'},
     ]},
     {'label': 'Новый пользователь', 'href': url_for('admin_add_user', role=new_role, group=group if group and group != '__none__' else None, next=here()),
      'icon': 'person-plus', 'variant': 'primary', 'attrs': {'data-cc-hotkey': 'n'}},
