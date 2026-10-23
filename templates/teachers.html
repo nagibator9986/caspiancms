@@ -75,7 +75,7 @@
                             {'label': 'Карточка и вход', 'href': edit_url, 'icon': 'person-vcard'},
                         ] -%}
                         {%- if t.has_account and not t.disabled %}{% set _ = menu.append({'label': 'Сбросить пароль…', 'action': url_for('admin_reset_password', user_id=t.id), 'fields': {'next': here()}, 'icon': 'key', 'ok': 'Сбросить',
-                            'confirm': 'Пароль «' ~ t.title ~ '» станет Teacher123. Сообщите его преподавателю лично.'}) %}{% endif -%}
+                            'confirm': 'Пароль «' ~ t.title ~ '» станет Teacher123. Все сеансы завершатся, при входе приложение попросит придумать новый пароль. Сообщите его преподавателю лично.'}) %}{% endif -%}
                         {%- set _ = menu.append({'divider': True}) -%}
                         {%- set _ = menu.append({'label': 'Удалить…', 'action': url_for('teacher_delete', uid=t.id), 'fields': {'force': '1'} if t.lessons else {}, 'icon': 'trash', 'danger': True, 'ok': 'Удалить',
                             'confirm': ('У «' ~ t.title ~ '» ' ~ t.lessons ~ ' ' ~ plural(t.lessons, 'занятие', 'занятия', 'занятий') ~ ' в расписании — они останутся без преподавателя. Лучше сначала передать их другому (карточка → «Передать занятия…»). Удалить преподавателя и его вход?') if t.lessons else ('Удалить «' ~ t.title ~ '» и его вход в приложение? Действие необратимо.')}) -%}

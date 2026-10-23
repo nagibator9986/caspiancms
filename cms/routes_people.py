@@ -55,6 +55,10 @@ ROLE_TABS = [('student', 'Студенты', 'backpack'), ('teacher', 'Преп�
 EDITABLE_ROLES = ('student', 'teacher', 'admin', 'club')   # applicant — только саморегистрация
 DEFAULT_PASSWORDS = {'teacher': 'Teacher123', 'student': 'Student123', 'club': 'Student123',
                      'applicant': RESET_PASSWORD}
+# Роли, которым выданный/сброшенный пароль надо сменить при первом входе: ставим mustChangePassword (снять его
+# может только сам владелец в приложении) и завершаем сеансы. Студенты, клубы и админы — как раньше, без флага.
+FORCE_CHANGE_ROLES = ('applicant', 'teacher')
+FORCE_CHANGE_NOTE = 'при входе приложение попросит придумать новый пароль'
 COURSES = ('1', '2', '3', '4')
 COURSE_OPTIONS = [(c, '%s курс' % c) for c in COURSES]
 USER_SORTS = OrderedDict([('name', 'По имени'), ('new', 'Сначала новые'), ('group', 'По группе')])
@@ -104,6 +108,19 @@ def _password_problem(password):
     if len(password) > 128:
         return 'Пароль слишком длинный'
     return None
+
+
+def _force_change_fields():
+    """Поля профиля «пароль выдан админом — владелец обязан сменить его в приложении» (контракт D5)."""
+    return {'mustChangePassword': True, 'passwordResetAt': SERVER_TIMESTAMP}
+
+
+def _revoke_sessions(uid):
+    """Завершить сеансы пользователя на всех устройствах. Сбой не роняет действие (логируется)."""
+    try:
+        fb_auth.revoke_refresh_tokens(uid)
+    except Exception:
+        log.exception('revoke_refresh_tokens(%s) не удался', uid)
 
 
 def _next_url(default_endpoint, **values):
@@ -391,6 +408,9 @@ def admin_add_user():
             doc['group'] = group
         if course:
             doc['course'] = course
+    forced = role in FORCE_CHANGE_ROLES   # учитель: пароль знает админ — при первом входе приложение просит свой
+    if forced:
+        doc.update(_force_change_fields())   # сеансов у только что созданного аккаунта нет — отзывать нечего
     try:
         db.collection('users').document(user.uid).set(doc)
     except Exception as e:
@@ -402,7 +422,8 @@ def admin_add_user():
         return _render_add_form(values, errors, groups)
     _invalidate_people([role])
     audit('create', 'user', user.uid, {'role': role, 'email': email, 'name': name})
-    flash_action('Пользователь «%s» создан. Пароль передайте лично.' % name, 'Открыть',
+    flash_action('Пользователь «%s» создан. Пароль передайте лично%s.'
+                 % (name, ' — %s' % FORCE_CHANGE_NOTE if forced else ''), 'Открыть',
                  href=url_for('admin_edit_user', user_id=user.uid))
     return redirect(url_for('admin_users', role=role))
 
@@ -595,12 +616,9 @@ def admin_reset_password(user_id):
         flash_error('Не удалось сбросить пароль. Попробуйте ещё раз', e)
         return _back('admin_users')
     updates = {'updatedAt': SERVER_TIMESTAMP}
-    if role == 'applicant':
-        updates.update({'mustChangePassword': True, 'passwordResetAt': SERVER_TIMESTAMP})
-        try:
-            fb_auth.revoke_refresh_tokens(user_id)
-        except Exception:
-            log.exception('revoke_refresh_tokens(%s) не удался', user_id)
+    if role in FORCE_CHANGE_ROLES:
+        updates.update(_force_change_fields())
+        _revoke_sessions(user_id)
     try:
         ref.update(updates)
     except Exception:
@@ -610,9 +628,8 @@ def admin_reset_password(user_id):
         _crm_history(user_id, 'password_reset', 'Пароль сброшен на %s' % RESET_PASSWORD)
     _invalidate_people([role])
     audit('reset_password', 'user', user_id, {'role': role, 'name': data.get('name') or ''})
-    if role == 'applicant':
-        flash('Пароль «%s» сброшен на %s. Сеансы завершены, при входе приложение попросит придумать новый пароль.'
-              % (title, RESET_PASSWORD), 'success')
+    if role in FORCE_CHANGE_ROLES:
+        flash('Пароль «%s» сброшен на %s. Сеансы завершены, %s.' % (title, password, FORCE_CHANGE_NOTE), 'success')
     else:
         flash('Пароль «%s» сброшен на %s' % (title, password), 'success')
     return _back('admin_users')
@@ -1011,6 +1028,8 @@ def teacher_add():
         doc['email'] = email
     if phone:
         doc['phone'] = phone
+    if created_auth:
+        doc.update(_force_change_fields())   # пароль выдал админ — при первом входе приложение просит свой
     try:
         db.collection('users').document(uid).set(doc)
     except Exception as e:
@@ -1023,7 +1042,8 @@ def teacher_add():
         return _render_teachers(values, {'_form': 'Преподаватель не добавлен'})
     _invalidate_people(['teacher'])
     audit('create', 'teacher', uid, {'name': name, 'login': created_auth})
-    flash_action('Преподаватель «%s» добавлен%s' % (name, ' с входом в приложение' if created_auth else ''),
+    flash_action('Преподаватель «%s» добавлен%s' % (name, (' с входом в приложение — %s' % FORCE_CHANGE_NOTE)
+                                                   if created_auth else ''),
                  'Добавить занятия', href=nav_url('schedule_builder'))
     return redirect(url_for('teacher_edit', uid=uid))
 
@@ -1070,6 +1090,7 @@ def teacher_edit(uid):
             errors['email'] = 'Чтобы создать вход, укажите email'
         if not errors:
             created = False
+            forced = False   # админ задал пароль (новый вход или новый пароль) — учитель обязан сменить его в приложении
             try:
                 if has_account:
                     upd = {}
@@ -1081,11 +1102,18 @@ def teacher_edit(uid):
                         upd['display_name'] = name
                     if upd:
                         fb_auth.update_user(uid, **upd)
+                    if password:
+                        forced = True
+                        _revoke_sessions(uid)   # старый пароль больше не действует — выходим на всех устройствах
                 elif email and password:
                     fb_auth.create_user(uid=uid, email=email, password=password, display_name=name)
                     created = True
-                ref.update({'name': name, 'email': email or DELETE_FIELD, 'phone': phone or DELETE_FIELD,
-                            'updatedAt': SERVER_TIMESTAMP})
+                    forced = True               # аккаунт только что создан — сеансов нет, отзывать нечего
+                fields = {'name': name, 'email': email or DELETE_FIELD, 'phone': phone or DELETE_FIELD,
+                          'updatedAt': SERVER_TIMESTAMP}
+                if forced:
+                    fields.update(_force_change_fields())
+                ref.update(fields)
             except fb_auth.EmailAlreadyExistsError:
                 errors['email'] = 'Этот email уже занят другим аккаунтом'
             except Exception as e:
@@ -1095,8 +1123,10 @@ def teacher_edit(uid):
                 _invalidate_people(['teacher'])
                 audit('update', 'teacher', uid, {'name': name, 'login_created': created,
                                                   'password_changed': bool(password)})
-                flash('Создан вход в приложение для «%s»' % name if created else 'Данные преподавателя сохранены',
-                      'success')
+                msg = 'Создан вход в приложение для «%s»' % name if created else 'Данные преподавателя сохранены'
+                if forced:
+                    msg += ': %s' % FORCE_CHANGE_NOTE if created else '. Сеансы завершены, %s' % FORCE_CHANGE_NOTE
+                flash(msg, 'success')
                 return redirect(_next_url('teachers_list'))
     snapshot = _snapshot_safe()
     lessons = snapshot.by_teacher.get('uid:' + uid, []) if snapshot is not None else []

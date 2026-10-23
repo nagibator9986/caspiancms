@@ -10,7 +10,7 @@
 {% set act_next = list_url if is_partial else here() %}
 {% set has_login = account and not account.error %}
 {% set can_reset = has_login and default_password and not is_self and user.role != 'admin' %}
-{% set reset_text = 'Пароль «' ~ user.title ~ '» станет ' ~ (default_password or '') ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if is_applicant else ' Сообщите его пользователю лично.') %}
+{% set reset_text = 'Пароль «' ~ user.title ~ '» станет ' ~ (default_password or '') ~ '.' ~ (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль.' if is_applicant else (' Все сеансы завершатся, при входе приложение попросит придумать новый пароль. Сообщите его пользователю лично.' if user.role == 'teacher' else ' Сообщите его пользователю лично.')) %}
 {% set delete_text = 'Удалить «' ~ user.title ~ '» вместе с аккаунтом входа?' ~ (' CRM, кошелёк и заказы абитуриента подчистит сервер.' if is_applicant else ((' В расписании останется ' ~ lessons_count ~ ' ' ~ plural(lessons_count, 'занятие', 'занятия', 'занятий') ~ ' без преподавателя.') if lessons_count else '')) ~ ' Действие необратимо.' %}
 {% block title %}{{ user.title }}{% endblock %}
 {% block styles %}{{ ui.css('people') }}{% endblock %}
@@ -148,7 +148,7 @@
                     ('Последний вход', (account.last_sign_in|ago) if account.last_sign_in else 'ещё не входил'),
                     ('Аккаунт создан', account.created|dt),
                 ]) }}
-                {% if is_applicant and data.get('passwordResetAt') %}<p class="cc-muted small mt-2 mb-0">Пароль сброшен {{ data.get('passwordResetAt')|dt }}{% if user.must_change %} — абитуриент ещё не сменил его{% endif %}.</p>{% endif %}
+                {% if (is_applicant or user.role == 'teacher') and data.get('passwordResetAt') %}<p class="cc-muted small mt-2 mb-0">Пароль {{ 'сброшен' if is_applicant else 'выдан' }} {{ data.get('passwordResetAt')|dt }}{% if user.must_change %} — {{ 'абитуриент' if is_applicant else 'преподаватель' }} ещё не сменил его{% endif %}.</p>{% endif %}
                 <div class="pp-account-actions">{{ account_actions() }}</div>
                 {% if user.role == 'admin' and not is_self %}<p class="cc-muted small mt-2 mb-0">Пароль администратора стандартным не сбрасывается — он меняет его сам.</p>{% endif %}
             {% endif %}

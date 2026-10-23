@@ -11,7 +11,7 @@
 {% set menu = [{'label': 'Все настройки аккаунта', 'href': url_for('admin_edit_user', user_id=teacher.id, next=here()), 'icon': 'gear'}] %}
 {% if can_transfer %}{% set _ = menu.append({'label': 'Передать занятия…', 'href': '#', 'icon': 'arrow-left-right', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#teacherTransfer'}}) %}{% endif %}
 {% if has_account and not account.disabled %}{% set _ = menu.append({'label': 'Сбросить пароль…', 'action': url_for('admin_reset_password', user_id=teacher.id), 'fields': {'next': act_next}, 'icon': 'key', 'ok': 'Сбросить',
-    'confirm': 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.'}) %}{% endif %}
+    'confirm': 'Пароль «' ~ title ~ '» станет Teacher123. Все сеансы завершатся, при входе приложение попросит придумать новый пароль. Сообщите его преподавателю лично.'}) %}{% endif %}
 
 {% set badges %}
 <span class="pp-badges">
@@ -120,7 +120,7 @@
                 ]) }}
                 <div class="pp-account-actions">
                     {% if not account.disabled %}
-                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.',
+                    {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Все сеансы завершатся, при входе приложение попросит придумать новый пароль. Сообщите его преподавателю лично.',
                                          variant='light', icon='key', size=None, fields={'next': here()}, ok='Сбросить', title='Сброс пароля', classes='w-100') }}
                     {% endif %}
                     {{ ui.button('Все настройки аккаунта', href=url_for('admin_edit_user', user_id=teacher.id, next=here()), icon='gear', variant='light', classes='w-100') }}
@@ -186,7 +186,7 @@
         {{ ui.button('Открыть карточку', href=url_for('teacher_edit', uid=teacher.id, next=list_url), icon='person-vcard', variant='light', size='sm') }}
         {{ ui.button('Расписание', href=nav_url('schedule_teachers', teacher=teacher.id), icon='calendar-week', variant='light', size='sm') }}
         {% if has_account and not account.disabled %}
-        {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Сообщите его преподавателю лично.',
+        {{ ui.confirm_button(url_for('admin_reset_password', user_id=teacher.id), 'Сбросить пароль', 'Пароль «' ~ title ~ '» станет Teacher123. Все сеансы завершатся, при входе приложение попросит придумать новый пароль. Сообщите его преподавателю лично.',
                              variant='light', icon='key', fields={'next': list_url}, ok='Сбросить', title='Сброс пароля') }}
         {% endif %}
     </div>

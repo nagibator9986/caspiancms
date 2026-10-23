@@ -81,14 +81,20 @@ class UsersBugsTest(CmsTestCase):
         self.assertTrue(any(h.get('action') == 'password_reset' for h in history), history)
         self.assertIn('abiturient123', ' '.join(m for _c, m in self.flashes()))
 
-    def test_reset_password_teacher_no_flag(self):
+    def test_reset_password_teacher_forces_change(self):
+        # Раньше учителю флаг не ставился («no_flag»). Теперь (пакет «P», обязательная смена пароля в приложении)
+        # сброс на Teacher123 = mustChangePassword + завершение сеансов; подробности — tests/test_teacher_password.py.
         from cms.core import fb_auth
         fb_auth.update_user('t_akhmetova', password='Other999')
-        r = self.post('/admin/users/reset-password/t_akhmetova')
+        with mock.patch.object(fb_auth_module, 'revoke_refresh_tokens',
+                               wraps=fb_auth_module.revoke_refresh_tokens) as revoke:
+            r = self.post('/admin/users/reset-password/t_akhmetova')
         self.assertEqual(r.status_code, 302)
+        revoke.assert_called_once_with('t_akhmetova')
         self.assertTrue(_sign_in_ok('akhmetova@caspian.test', 'Teacher123'))
         d = self.doc('users', 't_akhmetova')
-        self.assertNotIn('mustChangePassword', d)
+        self.assertIs(d.get('mustChangePassword'), True)
+        self.assertIsNotNone(d.get('passwordResetAt'))
         self.assertIsNotNone(d.get('updatedAt'))
 
     def test_reset_password_admin_refused(self):
