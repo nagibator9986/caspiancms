@@ -228,6 +228,7 @@ def main():
             page.set_viewport_size({'width': area, 'height': 1123})
             page.wait_for_timeout(100)
             over = page.evaluate(_OVERFLOW_JS)
+            sheets_print = page.evaluate(_SHEETS_JS)  # тот же замер, но в вёрстке печати (шрифт и переносы могут отличаться от экрана)
             # 'null' — снять эмуляцию: с media='screen' page.pdf печатал бы экранные стили
             page.emulate_media(media='null')
             page.set_viewport_size({'width': 1280, 'height': 900})
@@ -246,6 +247,9 @@ def main():
                 print('    бланк «%s»: %d строк, %s, строка %.1f мм, занято %d из 273 мм%s' % (
                     sh['name'], sh['rows'], sh['density'], sh['row'], sh['used'],
                     '' if sh['zoom'] == '1' else ' — ужат schedule.js (zoom %s)' % sh['zoom']))
+            for sh in sheets_print:
+                if sh['used'] > 274:
+                    print('    ! в печати «%s» выше печатной области: %d из 273 мм' % (sh['name'], sh['used']))
             for o in over:
                 print('    ! шире печатной области: %s' % o)
             for err in errors:

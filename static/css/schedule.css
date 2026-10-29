@@ -377,18 +377,19 @@ a.sch-line__who:hover { text-decoration: underline; }
 .sch-counters__warn[hidden] { display: none; }
 
 /* ----------------------------- Бланки для печати ----------------------------- */
-/* /schedule/print и /schedule/print/teacher: лист A4 как старый бумажный бланк. Лист — это бумага: всегда белый,
-   текст чёрный (и в тёмной теме — это предпросмотр печати), без бледно-серого; размеры — в мм/pt. Поля 12 мм —
-   внутри листа (@page sch-blank без полей — см. «Печать»). Плотность — класс от сервера (sheet_layout):
-   sch-sheet--roomy | normal | compact | dense | tight и высота строки --sch-row (минимум); sch-sheet--fill — таблица,
-   как в старом бланке, растянута на всю высоту листа: лишняя высота делится между строками. */
+/* /schedule/print и /schedule/print/teacher: «фирменный лист» A4 — логотип, «Группа …» крупно, неделя справа, таблица
+   День | Время | Дисциплина и преподаватель | Ауд. (название жирным, ФИО серым строкой ниже, пометки Ч/З), легенда и
+   «Сформировано» внизу. Лист — это бумага: всегда белый (и в тёмной теме — это предпросмотр печати), цвета — фиксированные,
+   размеры — в мм/pt. Поля 12 мм — внутри листа (@page sch-blank без полей — см. «Печать»). Плотность — класс от сервера
+   (sheet_layout): sch-sheet--roomy | normal | compact | dense | tight | ultra и высота строки --sch-row (минимум);
+   sch-sheet--fill — таблица растянута на всю высоту листа: лишняя высота делится между строками. */
 .sch-sheets { display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 4px 0 24px; }
 @media screen { .sch-sheets { zoom: var(--sch-preview, 1); } }   /* узкий экран: schedule.js уменьшает предпросмотр */
 .sch-sheet {
   position: relative; flex: 0 0 auto; display: flex; flex-direction: column; box-sizing: border-box;
   width: 210mm; height: 297mm; padding: 12mm;
-  background: #fff; color: #000; box-shadow: 0 1px 3px rgba(0, 0, 0, .2), 0 10px 30px rgba(0, 0, 0, .12);
-  font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 13pt; line-height: 1.15;
+  background: #fff; color: #1A1A1A; box-shadow: 0 1px 3px rgba(0, 0, 0, .2), 0 10px 30px rgba(0, 0, 0, .12);
+  font-family: var(--cc-font); font-size: 10.5pt; line-height: 1.25;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 /* содержимое листа — во всю высоту печатной области; --fill: таблица забирает остаток (строки растягиваются) */
@@ -396,70 +397,79 @@ a.sch-line__who:hover { text-decoration: underline; }
 .sch-sheet--fill .sch-sheet__page > .sch-sheet__table { flex: 1 0 auto; }
 /* мерка печатной области (297 − 2×12 мм): schedule.js ужимает .sch-sheet__page, если содержимое выше */
 .sch-sheet__probe { position: absolute; left: 0; top: 12mm; width: 1px; height: 273mm; visibility: hidden; pointer-events: none; }
-.sch-sheet__head { position: relative; text-align: center; margin-bottom: 4mm; }
-.sch-sheet__title { margin: 0; font-family: inherit; font-size: 18pt; font-weight: 700; line-height: 1.2; letter-spacing: 0; color: #000; }
-.sch-sheet__name { margin: 1mm 0 0; font-size: 14pt; font-weight: 700; }
-.sch-sheet__week { margin: 1.2mm 0 0; font-size: 12pt; }
-.sch-sheet__week b { letter-spacing: .03em; }
-.sch-sheet__table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #000; color: #000; }
-.sch-sheet__c-day { width: 9mm; }
-.sch-sheet__c-time { width: 25mm; }
-.sch-sheet__c-room { width: 19mm; }
+
+/* шапка: логотип · «Caspian College · расписание» и «Группа …» · неделя справа; снизу — линия цвета бренда */
+.sch-sheet__head { display: flex; align-items: center; gap: 3.5mm; padding-bottom: 3mm; margin-bottom: 4mm; border-bottom: .9mm solid #FF6200; }
+.sch-sheet__logo { flex: none; width: 12mm; height: 12mm; border-radius: 2.6mm; background: #fff; }
+.sch-sheet__headline { min-width: 0; }
+.sch-sheet__org { font-size: 7.5pt; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #5B6370; }
+.sch-sheet__title { margin: 0; font-family: inherit; font-size: 21pt; font-weight: 800; line-height: 1.12; letter-spacing: 0; color: #1A1A1A; overflow-wrap: anywhere; }
+.sch-sheet__week { margin-left: auto; flex: none; display: flex; flex-direction: column; gap: .5mm; text-align: right; font-size: 9.5pt; color: #1A1A1A; }
+.sch-sheet__week span + span { color: #5B6370; font-size: 8.5pt; }
+.sch-sheet__week-type b { font-weight: 800; }
+
+/* таблица: тонкие серые линии, серая шапка, день — отдельной ячейкой слева на все его пары */
+.sch-sheet__table { width: 100%; border-collapse: collapse; table-layout: fixed; color: #1A1A1A; }
+.sch-sheet__c-day { width: 30mm; }
+.sch-sheet__c-time { width: 26mm; }
+.sch-sheet__c-room { width: 24mm; }
 .sch-sheet__table th, .sch-sheet__table td {
-  border: 1px solid #000; padding: 1mm 1.6mm; text-align: center; vertical-align: middle; color: #000; background: #fff;
+  border: .25mm solid #C4C9D1; padding: 1.3mm 2mm; text-align: left; vertical-align: middle; color: #1A1A1A; background: #fff;
   font-weight: 400; line-height: inherit;
 }
-.sch-sheet__table thead th { font-weight: 700; padding: 1.5mm 1.6mm; }
-.sch-sheet__table tbody td { height: var(--sch-row, 12mm); }
-.sch-sheet__dayrows + .sch-sheet__dayrows > tr:first-child > * { border-top-width: 2px; }
-.sch-sheet__table .sch-sheet__day { padding: 1mm 0; font-weight: 700; }
-.sch-sheet__day > span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; letter-spacing: .03em; }
-.sch-sheet__time { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.sch-sheet__room { overflow-wrap: anywhere; }
-.sch-sheet__subject, .sch-sheet__who { display: block; }
-.sch-sheet__who { font-weight: 700; margin-top: .3mm; }
-.sch-sheet__sep { display: none; }
-/* Ч/З читаются и на чёрно-белом принтере: буква в чёрной рамке, заливка — только подсказка цветом */
-.sch-sheet__mark {   /* сдвиг — position: relative, чтобы буква в рамке не раздувала строку */
-  display: inline-block; position: relative; top: -.08em; min-width: 1.35em; margin-left: .15em; padding: 0 .2em;
-  border: 1px solid #000; border-radius: 2px; font-size: .78em; font-weight: 700; line-height: .95; text-align: center;
-  vertical-align: baseline; color: #000; background: #fff;
+.sch-sheet__table thead th {
+  background: #F1F3F5; padding: 1.6mm 2mm; font-size: .7em; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #5B6370;
 }
-.sch-sheet__mark--numerator { background: #DCE8FB; }
-.sch-sheet__mark--denominator { background: #FCEFC7; }
-.sch-sheet__empty { margin: 10mm 0; text-align: center; font-size: 13pt; }
-.sch-sheet__foot { margin-top: 2.5mm; font-size: 10pt; color: #333; }
-.sch-sheet__legend { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 1mm 6mm; }
-.sch-sheet__legend .sch-sheet__mark { margin: 0 .2em 0 0; }
-/* дата формирования — мелко в правом верхнем углу (не занимает строку) */
-.sch-sheet__stamp { position: absolute; top: 0; right: 0; margin: 0; font-size: 8.5pt; line-height: 1.2; text-align: right; color: #333; }
+.sch-sheet__table tbody td { height: var(--sch-row, 12mm); }
+.sch-sheet__dayrows + .sch-sheet__dayrows > tr:first-child > * { border-top: .5mm solid #8A919C; }
+.sch-sheet__table .sch-sheet__day { background: #F7F8FA; font-weight: 700; font-size: .92em; vertical-align: top; padding-top: 1.8mm; white-space: nowrap; }
+.sch-sheet__time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sch-sheet__room { text-align: center; font-weight: 600; font-size: .94em; overflow-wrap: break-word; }
+.sch-sheet__table thead th:last-child { text-align: center; }
+.sch-sheet__subject { font-weight: 700; }
+.sch-sheet__who { display: block; margin-top: .3mm; font-size: .86em; color: #5B6370; }
+.sch-sheet__sep { display: none; }
+/* Ч/З читаются и на чёрно-белом принтере: буква в тонкой рамке, заливка — только подсказка цветом */
+.sch-sheet__mark {
+  display: inline-block; position: relative; top: -.05em; min-width: 1.5em; margin-left: .35em; padding: 0 .3em;
+  border: .2mm solid currentColor; border-radius: 1mm; font-size: .74em; font-weight: 800; line-height: 1.15; text-align: center;
+  vertical-align: baseline; font-variant-numeric: normal;
+}
+.sch-sheet__mark--numerator { background: #EAF2FF; color: #1565C0; }
+.sch-sheet__mark--denominator { background: #FEF3C7; color: #92400E; }
+.sch-sheet__empty { margin: 10mm 0; text-align: center; font-size: 13pt; color: #5B6370; }
+
+/* подвал: легенда слева, «Сформировано» справа */
+.sch-sheet__foot { display: flex; align-items: baseline; justify-content: space-between; gap: 2mm 6mm; margin-top: 3mm; font-size: 8.5pt; color: #5B6370; }
+.sch-sheet__legend { margin: 0; display: flex; flex-wrap: wrap; gap: 1mm 5mm; }
+.sch-sheet__legend .sch-sheet__mark { margin: 0 .3em 0 0; }
+.sch-sheet__stamp { margin: 0; flex: none; }
+
 /* плотность: мало пар — крупнее и выше; много — мельче и плотнее; с 29 строк дисциплина и ФИО — в одну строку */
-.sch-sheet--roomy { font-size: 14pt; }
-.sch-sheet--roomy .sch-sheet__title { font-size: 19pt; }
-.sch-sheet--roomy .sch-sheet__c-time { width: 27mm; }
-.sch-sheet--roomy .sch-sheet__table td { padding: 1.4mm 2mm; }
-.sch-sheet--roomy .sch-sheet__who { margin-top: .6mm; }
-.sch-sheet--compact { font-size: 10.5pt; line-height: 1.08; }   /* 10.5pt — 24 строки в две строки на лист */
-.sch-sheet--dense { font-size: 10pt; line-height: 1.05; }
-.sch-sheet--tight { font-size: 10.5pt; line-height: 1.1; }
-.sch-sheet--ultra { font-size: 9.5pt; line-height: 1.08; }
-.sch-sheet--compact .sch-sheet__table td { padding: .6mm 1.4mm; }
-.sch-sheet--dense .sch-sheet__table td { padding: .3mm 1.2mm; }
-.sch-sheet--tight .sch-sheet__table td { padding: .4mm 1.2mm; }
-.sch-sheet--ultra .sch-sheet__table td { padding: .2mm 1mm; }
-.sch-sheet--compact .sch-sheet__who, .sch-sheet--dense .sch-sheet__who { margin-top: 0; }
-.sch-sheet--compact .sch-sheet__title { font-size: 15pt; }
+.sch-sheet--roomy { font-size: 12pt; }
+.sch-sheet--roomy .sch-sheet__title { font-size: 23pt; }
+.sch-sheet--roomy .sch-sheet__table td { padding: 1.6mm 2.4mm; }
+.sch-sheet--normal { font-size: 11pt; }
+.sch-sheet--compact { font-size: 10pt; line-height: 1.2; }
+.sch-sheet--compact .sch-sheet__table td { padding: .7mm 1.8mm; }
 .sch-sheet--compact .sch-sheet__head { margin-bottom: 3mm; }
-.sch-sheet--compact .sch-sheet__c-time { width: 23mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__title { font-size: 14pt; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__name { font-size: 12.5pt; margin-top: .5mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__week { font-size: 10.5pt; margin-top: .6mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__head { margin-bottom: 2.5mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__table thead th { padding: .8mm 1.2mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__c-time { width: 21mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__c-day { width: 7.5mm; }
-:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__foot { font-size: 9pt; margin-top: 1.5mm; }
-:is(.sch-sheet--tight, .sch-sheet--ultra) :is(.sch-sheet__subject, .sch-sheet__who, .sch-sheet__sep) { display: inline; margin: 0; }
+.sch-sheet--dense { font-size: 9pt; line-height: 1.15; }
+.sch-sheet--dense .sch-sheet__table td { padding: .35mm 1.6mm; }
+.sch-sheet--tight { font-size: 8.5pt; line-height: 1.12; }
+.sch-sheet--ultra { font-size: 8pt; line-height: 1.1; }
+.sch-sheet--tight .sch-sheet__table td { padding: .4mm 1.4mm; }
+.sch-sheet--ultra .sch-sheet__table td { padding: .2mm 1.2mm; }
+:is(.sch-sheet--compact, .sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__title { font-size: 17pt; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__head { padding-bottom: 2mm; margin-bottom: 2.5mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__logo { width: 10mm; height: 10mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__table thead th { padding: .8mm 1.6mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__c-time { width: 24mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__c-day { width: 29mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__c-room { width: 22mm; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__foot { margin-top: 1.5mm; }
+.sch-sheet--compact .sch-sheet__who, .sch-sheet--dense .sch-sheet__who { margin-top: 0; }
+:is(.sch-sheet--tight, .sch-sheet--ultra) :is(.sch-sheet__sep, .sch-sheet__who) { display: inline; margin: 0; }
+:is(.sch-sheet--tight, .sch-sheet--ultra) .sch-sheet__sep { color: #5B6370; }
 
 /* ----------------------------- Мобильные доводки ----------------------------- */
 @media (max-width: 575.98px) {

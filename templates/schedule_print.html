@@ -2,9 +2,10 @@
 {% import '_ui.html' as ui with context %}
 {% import 'schedule_ui.html' as sch with context %}
 {# Бланки расписания для печати (владелец — SCHEDULE): kind='group' — группы (/schedule/print),
-   kind='teacher' — преподаватели (/schedule/print/teacher). Один владелец — один лист A4, как старый бумажный
-   бланк: «Расписание занятий», день вертикально, время, дисциплина и ФИО жирным, аудитория. Плотность листа
-   (s.layout) считает сервер; на экране — предпросмотр листов, панель сверху на печать не попадает. #}
+   kind='teacher' — преподаватели (/schedule/print/teacher). Один владелец — один лист A4. Вид — «фирменный лист»:
+   логотип, «Группа …» крупно, неделя справа, таблица День | Время | Дисциплина и преподаватель | Ауд. (название жирным,
+   ФИО серым строкой ниже, пометки Ч/З), легенда и «Сформировано» внизу. Плотность листа (s.layout) считает сервер,
+   чтобы владелец ВСЕГДА помещался на один лист A4; на экране — предпросмотр листов, панель сверху на печать не попадает. #}
 {% block title %}{{ 'Бланки преподавателей' if kind == 'teacher' else 'Бланки расписания' }}{% endblock %}
 {% block styles %}{{ ui.css('schedule') }}{% endblock %}
 {% block scripts %}{{ ui.js('schedule') }}{% endblock %}
@@ -12,7 +13,6 @@
 
 {% block content %}
 {% set is_teacher = kind == 'teacher' %}
-{% set week_word = current_week_label|upper %}
 {% set parity = 'нечётная' if current_week == 'numerator' else 'чётная' %}
 <div class="cc-no-print">
     {% if is_teacher %}
@@ -63,20 +63,25 @@
          aria-label="{{ ('Расписание преподавателя ' if is_teacher else 'Расписание группы ') ~ s.name }}">
     <div class="sch-sheet__page">
         <header class="sch-sheet__head">
-            <p class="sch-sheet__stamp">Сформировано<br>{{ generated }}</p>
-            <h2 class="sch-sheet__title">{{ 'Расписание преподавателя' if is_teacher else 'Расписание занятий' }}</h2>
-            {% if is_teacher %}<p class="sch-sheet__name">{{ s.name }}</p>{% endif %}
-            <p class="sch-sheet__week">
-                {%- if week == 'current' %}Неделя: <b>{{ week_word }}</b> · {{ week_number }}-я учебная неделя · {{ week_dates }}
-                {%- else %}Текущая неделя: <b>{{ week_word }}</b> · {{ week_number }}-я учебная неделя{% endif -%}
-            </p>
+            <img src="{{ static_url('img/logo.png') }}" alt="" width="44" height="44" class="sch-sheet__logo">
+            <div class="sch-sheet__headline">
+                <div class="sch-sheet__org">Caspian College · {{ 'расписание преподавателя' if is_teacher else 'расписание занятий' }}</div>
+                <h2 class="sch-sheet__title">{{ s.name if is_teacher else 'Группа ' ~ s.name }}</h2>
+            </div>
+            <div class="sch-sheet__week">
+                {%- if week == 'current' %}<span class="sch-sheet__week-type">Неделя: <b>{{ current_week_label|lower }}</b></span>
+                <span>{{ week_number }}-я учебная неделя · {{ week_dates }}</span>
+                {%- else %}<span class="sch-sheet__week-type">Сейчас идёт: <b>{{ current_week_label|lower }}</b></span>
+                <span>{{ week_number }}-я учебная неделя</span>{% endif -%}
+            </div>
         </header>
         {% if s.count %}
-        <table class="sch-sheet__table">
+        <table class="sch-sheet__table" data-no-wrap>
             <colgroup><col class="sch-sheet__c-day"><col class="sch-sheet__c-time"><col><col class="sch-sheet__c-room"></colgroup>
             <thead><tr>
-                <th scope="col" colspan="2">Время</th>
-                <th scope="col">{% if is_teacher %}Дисциплина и группа{% else %}Группа: {{ s.name }}{% endif %}</th>
+                <th scope="col">День</th>
+                <th scope="col">Время</th>
+                <th scope="col">{% if is_teacher %}Дисциплина и группа{% else %}Дисциплина и преподаватель{% endif %}</th>
                 <th scope="col">Ауд.</th>
             </tr></thead>
             {% for d, ls in s.by_day.items() %}
@@ -86,13 +91,12 @@
                 {% set who = l.groups|join(', ') if is_teacher else ('' if 'orphan' in (l.teacher_flags or []) else l|sch_teacher) %}
                 <tr>
                     {% if loop.first %}
-                    {% set label = lay.day_labels[d] %}
-                    <th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day"{% if label != day_names[d] %} title="{{ day_names[d] }}"{% endif %}><span>{{ label }}</span></th>
+                    <th scope="rowgroup" rowspan="{{ ls|length }}" class="sch-sheet__day">{{ day_names[d] }}</th>
                     {% endif %}
                     <td class="sch-sheet__time">{{ (l|sch_time)|time_range }}</td>
                     <td class="sch-sheet__lesson">
-                        <span class="sch-sheet__subject">{{ l.subject or '—' }}{% if week != 'current' and l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}" title="{{ 'Числитель' if l.week == 'numerator' else 'Знаменатель' }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}</span>
-                        {%- if who %}<span class="sch-sheet__sep"> — </span><b class="sch-sheet__who">{{ who }}</b>{% endif %}
+                        <b class="sch-sheet__subject">{{ l.subject or '—' }}</b>{% if week != 'current' and l.week != 'always' %} <span class="sch-sheet__mark sch-sheet__mark--{{ l.week }}" title="{{ 'Числитель' if l.week == 'numerator' else 'Знаменатель' }}">{{ 'Ч' if l.week == 'numerator' else 'З' }}</span>{% endif %}
+                        {%- if who %}<span class="sch-sheet__sep"> — </span><span class="sch-sheet__who">{{ who }}</span>{% endif %}
                     </td>
                     <td class="sch-sheet__room">{{ l.room }}</td>
                 </tr>
@@ -110,6 +114,7 @@
                 <span><span class="sch-sheet__mark sch-sheet__mark--denominator">З</span> — знаменатель (чётная неделя)</span>
                 <span>без пометки — каждую неделю</span>{% endif -%}
             </p>
+            <p class="sch-sheet__stamp">Сформировано {{ generated }}</p>
         </footer>
     </div>
     <div class="sch-sheet__probe" aria-hidden="true"></div>

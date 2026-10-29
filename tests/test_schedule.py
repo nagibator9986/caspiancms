@@ -890,30 +890,27 @@ class SheetLayoutTest(CmsTestCase):
         self.assertEqual(sheet_layout(by_day)['density'], 'compact')
         self.assertEqual(sheet_layout(by_day, 'teacher')['density'], 'dense')
 
-    def test_short_day_name_only_when_needed(self):
-        from cms.routes_schedule import sheet_layout
-        lay = sheet_layout(self._by_day((6, 6, 6, 6, 6, 1)))   # суббота — одна пара в плотном бланке
-        self.assertEqual(lay['day_labels'][5], 'Сб')
-        self.assertEqual(lay['day_labels'][0], 'Понедельник')
-        lay = sheet_layout(self._by_day((2, 2)))
-        self.assertEqual(lay['day_labels'], {0: 'Понедельник', 1: 'Вторник'})
-
 
 class PrintSheetsTest(CmsTestCase):
-    """/schedule/print — как старый бумажный бланк; /schedule/print/teacher — бланк преподавателя."""
+    """/schedule/print — «фирменный лист» группы (логотип, «Группа …», неделя, таблица День | Время | Дисциплина и
+    преподаватель | Ауд., легенда и «Сформировано»); /schedule/print/teacher — лист преподавателя."""
 
-    def test_group_sheet_like_old_blank(self):
+    def test_group_sheet_layout(self):
         html = self.get_ok('/schedule/print?group=' + GROUP)
-        self.assertIn('Расписание занятий', html)
-        self.assertIn('Группа: ' + GROUP, html)
-        self.assertIn('<th scope="col" colspan="2">Время</th>', html)
-        self.assertIn('<th scope="col">Ауд.</th>', html)
-        # день — один вертикальный столбец на все пары дня
-        days = re.findall(r'<th scope="rowgroup" rowspan="(\d+)" class="sch-sheet__day"[^>]*><span>([^<]+)</span>', html)
+        self.assertIn('Caspian College · расписание занятий', html)
+        self.assertIn('<h2 class="sch-sheet__title">Группа %s</h2>' % GROUP, html)
+        self.assertIn('class="sch-sheet__logo"', html)
+        # заголовки таблицы — четыре колонки, как на образце
+        for head in ('День', 'Время', 'Дисциплина и преподаватель', 'Ауд.'):
+            self.assertIn('<th scope="col">%s</th>' % head, html)
+        self.assertNotIn('colspan="2">Время', html)
+        # день — отдельная ячейка слева на все пары дня, название целиком и горизонтально
+        days = re.findall(r'<th scope="rowgroup" rowspan="(\d+)" class="sch-sheet__day">([^<]+)</th>', html)
         self.assertEqual([d for _n, d in days], ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'])
-        # ФИО преподавателя — жирным, под дисциплиной
-        self.assertRegex(html, r'<span class="sch-sheet__subject">Физика[^<]*(<span[^>]*>[ЧЗ]</span>)?</span>'
-                               r'<span class="sch-sheet__sep"> — </span><b class="sch-sheet__who">Ахметова Динара Маратовна</b>')
+        # название жирным, ФИО преподавателя — отдельной серой строкой под ним
+        self.assertRegex(html, r'<b class="sch-sheet__subject">Физика</b>( <span[^>]*>[ЧЗ]</span>)?'
+                               r'<span class="sch-sheet__sep"> — </span><span class="sch-sheet__who">Ахметова Динара Маратовна</span>')
+        self.assertRegex(html, r'<p class="sch-sheet__stamp">Сформировано \d\d\.\d\d\.\d{4} \d\d:\d\d</p>')
         self.assertEqual(len(_sheets(html)), 1)
         docs = [d for d in self.docs('schedules', groupId=GROUP) if _weekday_of(d) is not None]
         self.assertEqual(_sheets(html)[0][2], len(docs))
@@ -934,8 +931,8 @@ class PrintSheetsTest(CmsTestCase):
                 odd = sm.academic_week_number(d) % 2 == 1
                 self.assertEqual(sm.current_week_type(d), 'numerator' if odd else 'denominator')
         cur = sm.current_week_type()
-        self.assertIn('Текущая неделя: <b>%s</b> · %d-я учебная неделя' % (sm.WEEK_LABELS[cur].upper(),
-                                                                         sm.academic_week_number(sm.today_almaty())), html)
+        self.assertIn('Сейчас идёт: <b>%s</b>' % sm.WEEK_LABELS[cur].lower(), html)
+        self.assertIn('<span>%d-я учебная неделя</span>' % sm.academic_week_number(sm.today_almaty()), html)
 
     def test_current_week_filter_has_no_marks(self):
         from cms import schedule_model as sm
@@ -970,12 +967,12 @@ class PrintSheetsTest(CmsTestCase):
 
     def test_teacher_sheet(self):
         html = self.get_ok('/schedule/print/teacher?teacher=t_li')
-        self.assertIn('Расписание преподавателя', html)
-        self.assertIn('<p class="sch-sheet__name">Ли Сергей Николаевич</p>', html)
-        self.assertIn('Дисциплина и группа', html)
+        self.assertIn('Caspian College · расписание преподавателя', html)
+        self.assertIn('<h2 class="sch-sheet__title">Ли Сергей Николаевич</h2>', html)
+        self.assertIn('<th scope="col">Дисциплина и группа</th>', html)
         self.assertIn('sch-sheet__day', html)
         # поток (тот же день, время, дисциплина и аудитория у двух групп) — одна строка
-        self.assertIn('<b class="sch-sheet__who">ИС 23-1, ПО 23-1</b>', html)
+        self.assertIn('<span class="sch-sheet__who">ИС 23-1, ПО 23-1</span>', html)
         self.assertEqual(len(_sheets(html)), 1)
 
     def test_teacher_sheet_by_uid_key_or_fio_is_same(self):
@@ -1010,20 +1007,29 @@ class PrintSheetsTest(CmsTestCase):
         self.assertIn('/schedule/print/teacher', self.get_ok('/schedule/teachers'))
 
     def test_print_css_contract(self):
-        """Печать: лист без полей принтера (поля внутри листа), каждая группа с новой страницы, день
-        вертикально, на бланке только чёрный и тёмно-серый (не светлее #333) — без бледного серого."""
+        """Печать: лист без полей принтера (поля внутри листа), каждая группа с новой страницы, таблица
+        не оборачивается в скролл-обёртку (иначе fill не растянет строки), а любой цвет текста на белой бумаге
+        читается на ч/б принтере — контраст не ниже 4.5:1 (WCAG AA)."""
         import os
-        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'css', 'schedule.css'),
-                  encoding='utf-8') as fh:
+        base = os.path.dirname(os.path.dirname(__file__))
+        with open(os.path.join(base, 'static', 'css', 'schedule.css'), encoding='utf-8') as fh:
             css = fh.read()
         self.assertRegex(css, r'@page sch-blank \{ size: A4 portrait; margin: 0; \}')
         self.assertIn('page: sch-blank', css)
         self.assertRegex(css, r'\.sch-sheet \{[^}]*break-after: page')
-        self.assertIn('writing-mode: vertical-rl', css)
+        self.assertIn('<table class="sch-sheet__table" data-no-wrap>',
+                      self.get_ok('/schedule/print?group=ПО 24-1'))
         section = css[css.index('Бланки для печати'):css.index('Мобильные доводки')]
-        colors = set(re.findall(r'(?<![-\w])color:\s*([^;}]+)', section))
+
+        def luminance(hex_color):
+            ch = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            ch = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in ch]
+            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+        colors = set(re.findall(r'(?<![-\w])color:\s*(#[0-9A-Fa-f]{6})\b', section))
         self.assertTrue(colors)
-        self.assertLessEqual(colors, {'#000', '#333', 'inherit'}, colors)
+        for c in colors:
+            self.assertGreaterEqual(1.05 / (luminance(c) + 0.05), 4.5, 'бледный цвет текста на бланке: ' + c)
 
 
 class PrintDensityTest(_ScheduleCase):
@@ -1047,7 +1053,7 @@ class PrintDensityTest(_ScheduleCase):
         self.assertEqual(_sheets(html), [('tight', 7.0, 34)])
         # Пн–Сб по 6 пар: дни не рвутся (свой tbody), названия полностью
         self.assertEqual(html.count('<tbody class="sch-sheet__dayrows">'), 6)
-        self.assertIn('<span>Суббота</span>', html)
+        self.assertRegex(html, r'<th scope="rowgroup" rowspan="4" class="sch-sheet__day">Суббота</th>')
         self._add('ПЛОТ 26-1', 48)
         density, row, n = _sheets(self.get_ok('/schedule/print?group=ПЛОТ 26-1'))[0]
         self.assertEqual((density, n), ('ultra', 48))

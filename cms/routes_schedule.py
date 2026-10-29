@@ -2370,32 +2370,20 @@ PRINT_DENSITY = (
 
 
 def sheet_layout(by_day, kind='group'):
-    """Плотность бланка: {'density', 'row_mm', 'rows', 'fill', 'day_labels': {день: подпись}}.
+    """Плотность бланка: {'density', 'row_mm', 'rows', 'fill'}.
 
     Мало пар — крупный шрифт и строки выше (row_mm — минимум; с PRINT_FILL_ROWS строк таблица растянута на
-    весь лист, fill), много —
-    плотнее (шрифт и отступы меньше, с 29 строк дисциплина и преподаватель — в одну строку), чтобы владелец
-    ВСЕГДА помещался на один лист. Название дня пишется вертикально (полужирным, кеглем класса): строки дня
-    могут подрасти под полное название не больше чем в полтора раза, иначе — «Пн»."""
+    весь лист, fill), много — плотнее (шрифт и отступы меньше, с 29 строк дисциплина и преподаватель — в одну
+    строку), чтобы владелец ВСЕГДА помещался на один лист. День пишется в своей колонке горизонтально и целиком."""
     body = PRINT_BODY_MM.get(kind, PRINT_BODY_MM['group'])
     rows = sum(len(ls) for ls in by_day.values())
-    density, _limit, natural, cap, pt = PRINT_DENSITY[-1]
+    density, _limit, natural, cap, _pt = PRINT_DENSITY[-1]
     for tier in PRINT_DENSITY:
         if (tier[1] is None or rows <= tier[1]) and rows * tier[2] <= body:
-            density, _limit, natural, cap, pt = tier
+            density, _limit, natural, cap, _pt = tier
             break
     row = min(cap, max(natural, body / max(rows, 1)))
-
-    def need(d):  # мм по высоте под название дня: ~0.2 мм на пункт кегля на букву + отступы
-        return len(DAY_NAMES_FULL[d]) * pt * 0.2 + 3
-
-    full = {d: need(d) <= len(ls) * row * 1.5 for d, ls in by_day.items()}
-    total = sum(max(len(ls) * row, need(d) if full[d] else 0) for d, ls in by_day.items())
-    labels = {d: DAY_NAMES_FULL[d] if full[d] and total <= body else DAY_SHORT[d] for d in by_day}
-    if total > body:  # полные названия не влезли — сокращаем только короткие дни
-        labels = {d: DAY_NAMES_FULL[d] if len(ls) * row >= need(d) else DAY_SHORT[d] for d, ls in by_day.items()}
-    return {'density': density, 'row_mm': '%.1f' % row, 'rows': rows, 'fill': rows >= PRINT_FILL_ROWS,
-            'day_labels': labels}
+    return {'density': density, 'row_mm': '%.1f' % row, 'rows': rows, 'fill': rows >= PRINT_FILL_ROWS}
 
 
 def _print_week():
