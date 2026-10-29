@@ -1,0 +1,33 @@
+{# Окно «Кто заменит»: одно на страницу. Данные — JSON #subPickerData (преподаватели, подписи, кандидаты по парам),
+   разметку списков строит substitutions.js. Свободные — лучшие первыми; занятых можно выбрать (накладка с предупреждением). #}
+{{ ui.json_data('subPickerData', picker) }}
+<div class="modal fade sub-picker" id="subPicker" tabindex="-1" aria-labelledby="subPickerTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="min-w-0">
+                    <h2 class="modal-title" id="subPickerTitle">Кто заменит</h2>
+                    <p class="sub-picker__lesson" data-sub-picker-lesson></p>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                <div class="sub-picker__quick">
+                    <button type="button" class="cc-chip" data-sub-value="open"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Решим позже</button>
+                    <button type="button" class="cc-chip" data-sub-value="cancel"><i class="bi bi-x-circle" aria-hidden="true"></i> Снять пару без замены</button>
+                </div>
+                <div class="cc-search sub-picker__search">
+                    <i class="bi bi-search" aria-hidden="true"></i>
+                    <input class="form-control" type="search" placeholder="Найти преподавателя" aria-label="Найти преподавателя" autocomplete="off" data-sub-picker-search>
+                </div>
+                <h3 class="sub-picker__h">Свободны <span class="sub-picker__n" data-sub-picker-free-n></span></h3>
+                <div class="sub-picker__list" data-sub-picker-free></div>
+                <details class="sub-picker__busy" data-sub-picker-busy-box>
+                    <summary><span>Заняты в это время</span> <span class="sub-picker__n" data-sub-picker-busy-n></span><i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
+                    <p class="sub-picker__warn"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Если выбрать занятого, получится накладка — оставьте это для потоков и объединённых групп.</p>
+                    <div class="sub-picker__list" data-sub-picker-busy></div>
+                </details>
+            </div>
+        </div>
+    </div>
+</div>

@@ -52,6 +52,7 @@ tests/run_tests.sh 18400 tests.test_smoke tests.test_applicants
 | магазин | `coin_products`: `prod_hoodie, prod_tshirt, prod_mug, prod_stickers, prod_notebook(stock 0), prod_shopper(неактивен)` с фото в Storage; `coin_orders`: `ord_001–003 reserved, ord_004–005 issued, ord_006 cancelled, ord_007 rejected` |
 | приёмная | `app_config/admissions` по SPEC §2.8 (каталог, документы, FAQ, дедлайн, квесты) |
 | контент | новости `news_*` (с `images[]` в Storage, `news_legacy` — только `imageUrl`), `applicant_news an_0..2`, опросы `poll_canteen, poll_club`, события `ev_*`, клубы `club_*`, старые товары `p_*`, обратная связь `fb_0..4` (3 status=new), администрация `mg_0..3`, `cms_audit`, `schedule_logs`, `schedule_conflict_acks/ack_demo` |
+| замены | `substitutions/<дата>_<id занятия>` (`seed.SUBSTITUTION_DEMO`, `seed['substitutions']`): особые пары `cf_petrov_a/b`, `cf_akhm_a/b`, `cf_seit_always` — заменено (Ли, Смирнова), снята, ждут замены; плюс две прошлые для статистики. Даты — от завтрашнего дня |
 
 `seed_all()` возвращает dict с этими id (`self.seed` в тестах).
 

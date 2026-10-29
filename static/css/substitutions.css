@@ -1,0 +1,184 @@
+/* ==========================================================================
+   Замены (владелец — SCHEDULE). Только токены дизайн-системы (--cc-*), префикс .sub-.
+   Цвет — только состояние: «ищем замену» — янтарный, «заменено» — зелёный, «снята» — нейтральный, накладка — красный.
+   Таблицы, вкладки, фильтры, панель сохранения, подсказки — общие компоненты (app.css); листок на день — поверх
+   бланка расписания (schedule.css, .sch-sheet).
+   ========================================================================== */
+
+.sub-muted { color: var(--cc-text-muted); font-size: var(--cc-fs-sm); margin: 0; }
+.sub-pad { padding: 12px 16px; }
+.sub-text-warn { color: var(--cc-warning-fg); font-weight: 600; }
+.sub-link { color: inherit; text-decoration: none; }
+.sub-link:hover { color: var(--cc-brand-strong); }
+.sub-link:hover .sub-person__name { text-decoration: underline; }
+
+.sub-person { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.sub-person .cc-avatar { flex: none; }
+.sub-person__name { font-weight: 600; overflow-wrap: anywhere; }
+.sub-person--from .sub-person__name { font-weight: 500; color: var(--cc-text-muted); }
+
+/* ----------------------------- Список по дням ----------------------------- */
+.sub-days { display: flex; flex-direction: column; gap: var(--cc-space-4); }
+.sub-day { padding: 0; overflow: hidden; }
+.sub-day.is-today { box-shadow: inset 3px 0 0 var(--cc-brand), var(--cc-shadow-1); }
+.sub-day__head { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--cc-border); background: var(--cc-surface-2); }
+.sub-day__title { margin: 0; font-size: var(--cc-fs-md); font-weight: 700; }
+.sub-day__count { font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.sub-day__print { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: var(--cc-fs-sm); font-weight: 600; color: var(--cc-text-muted); text-decoration: none; padding: 4px 8px; border-radius: var(--cc-radius-xs); }
+.sub-day__print:hover { background: var(--cc-surface-3); color: var(--cc-text); }
+
+.sub-list { list-style: none; margin: 0; padding: 0; }
+.sub-item { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 8px 16px; align-items: start; padding: 12px 16px; border-bottom: 1px solid var(--cc-border); border-left: 3px solid transparent; position: relative; }
+.sub-item:last-child { border-bottom: 0; }
+.sub-item:hover { background: var(--cc-row-hover); }
+.sub-item--open { border-left-color: var(--cc-warning); background: color-mix(in srgb, var(--cc-warning-soft) 45%, transparent); }
+.sub-item--assigned { border-left-color: var(--cc-success); }
+.sub-item--cancelled { border-left-color: var(--cc-chart-neutral-strong); }
+.sub-item__time { font-variant-numeric: tabular-nums; font-weight: 700; padding-top: 1px; white-space: nowrap; }
+.sub-item__lesson { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.sub-item__where { color: var(--cc-text-muted); font-size: var(--cc-fs-sm); }
+.sub-item__who { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+.sub-item__arrow { color: var(--cc-icon-subtle); }
+.sub-item__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 6px; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.sub-reason { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--cc-text); }
+.sub-reason .bi { color: var(--cc-icon-subtle); }
+.sub-warn { display: inline-flex; align-items: center; gap: 5px; color: var(--cc-danger-fg); font-weight: 600; }
+.sub-item__actions { display: flex; align-items: center; gap: 6px; justify-self: end; }
+.sub-item .cc-row-menu { margin: 0; }
+
+.sub-teachercard { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; margin-bottom: 12px; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-md); }
+.sub-teachercard__body { flex: 1 1 260px; min-width: 0; }
+.sub-teachercard__name { margin: 0; font-size: var(--cc-fs-md); font-weight: 700; }
+.sub-teachercard__facts { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 4px 0 0; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.sub-teachercard__facts b { color: var(--cc-text); font-size: var(--cc-fs-md); }
+
+/* ----------------------------- Статистика ----------------------------- */
+.sub-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--cc-space-4); }
+@media (min-width: 992px) { .sub-stats { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } .sub-stats__wide { grid-column: 1 / -1; } }
+.sub-rank { width: 44px; color: var(--cc-text-muted); font-variant-numeric: tabular-nums; }
+.sub-bar-cell { min-width: 140px; width: 28%; }
+.sub-reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.sub-reasons li { display: grid; grid-template-columns: minmax(110px, 40%) minmax(0, 1fr) 32px; align-items: center; gap: 10px; }
+.sub-reasons__label { font-size: var(--cc-fs-sm); font-weight: 600; }
+.sub-reasons__n { text-align: right; }
+
+/* ----------------------------- Оформление: шаг 1 ----------------------------- */
+.sub-step { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 8px; border-radius: 50%; background: var(--cc-brand-tint); color: var(--cc-brand-ink); font-size: 12px; font-weight: 800; }
+.sub-step1 { display: flex; flex-direction: column; gap: var(--cc-space-4); max-width: 920px; }
+.sub-teachers__search { margin-bottom: 12px; }
+.sub-teachers { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; max-height: 420px; overflow: auto; padding: 2px; margin: -2px; }
+.sub-teacher { position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); background: var(--cc-surface); cursor: pointer; min-width: 0; transition: border-color var(--cc-dur-fast) var(--cc-ease), background-color var(--cc-dur-fast) var(--cc-ease); }
+.sub-teacher:hover { border-color: var(--cc-border-strong); background: var(--cc-row-hover); }
+.sub-teacher input { position: absolute; opacity: 0; pointer-events: none; }
+.sub-teacher:has(input:checked) { border-color: var(--cc-brand); background: var(--cc-brand-tint); }
+.sub-teacher:has(input:focus-visible) { box-shadow: var(--cc-shadow-focus); }
+.sub-teacher .cc-avatar { flex: none; }
+.sub-teacher__text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sub-teacher__name { font-weight: 600; font-size: var(--cc-fs-sm); overflow-wrap: anywhere; }
+.sub-teacher__meta { font-size: 12px; color: var(--cc-text-muted); }
+.sub-teacher__mark { color: var(--cc-brand); opacity: 0; flex: none; }
+.sub-teacher:has(input:checked) .sub-teacher__mark { opacity: 1; }
+.sub-quick { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sub-step1__foot { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ----------------------------- Оформление: шаг 2 ----------------------------- */
+.sub-bulk { display: flex; flex-wrap: wrap; gap: 6px; }
+.sub-lessons .cc-card__head { flex-wrap: wrap; gap: 8px 16px; }
+.sub-form-day { border-top: 1px solid var(--cc-border); }
+.sub-form-day:first-child { border-top: 0; }
+.sub-form-day__title { margin: 0; padding: 10px 16px; font-size: var(--cc-fs-base); font-weight: 700; background: var(--cc-surface-2); display: flex; gap: 10px; align-items: baseline; }
+.sub-form-day__n { font-size: 12px; font-weight: 500; color: var(--cc-text-muted); }
+.sub-lesson { display: grid; grid-template-columns: 28px 112px minmax(0, 1fr) minmax(220px, 300px); gap: 8px 14px; align-items: start; padding: 12px 16px; border-top: 1px solid var(--cc-border); }
+.sub-form-day .sub-lesson:first-of-type { border-top: 0; }
+.sub-lesson--single { grid-template-columns: 112px minmax(0, 1fr) minmax(220px, 320px); border-top: 0; padding: 0; }
+.sub-lesson__check { padding-top: 2px; margin: 0; }
+.sub-lesson__time { font-variant-numeric: tabular-nums; font-weight: 700; padding-top: 2px; white-space: nowrap; }
+.sub-lesson__where { color: var(--cc-text-muted); font-size: var(--cc-fs-sm); }
+.sub-lesson.is-off .sub-lesson__time, .sub-lesson.is-off .sub-lesson__body { opacity: .5; }
+.sub-lesson.is-taken { background: var(--cc-surface-2); }
+.sub-lesson.is-taken .sub-lesson__time, .sub-lesson.is-taken .sub-lesson__body { opacity: .7; }
+.sub-choose { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; background: var(--cc-surface); border: 1px solid var(--cc-border-strong); border-radius: var(--cc-radius-sm); color: var(--cc-text); font-weight: 600; font-size: var(--cc-fs-sm); }
+.sub-choose:hover { border-color: var(--cc-brand); color: var(--cc-text); }
+.sub-choose:disabled { opacity: .5; }
+.sub-choose__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-choose.is-open { border-style: dashed; color: var(--cc-text-muted); }
+.sub-choose.is-assigned { border-color: var(--cc-success); background: var(--cc-success-soft); color: var(--cc-success-fg); }
+.sub-choose.is-cancelled { background: var(--cc-surface-2); color: var(--cc-text-muted); }
+.sub-choose.is-warn { border-color: var(--cc-danger); background: var(--cc-danger-soft); color: var(--cc-danger-fg); }
+.sub-lesson__hint { margin: 4px 2px 0; font-size: 12px; color: var(--cc-text-muted); }
+.sub-lesson__hint.is-bad { color: var(--cc-danger-fg); font-weight: 600; }
+.sub-lesson__error { margin: 4px 2px 0; font-size: 12px; color: var(--cc-danger-fg); font-weight: 600; }
+.sub-taken { display: inline-flex; align-items: center; gap: 6px; font-size: var(--cc-fs-sm); font-weight: 600; color: var(--cc-success-fg); text-decoration: none; }
+.sub-taken:hover { text-decoration: underline; }
+
+/* ----------------------------- Окно выбора преподавателя ----------------------------- */
+.sub-picker .modal-dialog { max-width: 640px; }
+.sub-picker__lesson { margin: 2px 0 0; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+.sub-picker__quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.sub-picker__search { margin-bottom: 14px; }
+.sub-picker__h { margin: 0 0 8px; font-size: var(--cc-fs-base); font-weight: 700; }
+.sub-picker__n { font-weight: 500; color: var(--cc-text-muted); }
+.sub-picker__list { display: flex; flex-direction: column; gap: 6px; }
+.sub-picker__empty { padding: 8px 2px; }
+.sub-picker__busy { margin-top: 16px; }
+.sub-picker__busy > summary { cursor: pointer; font-weight: 700; font-size: var(--cc-fs-base); list-style: none; display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+.sub-picker__busy > summary::-webkit-details-marker { display: none; }
+.sub-picker__busy > summary .bi { margin-left: auto; transition: transform var(--cc-dur-fast) var(--cc-ease); }
+.sub-picker__busy[open] > summary .bi { transform: rotate(180deg); }
+.sub-picker__warn { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 10px; padding: 8px 10px; border-radius: var(--cc-radius-sm); background: var(--cc-warning-soft); color: var(--cc-warning-fg); font-size: 12.5px; }
+.sub-cand { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); background: var(--cc-surface); color: var(--cc-text); cursor: pointer; transition: border-color var(--cc-dur-fast) var(--cc-ease), background-color var(--cc-dur-fast) var(--cc-ease); }
+.sub-cand:hover { border-color: var(--cc-brand); background: var(--cc-brand-tint); }
+.sub-cand:focus-visible { outline: none; box-shadow: var(--cc-shadow-focus); }
+.sub-cand.is-selected { border-color: var(--cc-success); background: var(--cc-success-soft); }
+.sub-cand.is-busy { background: var(--cc-surface-2); }
+.sub-cand.is-busy:hover { border-color: var(--cc-danger-border); background: var(--cc-danger-soft); }
+.sub-cand .cc-avatar { flex: none; }
+.sub-cand__main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.sub-cand__top { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.sub-cand__name { font-weight: 600; font-size: var(--cc-fs-sm); }
+.sub-cand__chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.sub-cand__note { font-size: 12px; color: var(--cc-text-muted); }
+.sub-cand__note.is-bad { color: var(--cc-danger-fg); }
+.sub-cand__tick { color: var(--cc-success); opacity: 0; align-self: center; }
+.sub-cand.is-selected .sub-cand__tick { opacity: 1; }
+.sub-chip { display: inline-block; padding: 1px 8px; border-radius: var(--cc-radius-pill); font-size: 11.5px; font-weight: 600; background: var(--cc-surface-3); color: var(--cc-text-muted); white-space: nowrap; }
+.sub-chip--subject { background: var(--cc-success-soft); color: var(--cc-success-fg); }
+.sub-chip--group { background: var(--cc-info-soft); color: var(--cc-info-fg); }
+.sub-chip--adjacent { background: var(--cc-teal-soft); color: var(--cc-text); }
+.sub-chip--best { background: var(--cc-brand-tint); color: var(--cc-brand-ink); }
+.sub-chip--load { background: var(--cc-warning-soft); color: var(--cc-warning-fg); }
+
+/* ----------------------------- Листок замен на день ----------------------------- */
+.sub-printbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.sub-printbar .form-control { width: auto; }
+.sub-sheet__c-time { width: 33mm; }
+.sub-sheet__c-group { width: 28mm; }
+.sub-sheet__c-room { width: 24mm; }
+.sub-sheet__c-who { width: 56mm; }
+.sub-sheet__table thead th:last-child { text-align: left; }
+:is(.sch-sheet--dense, .sch-sheet--tight, .sch-sheet--ultra) .sub-sheet__c-time { width: 28mm; }
+.sub-sheet__table .sub-sheet__group { font-weight: 700; white-space: nowrap; }
+.sub-sheet__table .sub-sheet__who { display: table-cell; font-size: inherit; color: inherit; margin: 0; }
+.sub-sheet__to { display: block; font-weight: 800; }
+.sub-sheet__to--open { font-weight: 700; font-style: italic; color: #5B6370; }
+.sub-sheet__who .sch-sheet__who { display: block; }
+
+/* ----------------------------- Телефон ----------------------------- */
+@media (max-width: 767.98px) {
+  .sub-item { grid-template-columns: minmax(0, 1fr) auto; padding: 12px; }
+  .sub-item__time { grid-column: 1 / -1; font-size: var(--cc-fs-sm); color: var(--cc-text-muted); }
+  .sub-item__actions { align-self: start; }
+  .sub-item__who { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .sub-item__arrow { transform: rotate(90deg); margin-left: 9px; }
+  .sub-lesson { grid-template-columns: 28px minmax(0, 1fr); padding: 12px; }
+  .sub-lesson__body { grid-column: 2; }
+  .sub-lesson__assign { grid-column: 1 / -1; }
+  .sub-lesson__time { grid-column: 2; }
+  .sub-lesson--single { grid-template-columns: minmax(0, 1fr); }
+  .sub-lesson--single .sub-lesson__time, .sub-lesson--single .sub-lesson__body, .sub-lesson--single .sub-lesson__assign { grid-column: 1; }
+  .sub-day__head, .sub-form-day__title { padding-left: 12px; padding-right: 12px; }
+  .sub-lessons .cc-card__head { flex-direction: column; align-items: stretch; }
+  .sub-bulk .btn { flex: 1 1 auto; }
+  .sub-reasons li { grid-template-columns: minmax(90px, 40%) minmax(0, 1fr) 28px; }
+  .sub-picker .modal-dialog { margin: 0; max-width: none; min-height: 100%; align-items: flex-end; }
+}

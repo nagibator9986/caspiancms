@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{# Одна замена (владелец — SCHEDULE): кто заменяет, причина, комментарий. Данные: routes_substitutions.substitution_edit. #}
+{% block title %}Замена · {{ s.subject }}{% endblock %}
+{% block styles %}{{ ui.css('substitutions') }}{% endblock %}
+{% block scripts %}{{ ui.js('substitutions') }}{% endblock %}
+
+{% block content %}
+{% set back = url_for('substitutions', **{'range': 'custom', 'from': s.date_str, 'to': s.date_str}) %}
+{% set st_tone = {'open': 'warning', 'assigned': 'success', 'cancelled': 'neutral'}[s.status] %}
+{% set st_icon = {'open': 'hourglass-split', 'assigned': 'person-check', 'cancelled': 'x-circle'}[s.status] %}
+{% call ui.page_header('Замена: ' ~ s.subject, subtitle=day_label(s.date, today) ~ ' · ' ~ s.time_label ~ ' · ' ~ s.group,
+                       back={'href': back, 'label': 'Замены'}, meta=ui.badge('x', s.status_label, st_tone, st_icon)) %}{% endcall %}
+{% if errors %}{{ ui.form_errors(errors) }}{% endif %}
+
+<div class="cc-form-layout">
+<div class="cc-stack">
+<form id="subForm" method="post" action="{{ url_for('substitution_edit', sid=s.id) }}" novalidate data-dirty-guard data-sub-form>
+    {{ ui.csrf_field() }}
+    {% call ui.card('Кто заменит', icon='person-check', subtitle='Вверху списка — преподаватели, свободные в это время') %}
+        <div class="sub-lesson sub-lesson--single" data-sub-row="{{ s.id }}">
+            <div class="sub-lesson__time">{{ s.time_label or '—' }}</div>
+            <div class="sub-lesson__body">
+                <div class="sub-lesson__title"><b>{{ s.subject or 'Без названия' }}</b>{% if s.week in ('numerator', 'denominator') %} {{ ui.week_badge(s.week, short=True) }}{% endif %}</div>
+                <div class="sub-lesson__where">{{ s.group }}{% if s.room %} · ауд. {{ s.room }}{% endif %} · вместо <b>{{ s.from_name }}</b></div>
+            </div>
+            <div class="sub-lesson__assign">
+                <input type="hidden" name="to" value="{{ values.to or 'open' }}" data-sub-to>
+                <button type="button" class="btn sub-choose" data-sub-choose="{{ s.id }}" aria-haspopup="dialog">
+                    <span class="sub-choose__label" data-sub-label>Подобрать замену</span><i class="bi bi-chevron-expand" aria-hidden="true"></i>
+                </button>
+                <p class="sub-lesson__hint" data-sub-hint></p>
+                {% if errors.get('to') %}<p class="sub-lesson__error">{{ errors.get('to') }}</p>{% endif %}
+            </div>
+        </div>
+        {% if s.conflict %}{{ ui.hint('Сейчас назначено с накладкой: ' ~ s.conflict ~ '.', icon='exclamation-triangle', tone='warning') }}{% endif %}
+    {% endcall %}
+
+    {% call ui.card('Причина') %}
+        <div class="row g-3">
+            <div class="col-md-5">{{ ui.field('reason', 'Причина замены', 'select', value=values.reason, options=reasons, placeholder='Не указана', error=errors.get('reason'), classes='mb-0') }}</div>
+            <div class="col-md-7">{{ ui.field('note', 'Комментарий', 'text', value=values.note, attrs={'maxlength': 300}, classes='mb-0') }}</div>
+            <div class="col-12">{{ ui.field('notify', 'Сообщить об изменении группе и преподавателям (push)', 'switch', value=values.notify,
+                help='Уходит, только если изменился преподаватель или статус пары и дата — сегодня или позже.' ~ (' Уведомление по этой паре уже отправлялось.' if s.notified else ''), classes='mb-0') }}</div>
+        </div>
+    {% endcall %}
+    {{ ui.savebar('Сохранить', cancel_href=back, danger={'action': url_for('substitution_delete', sid=s.id), 'label': 'Удалить замену', 'ok': 'Удалить',
+                  'confirm': 'Удалить замену? Пара вернётся к основному преподавателю (' ~ s.from_name ~ ').'}) }}
+</form>
+</div>
+<aside class="cc-stack">
+    {% call ui.card('О замене', icon='info-circle') %}
+        {{ ui.kv([
+            ('Дата', day_label(s.date, today)),
+            ('Время', s.time_label),
+            ('Группа', s.group),
+            ('Дисциплина', s.subject),
+            ('Аудитория', s.room),
+            ('Неделя', week_labels.get(s.week, '')),
+            ('Кого заменяют', s.from_name),
+            ('Оформил', s.created_by),
+            ('Оформлено', s.created_at.strftime('%d.%m.%Y %H:%M') if s.created_at else ''),
+        ]) }}
+    {% endcall %}
+</aside>
+</div>
+{% include 'substitutions/_picker.html' %}
+{% endblock %}

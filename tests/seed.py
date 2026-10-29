@@ -682,6 +682,50 @@ def seed_content(b, students):
 
 # ==================== ВСЁ ВМЕСТЕ ====================
 
+# ==================== ЗАМЕНЫ ====================
+
+# (id занятия из seed_schedule, статус, кто заменяет, причина, комментарий, сдвиг в днях от ближайшей даты этого дня недели).
+# Пары берутся из «особых» занятий вне плотной базовой сетки — у заменяющих в это время действительно есть окно.
+SUBSTITUTION_DEMO = (
+    ('cf_petrov_a', 'assigned', 't_li', 'sick', 'Больничный лист до пятницы', 0),
+    ('cf_petrov_b', 'cancelled', None, 'sick', '', 0),
+    ('cf_akhm_a', 'assigned', 't_smirnova', 'trip', 'Семинар в Астане', 0),
+    ('cf_akhm_b', 'open', None, 'trip', '', 0),
+    ('cf_seit_always', 'open', None, 'family', 'Звонила утром, ищем замену', 0),
+    ('cf_petrov_a', 'assigned', 't_li', 'sick', '', -7),
+    ('cf_akhm_a', 'assigned', 't_li', 'training', 'Курсы повышения квалификации', -7),
+)
+
+
+def seed_substitutions(today=None):
+    """Замены для демо и тестов списка: документ `substitutions/<дата>_<id занятия>`, см. cms/substitution_model.py."""
+    from datetime import timedelta
+    from cms.schedule_model import lesson_weekday, parse_time_range
+    base = (today or core.today_almaty()) + timedelta(days=1)
+    coll = core.db.collection('substitutions')
+    b = core.db.batch()
+    ids = []
+    for lid, status, to, reason, note, shift in SUBSTITUTION_DEMO:
+        snap = core.db.collection('schedules').document(lid).get()
+        if not snap.exists:
+            continue
+        l = snap.to_dict()
+        day = next_weekday_date(lesson_weekday(l), base) + timedelta(days=shift)
+        start, end = parse_time_range(l['time'])
+        data = {'date': day.isoformat(), 'lessonId': lid, 'groupId': l['groupId'], 'subject': l['subject'],
+                'room': l['room'], 'week': l.get('week_type') or 'always', 'time': l['time'], 'start': start, 'end': end,
+                'fromKey': 'uid:' + l['teacher'], 'fromUid': l['teacher'], 'fromName': TEACHERS[l['teacher']][0],
+                'status': status, 'reason': reason, 'note': note, 'batchId': 'demo_' + l['teacher'], 'conflict': '',
+                'createdAt': _ago(2), 'createdBy': ADMIN['email'], 'notified': status != 'open'}
+        if to:
+            data.update(toUid=to, toName=TEACHERS[to][0])
+        sid = '%s_%s' % (day.isoformat(), lid)
+        b.set(coll.document(sid), data)
+        ids.append(sid)
+    b.commit()
+    return ids
+
+
 def seed_all(today=None):
     """Засеять эмулятор. → dict с ключевыми id (см. SEED_IDS)."""
     core._init_firebase()
@@ -693,6 +737,7 @@ def seed_all(today=None):
     seed_admissions(b)
     seed_content(b, students)
     b.commit()
+    substitutions = seed_substitutions(today)
     core.cache.invalidate()
     return {
         'admin': ADMIN, 'teacher_account': TEACHER_ACCOUNT, 'applicant_account': APPLICANT_ACCOUNT,
@@ -706,7 +751,7 @@ def seed_all(today=None):
         'applicant_news': ['an_0', 'an_1', 'an_2'], 'polls': ['poll_canteen', 'poll_club'],
         'events': ['ev_openday', 'ev_sport'], 'clubs': ['club_robotics', 'club_debate'], 'old_products': ['p_book', 'p_badge'],
         'feedback': ['fb_%d' % k for k in range(5)], 'management': ['mg_%d' % k for k in range(4)],
-        'lesson_sample': 'base_00_1_0',
+        'lesson_sample': 'base_00_1_0', 'substitutions': substitutions,
     }
 
 

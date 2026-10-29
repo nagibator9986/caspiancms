@@ -1568,6 +1568,7 @@ NAV_SECTIONS = [
     ('Расписание', 'calendar-week', [
         ('schedule', 'По группам', 'collection', 'расписание группы неделя'),
         ('schedule_teachers', 'По преподавателям', 'person-workspace', 'расписание преподаватели нагрузка'),
+        ('substitutions', 'Замены', 'arrow-left-right', 'замены замена заменить заменяет преподаватель болезнь отсутствует свободные преподаватели'),
         ('schedule_all', 'Единая таблица', 'table', 'расписание все группы таблица сетка'),
         ('schedule_conflicts', 'Накладки', 'exclamation-diamond', 'накладки конфликты пересечения'),
         ('schedule_rooms', 'Аудитории', 'door-open', 'аудитории кабинеты фонд свободные загрузка'),
@@ -1614,6 +1615,8 @@ NAV_COLLAPSED = frozenset({'Абитуриенты', 'Caspian Coin'})
 NAV_EXTRA = [
     ('schedule_builder', 'Добавить занятие (конструктор)', 'plus-square', 'конструктор добавить занятие пару', 'Расписание'),
     ('schedule_free_rooms', 'Свободные аудитории', 'door-closed', 'свободные аудитории кабинеты сейчас', 'Расписание'),
+    ('substitution_new', 'Оформить замену', 'plus-square', 'создать оформить замену заменить преподавателя болезнь свободные преподаватели', 'Расписание'),
+    ('substitutions_print', 'Листок замен на день', 'printer', 'печать листок замен на день доска объявлений', 'Расписание'),
     ('news_form', 'Новая новость', 'plus-lg', 'создать добавить новость', 'Команды'),
     ('poll_form', 'Новый опрос', 'plus-lg', 'создать добавить опрос', 'Команды'),
     ('event_form', 'Новое событие', 'plus-lg', 'создать добавить событие', 'Команды'),
@@ -1626,6 +1629,7 @@ NAV_EXTRA = [
 NAV_PARENT = {
     'schedule_edit': 'schedule', 'schedule_edit_group': 'schedule', 'schedule_builder': 'schedule',
     'schedule_print': 'schedule', 'schedule_free_rooms': 'schedule_rooms',
+    'substitution_new': 'substitutions', 'substitution_edit': 'substitutions', 'substitutions_print': 'substitutions',
     'news_form': 'news', 'poll_form': 'polls', 'poll_results': 'polls',
     'event_form': 'events', 'event_registrations': 'events', 'club_form': 'clubs', 'club_registrations': 'clubs',
     'product_form': 'products',
@@ -1638,12 +1642,13 @@ NAV_PARENT = {
 }
 
 # Тон бейджа пункта: danger — требует действия сегодня, brand — ждёт ответа, остальные — приглушённые (muted).
-NAV_BADGE_TONES = {'schedule_conflicts': 'danger', 'feedback_list': 'brand'}
+NAV_BADGE_TONES = {'schedule_conflicts': 'danger', 'feedback_list': 'brand', 'substitutions': 'brand'}
 _TONE_RANK = {'danger': 3, 'brand': 2, 'muted': 1}
 
 # Пункты быстрого создания (кнопка «+» в топбаре): (endpoint, подпись, иконка).
 NAV_CREATE = [
     ('schedule_builder', 'Занятие', 'calendar-plus'),
+    ('substitution_new', 'Замена', 'arrow-left-right'),
     ('news_form', 'Новость', 'newspaper'),
     ('poll_form', 'Опрос', 'ui-checks'),
     ('event_form', 'Событие', 'calendar-event'),

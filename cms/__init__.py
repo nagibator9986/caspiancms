@@ -21,6 +21,7 @@ MODULES = [
     'routes_content',     # новости, опросы, события, клубы, товары, обратная связь (CONTENT)
     'routes_schedule',    # расписание (SCHEDULE)
     'routes_rooms',       # аудиторный фонд, накладки, свободные аудитории (CONFLICTS)
+    'routes_substitutions',  # замены преподавателей: кто кого заменяет, статистика, свободные (SCHEDULE; после routes_schedule)
     'routes_applicants',  # абитуриенты: аналитика, лиды, карточка, QR-источники (APPLICANTS)
     'routes_public',      # публичная регистрация /join (APPLICANTS)
     'routes_coins',       # магазин коинов, заказы, кампании, журнал (COINS)

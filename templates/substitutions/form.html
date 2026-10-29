@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{# Оформление замен (владелец — SCHEDULE). Шаг 1 — кто отсутствует и в какие дни; шаг 2 — отметить пары и выбрать,
+   кто заменит (список свободных преподавателей по каждой паре). Данные: routes_substitutions.substitution_new. #}
+{% block title %}Оформить замену{% endblock %}
+{% block styles %}{{ ui.css('substitutions') }}{% endblock %}
+{% block scripts %}{{ ui.js('substitutions') }}{% endblock %}
+
+{% block content %}
+{% if not step2 %}
+{# ============================== ШАГ 1: КТО И КОГДА ============================== #}
+{% call ui.page_header('Оформить замену', subtitle='Выберите преподавателя и дни — дальше отметите пары и подберёте замену', back={'href': url_for('substitutions'), 'label': 'Замены'}) %}{% endcall %}
+{% if error %}{{ ui.hint(error, icon='exclamation-triangle', tone='warning') }}{% endif %}
+<form method="get" action="{{ url_for('substitution_new') }}" class="sub-step1" novalidate>
+    <div class="cc-card">
+        <div class="cc-card__head"><div class="min-w-0"><h2 class="cc-card__title"><span class="sub-step">1</span>Кого заменяем</h2>
+            <p class="cc-card__sub">Преподаватель, который не сможет провести свои пары</p></div></div>
+        <div class="cc-card__body">
+            <div class="cc-search sub-teachers__search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="form-control" type="search" placeholder="Найти преподавателя по ФИО" aria-label="Найти преподавателя" autocomplete="off" data-cc-filter="#subTeachers" autofocus>
+            </div>
+            <div class="sub-teachers" id="subTeachers" role="radiogroup" aria-label="Преподаватель">
+                {% for t in teachers %}
+                <label class="sub-teacher" data-search="{{ t.name }}">
+                    <input type="radio" name="teacher" value="{{ t.key }}" {{ 'checked' if t.key == teacher_key }} required>
+                    {{ ui.avatar(t.name) }}
+                    <span class="sub-teacher__text"><span class="sub-teacher__name">{{ t.name }}</span>
+                        <span class="sub-teacher__meta">{{ t.lessons }} {{ t.lessons|plural('занятие', 'занятия', 'занятий') }} в расписании</span></span>
+                    <i class="bi bi-check-circle-fill sub-teacher__mark" aria-hidden="true"></i>
+                </label>
+                {% endfor %}
+                <p class="sub-muted" data-cc-filter-empty hidden>Никого не нашли — проверьте написание.</p>
+            </div>
+        </div>
+    </div>
+    <div class="cc-card">
+        <div class="cc-card__head"><div class="min-w-0"><h2 class="cc-card__title"><span class="sub-step">2</span>На какие дни</h2>
+            <p class="cc-card__sub">Один день или несколько подряд (до {{ max_days }} дней) — например, на время больничного</p></div></div>
+        <div class="cc-card__body">
+            <div class="row g-3 align-items-end">
+                <div class="col-sm-4">{{ ui.field('from', 'С', 'date', value=from_value, required=True, classes='mb-0', attrs={'data-sub-from': ''}) }}</div>
+                <div class="col-sm-4">{{ ui.field('to', 'По (если несколько дней)', 'date', value=to_value, classes='mb-0', attrs={'data-sub-to': ''}) }}</div>
+                <div class="col-sm-4 sub-quick">
+                    <button type="button" class="cc-chip" data-sub-date="{{ quick_dates.today }}">Сегодня</button>
+                    <button type="button" class="cc-chip" data-sub-date="{{ quick_dates.tomorrow }}">Завтра</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="sub-step1__foot">
+        <a class="btn btn-light" href="{{ url_for('substitutions') }}">Отмена</a>
+        <button type="submit" class="btn btn-primary"><span>Показать пары</span><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+    </div>
+</form>
+
+{% else %}
+{# ============================== ШАГ 2: ПАРЫ И ЗАМЕНА ============================== #}
+{% set back_args = {'teacher': teacher_key, 'from': d_from.isoformat(), 'to': (d_to.isoformat() if d_to != d_from else None)} %}
+{% set period = d_from.strftime('%d.%m.%Y') ~ (' — ' ~ d_to.strftime('%d.%m.%Y') if d_to != d_from else '') %}
+{% call ui.page_header('Замена: ' ~ teacher_name, subtitle=period ~ ' · отметьте пары и выберите, кто их проведёт', back={'href': url_for('substitution_new', **back_args), 'label': 'Другой преподаватель или даты'}) %}{% endcall %}
+{% set sl = [(total_lessons, total_lessons|plural('пара', 'пары', 'пар') ~ ' в эти дни')] %}
+{% if total_lessons != free_count %}{% set _ = sl.append({'value': total_lessons - free_count, 'label': 'уже оформлено', 'tone': 'success'}) %}{% endif %}
+{{ ui.summary_line(sl) }}
+{% if errors %}{{ ui.form_errors(errors) }}{% endif %}
+
+{% if not free_count %}
+    {{ ui.empty_state('calendar-x', 'Заменять нечего' if total_lessons else 'В эти дни у преподавателя нет пар',
+        'Все пары в выбранные дни уже оформлены — их можно изменить в списке замен.' if total_lessons else 'Проверьте даты: пары могут приходиться на другую неделю (числитель/знаменатель) или на выходной.',
+        {'label': 'Другие даты', 'href': url_for('substitution_new', teacher=teacher_key), 'icon': 'calendar-event'}) }}
+{% else %}
+<form id="subForm" method="post" action="{{ url_for('substitution_new') }}" novalidate data-sub-form>
+    {{ ui.csrf_field() }}
+    <input type="hidden" name="teacher" value="{{ teacher_key }}">
+    <input type="hidden" name="from" value="{{ d_from.isoformat() }}">
+    <input type="hidden" name="to" value="{{ d_to.isoformat() if d_to != d_from else '' }}">
+
+    <div class="cc-card sub-lessons">
+        <div class="cc-card__head">
+            <div class="min-w-0"><h2 class="cc-card__title"><span class="sub-step">1</span>Какие пары заменить</h2>
+                <p class="cc-card__sub">Для каждой пары выберите преподавателя — вверху списка те, кто свободен в это время</p></div>
+            <div class="sub-bulk">
+                <button type="button" class="btn btn-light btn-sm" data-sub-all="1">Выбрать все</button>
+                <button type="button" class="btn btn-light btn-sm" data-sub-all="0">Снять выбор</button>
+                <button type="button" class="btn btn-outline-primary btn-sm" data-sub-bulk><i class="bi bi-people" aria-hidden="true"></i> Один преподаватель на выбранные…</button>
+            </div>
+        </div>
+        <div class="cc-card__body--flush">
+        {% for day in days %}
+            <section class="sub-form-day">
+                <h3 class="sub-form-day__title">{{ day.label }}<span class="sub-form-day__n">{{ day.rows|length }} {{ day.rows|length|plural('пара', 'пары', 'пар') }}</span></h3>
+                {% if not day.rows %}<p class="sub-muted sub-pad">В этот день у преподавателя пар нет{% if day.date.weekday() == 6 %} (воскресенье){% endif %}.</p>{% endif %}
+                {% for row in day.rows %}
+                {% set l = row.lesson %}
+                {% set k = row.key %}
+                <div class="sub-lesson{{ ' is-taken' if row.taken }}" data-sub-row="{{ k }}">
+                    <label class="sub-lesson__check" aria-label="Заменить пару {{ l.subject }} {{ l.time_label }}">
+                        <input class="form-check-input" type="checkbox" name="pick" value="{{ k }}" data-sub-pick {{ 'checked' if k in values.picks and not row.taken }} {{ 'disabled' if row.taken }}>
+                    </label>
+                    <div class="sub-lesson__time">{{ l.time_label or l.time or '—' }}</div>
+                    <div class="sub-lesson__body">
+                        <div class="sub-lesson__title"><b>{{ l.subject or 'Без названия' }}</b>{% if l.week in ('numerator', 'denominator') %} {{ ui.week_badge(l.week, short=True) }}{% endif %}</div>
+                        <div class="sub-lesson__where">{{ l.groupId }}{% if l.room %} · ауд. {{ l.room }}{% endif %}{% if not l.time_ok %} · <span class="sub-text-warn">время не распознано — занятость не проверить</span>{% endif %}</div>
+                    </div>
+                    <div class="sub-lesson__assign">
+                        {% if row.taken %}
+                            <a class="sub-taken" href="{{ url_for('substitution_edit', sid=row.taken.id) }}" title="Открыть замену">
+                                <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                                {% if row.taken.status == 'assigned' %}Уже заменяет: {{ short(row.taken.to_name) }}{% elif row.taken.status == 'cancelled' %}Пара снята{% else %}Уже оформлена: ищем замену{% endif %}
+                            </a>
+                        {% else %}
+                            <input type="hidden" name="to__{{ k }}" value="{{ values.to.get(k) or 'open' }}" data-sub-to>
+                            <button type="button" class="btn sub-choose" data-sub-choose="{{ k }}" aria-haspopup="dialog">
+                                <span class="sub-choose__label" data-sub-label>Подобрать замену</span><i class="bi bi-chevron-expand" aria-hidden="true"></i>
+                            </button>
+                            <p class="sub-lesson__hint" data-sub-hint></p>
+                            {% if errors.get('to__' ~ k) %}<p class="sub-lesson__error">{{ errors.get('to__' ~ k) }}</p>{% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </section>
+        {% endfor %}
+        </div>
+    </div>
+
+    <div class="cc-card">
+        <div class="cc-card__head"><div class="min-w-0"><h2 class="cc-card__title"><span class="sub-step">2</span>Причина и уведомление</h2></div></div>
+        <div class="cc-card__body">
+            <div class="row g-3">
+                <div class="col-md-5">{{ ui.field('reason', 'Причина замены', 'select', value=values.reason, options=reasons, placeholder='Не указана', error=errors.get('reason'), classes='mb-0') }}</div>
+                <div class="col-md-7">{{ ui.field('note', 'Комментарий', 'text', value=values.note, placeholder='Например: больничный лист с 12.11, вернётся 15.11', attrs={'maxlength': 300}, classes='mb-0') }}</div>
+                <div class="col-12">{{ ui.field('notify', 'Отправить уведомление группам и преподавателям (push)', 'switch', value=values.notify, help='Группе — какая пара и кто её проведёт; заменяющему — когда и у кого. Только на сегодняшний день и позже; пары «ищем замену» не рассылаются.', classes='mb-0') }}</div>
+            </div>
+        </div>
+    </div>
+    {{ ui.savebar('Оформить замены', cancel_href=url_for('substitutions'), note='Расписание не меняется — замена действует только в выбранные даты') }}
+</form>
+{% include 'substitutions/_picker.html' %}
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,192 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{# Замены (владелец — SCHEDULE): список по дням и вкладка «Статистика» (кто сколько заменил).
+   Данные: routes_substitutions.substitutions. Одна карточка = одна пара в один день: кого заменяют → кто заменяет. #}
+{% block title %}Замены{% endblock %}
+{% block styles %}{{ ui.css('substitutions') }}{% endblock %}
+{% block scripts %}{{ ui.js('substitutions') }}{% endblock %}
+
+{% macro person(name, tone='') -%}
+<span class="sub-person{{ ' sub-person--' ~ tone if tone }}">{{ ui.avatar(name, size='sm') }}<span class="sub-person__name">{{ name or '—' }}</span></span>
+{%- endmacro %}
+
+{% block content %}
+{% set menu = [
+    {'label': 'Листок замен на день', 'href': url_for('substitutions_print'), 'icon': 'printer'},
+    {'label': 'Экспорт в CSV', 'href': url_for('substitutions_export', **export_args), 'icon': 'download'},
+] %}
+{% call ui.page_header('Замены', subtitle='Кто кого заменяет, какие пары и почему — система подскажет свободных преподавателей') %}
+    {{ ui.header_menu(menu) }}
+    {{ ui.button('Оформить замену', href=url_for('substitution_new'), icon='plus-lg', attrs={'data-cc-hotkey': 'n'}) }}
+{% endcall %}
+
+{% set open_total = by_status.open %}
+{{ ui.stat_strip([
+    {'label': 'Замен: ' ~ range_label|lower, 'value': stats.count, 'icon': 'arrow-left-right'},
+    {'label': 'Ждут замены', 'value': stats.open, 'icon': 'hourglass-split', 'tone': 'warning' if stats.open else None,
+     'href': url_with(status='open', tab=None) if stats.open else None, 'meta': 'ещё не назначен преподаватель' if stats.open else 'всё закрыто'},
+    {'label': 'Заменено', 'value': stats.assigned, 'icon': 'person-check', 'meta': duration(stats.minutes) if stats.minutes else None},
+    {'label': 'Пар снято', 'value': stats.cancelled, 'icon': 'x-circle'},
+]) }}
+
+{{ ui.tabs([
+    {'key': 'list', 'label': 'Замены', 'icon': 'list-ul', 'href': url_with(tab=None), 'count': subs|length},
+    {'key': 'stats', 'label': 'Статистика', 'icon': 'bar-chart', 'href': url_with(tab='stats')},
+], tab, label='Замены и статистика') }}
+
+{% call ui.filters_bar(inline=True, ignore=('tab',), id='subFilters') %}
+    {{ ui.filter_select('range', 'Период', ranges, f.range, all_label=None) }}
+    {% if f.range == 'custom' %}
+    {{ ui.filter_input('from', 'С', f['from'].isoformat() if f['from'] else '', type='date') }}
+    {{ ui.filter_input('to', 'По', f['to'].isoformat() if f['to'] else '', type='date') }}
+    {% endif %}
+    {{ ui.filter_select('teacher', 'Преподаватель', teacher_options, f.teacher) }}
+    {{ ui.filter_select('group', 'Группа', group_options, f.group) }}
+    {{ ui.filter_select('status', 'Статус', status_options, f.status) }}
+    {{ ui.filter_select('reason', 'Причина', reason_options, f.reason) }}
+{% endcall %}
+
+{% if truncated %}
+{{ ui.hint('Показаны не все замены: период слишком большой. Сузьте период или фильтры.', icon='exclamation-triangle', tone='warning') }}
+{% endif %}
+
+{% if teacher_card %}
+{% set c = teacher_card %}
+<div class="sub-teachercard">
+    {{ ui.avatar(c.name, size='lg') }}
+    <div class="sub-teachercard__body">
+        <h2 class="sub-teachercard__name">{{ c.name }}</h2>
+        <p class="sub-teachercard__facts">
+            <span><b>{{ c.replaced_n }}</b> {{ c.replaced_n|plural('пара', 'пары', 'пар') }} заменил{% if c.replaced_min %} · {{ duration(c.replaced_min) }}{% endif %}</span>
+            <span><b>{{ c.was_replaced_n }}</b> {{ c.was_replaced_n|plural('пару', 'пары', 'пар') }} заменяли ему{% if c.was_replaced_min %} · {{ duration(c.was_replaced_min) }}{% endif %}</span>
+        </p>
+    </div>
+    <a class="btn btn-light btn-sm" href="{{ url_for('substitution_new', teacher=c.key) }}"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>Оформить замену</span></a>
+</div>
+{% endif %}
+
+{% if failed %}
+    {{ ui.empty_state('cloud-slash', 'Замены недоступны', 'Не удалось связаться с базой данных. Обновите страницу через минуту.') }}
+{% elif tab == 'stats' %}
+{# ============================== СТАТИСТИКА ============================== #}
+    {% if not stats.count %}
+        {% if total_all %}{{ ui.empty_filtered(url_for('substitutions', tab='stats')) }}
+        {% else %}{{ ui.empty_state('bar-chart', 'Статистики пока нет', 'Она появится, когда будет оформлена первая замена.', {'label': 'Оформить замену', 'href': url_for('substitution_new'), 'icon': 'plus-lg', 'variant': 'primary'}) }}{% endif %}
+    {% else %}
+    <div class="sub-stats">
+        {% call ui.card('Кто сколько заменил', icon='person-check', subtitle='Назначенные замены за период: пары и время в аудитории', flush=True, classes='sub-stats__wide') %}
+        {% if stats.replacers %}
+        <div class="cc-table-wrap"><table class="cc-table cc-table--stack">
+            <thead><tr><th class="sub-rank">№</th><th>Преподаватель</th><th class="text-end">Пар</th><th>Нагрузка</th><th class="text-end">Время</th><th class="text-end">Групп</th><th class="text-end">Дней</th></tr></thead>
+            <tbody>
+            {% for r in stats.replacers %}
+            <tr>
+                <td class="sub-rank cc-cell-empty">{{ loop.index }}</td>
+                <td class="cc-cell-primary"><a class="sub-link" href="{{ url_with(tab=None, teacher='uid:' ~ r.uid) }}">{{ person(r.name) }}</a></td>
+                <td class="text-end" data-label="Пар"><b class="cc-num">{{ r.count }}</b></td>
+                <td class="sub-bar-cell cc-cell-empty">{{ ui.progress_bar(r.count, stats.replacers[0].count, 'brand', r.count ~ ' ' ~ r.count|plural('пара', 'пары', 'пар')) }}</td>
+                <td class="text-end" data-label="Время">{{ duration(r.minutes) }}</td>
+                <td class="text-end" data-label="Групп">{{ r.groups }}</td>
+                <td class="text-end" data-label="Дней">{{ r.days }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        {% else %}
+        <p class="sub-muted sub-pad">Назначенных замен в этом периоде нет.</p>
+        {% endif %}
+        {% endcall %}
+
+        {% call ui.card('Кого заменяли', icon='person-dash', subtitle='Сколько пар пришлось заменить, снять или ещё ищут замену', flush=True) %}
+        <div class="cc-table-wrap"><table class="cc-table cc-table--stack">
+            <thead><tr><th>Преподаватель</th><th class="text-end">Пар</th><th class="text-end">Заменено</th><th class="text-end">Снято</th><th class="text-end">Ищем</th><th class="text-end">Дней</th></tr></thead>
+            <tbody>
+            {% for a in stats.absent %}
+            <tr>
+                <td class="cc-cell-primary"><a class="sub-link" href="{{ url_with(tab=None, teacher=a.key) if a.key else '#' }}">{{ person(a.name) }}</a></td>
+                <td class="text-end" data-label="Пар"><b class="cc-num">{{ a.count }}</b></td>
+                <td class="text-end" data-label="Заменено">{{ a.assigned or '—' }}</td>
+                <td class="text-end" data-label="Снято">{{ a.cancelled or '—' }}</td>
+                <td class="text-end" data-label="Ищем">{% if a.open %}<span class="sub-text-warn">{{ a.open }}</span>{% else %}—{% endif %}</td>
+                <td class="text-end" data-label="Дней">{{ a.days }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        {% endcall %}
+
+        {% call ui.card('Причины', icon='question-circle', subtitle='По числу пар') %}
+        <ul class="sub-reasons">
+            {% for r in stats.reasons %}
+            <li>
+                <span class="sub-reasons__label">{{ r.label }}</span>
+                <span class="sub-reasons__bar">{{ ui.progress_bar(r.count, stats.reasons[0].count, None, r.label ~ ': ' ~ r.count) }}</span>
+                <b class="cc-num sub-reasons__n">{{ r.count }}</b>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endcall %}
+    </div>
+    {% endif %}
+{% else %}
+{# ============================== СПИСОК ПО ДНЯМ ============================== #}
+    {% if not days %}
+        {% if total_all %}{{ ui.empty_filtered(url_for('substitutions')) }}
+        {% elif f.range != 'all' %}{% call ui.empty_state('calendar-check', 'Предстоящих замен нет' if f.range == 'upcoming' else 'В этом периоде замен нет', 'Выберите другой период или оформите новую замену.', {'label': 'Оформить замену', 'href': url_for('substitution_new'), 'icon': 'plus-lg', 'variant': 'primary'}) %}<a class="btn btn-light btn-sm mb-2" href="{{ url_with(range='all', **{'from': None, 'to': None}) }}">Показать за всё время</a>{% endcall %}
+        {% else %}{{ ui.empty_state('arrow-left-right', 'Замен пока нет', 'Оформите замену, когда преподаватель не сможет провести пары: вы отметите нужные пары, а система предложит свободных преподавателей.', {'label': 'Оформить замену', 'href': url_for('substitution_new'), 'icon': 'plus-lg', 'variant': 'primary'}) }}{% endif %}
+    {% else %}
+    <div class="sub-days">
+    {% for d, items in days %}
+    <section class="cc-card sub-day{{ ' is-today' if d == f.today }}" aria-labelledby="subDay{{ loop.index }}">
+        <header class="sub-day__head">
+            <h2 class="sub-day__title" id="subDay{{ loop.index }}">{{ day_label(d, f.today) }}</h2>
+            <span class="sub-day__count">{{ items|length }} {{ items|length|plural('пара', 'пары', 'пар') }}</span>
+            <a class="sub-day__print" href="{{ url_for('substitutions_print', date=d.isoformat()) }}" title="Листок замен на этот день"><i class="bi bi-printer" aria-hidden="true"></i><span>Листок</span></a>
+        </header>
+        <ul class="sub-list">
+        {% for s in items %}
+        {% set edit = url_for('substitution_edit', sid=s.id) %}
+        <li class="sub-item sub-item--{{ s.status }}" data-cc-row>
+            <div class="sub-item__time">{{ s.time_label or '—' }}</div>
+            <div class="sub-item__main">
+                <div class="sub-item__lesson">
+                    <b>{{ s.subject or 'Без названия' }}</b>
+                    {% if s.week in ('numerator', 'denominator') %}{{ ui.week_badge(s.week, short=True) }}{% endif %}
+                    <span class="sub-item__where">{{ s.group }}{% if s.room %} · ауд. {{ s.room }}{% endif %}</span>
+                </div>
+                <div class="sub-item__who">
+                    {{ person(s.from_name, 'from') }}
+                    {% if s.status == 'assigned' %}
+                    <i class="bi bi-arrow-right sub-item__arrow" aria-label="заменяет"></i>{{ person(s.to_name, 'to') }}
+                    {% elif s.status == 'cancelled' %}
+                    <i class="bi bi-arrow-right sub-item__arrow" aria-hidden="true"></i>{{ ui.badge('x', 'Пара снята', 'neutral', 'x-circle') }}
+                    {% else %}
+                    <i class="bi bi-arrow-right sub-item__arrow" aria-hidden="true"></i>{{ ui.badge('x', 'Ищем замену', 'warning', 'hourglass-split') }}
+                    {% endif %}
+                </div>
+                {% if s.reason_label or s.note or s.conflict %}
+                <div class="sub-item__meta">
+                    {% if s.reason_label %}<span class="sub-reason"><i class="bi bi-chat-left-text" aria-hidden="true"></i>{{ s.reason_label }}</span>{% endif %}
+                    {% if s.note %}<span class="sub-note">{{ s.note }}</span>{% endif %}
+                    {% if s.conflict %}<span class="sub-warn" title="{{ s.conflict }}"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>накладка: {{ s.conflict }}</span>{% endif %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="sub-item__actions">
+                {% if s.status == 'open' %}<a class="btn btn-primary btn-sm" href="{{ edit }}"><i class="bi bi-person-plus" aria-hidden="true"></i><span>Подобрать</span></a>{% endif %}
+                {{ ui.row_menu([
+                    {'label': 'Изменить', 'href': edit, 'icon': 'pencil'},
+                    {'divider': True},
+                    {'label': 'Удалить замену', 'action': url_for('substitution_delete', sid=s.id), 'icon': 'trash', 'danger': True,
+                     'confirm': 'Удалить замену «' ~ s.subject ~ '» (' ~ s.group ~ ', ' ~ s.date.strftime('%d.%m') ~ ')? Пара вернётся к основному преподавателю.', 'ok': 'Удалить'},
+                ], quick=None if s.status == 'open' else {'label': 'Изменить', 'href': edit, 'icon': 'pencil'}) }}
+            </div>
+        </li>
+        {% endfor %}
+        </ul>
+    </section>
+    {% endfor %}
+    </div>
+    {% endif %}
+{% endif %}
+{% endblock %}

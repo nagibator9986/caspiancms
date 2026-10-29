@@ -17,6 +17,7 @@
 {# ============================== НЕДЕЛЯ ПРЕПОДАВАТЕЛЯ ============================== #}
 {% set c = single %}
 {% set menu = [
+    {'label': 'Оформить замену…', 'href': url_for('substitution_new', teacher=c.key), 'icon': 'person-plus'},
     {'label': 'Передать занятия другому…', 'href': '#schHandover', 'icon': 'arrow-left-right', 'attrs': {'data-bs-toggle': 'modal', 'data-bs-target': '#schHandover'}},
     {'divider': True},
     {'header': 'Экспорт'},

@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% import '_ui.html' as ui with context %}
+{# Листок замен на день (владелец — SCHEDULE): A4 в том же «фирменном» виде, что бланк расписания — для доски объявлений.
+   Строки: время · группа · дисциплина · аудитория · кто заменяет (и вместо кого). Данные: routes_substitutions.substitutions_print. #}
+{% block title %}Замены на {{ d.strftime('%d.%m.%Y') }}{% endblock %}
+{% block styles %}{{ ui.css('schedule') }}{{ ui.css('substitutions') }}{% endblock %}
+{% block scripts %}{{ ui.js('schedule') }}{{ ui.js('substitutions') }}{% endblock %}
+{% block body_class %}sch-print-page{% endblock %}
+
+{% block content %}
+<div class="cc-no-print">
+    {% call ui.page_header('Листок замен на день', subtitle=day_name ~ ', ' ~ d.strftime('%d.%m.%Y'), back={'href': url_for('substitutions'), 'label': 'Замены'}) %}
+        {% if subs %}<button type="button" class="btn btn-primary" data-print><i class="bi bi-printer" aria-hidden="true"></i><span>Печать / PDF</span></button>{% endif %}
+    {% endcall %}
+    <form class="sub-printbar" method="get" action="{{ url_for('substitutions_print') }}">
+        <a class="btn btn-light btn-sm cc-btn-icon" href="{{ url_for('substitutions_print', date=prev_day) }}" aria-label="Предыдущий день" title="Предыдущий день"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
+        <input class="form-control" type="date" name="date" value="{{ d.isoformat() }}" aria-label="Дата" data-autosubmit>
+        <a class="btn btn-light btn-sm cc-btn-icon" href="{{ url_for('substitutions_print', date=next_day) }}" aria-label="Следующий день" title="Следующий день"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
+        <button type="submit" class="btn btn-light btn-sm">Показать</button>
+    </form>
+    {% if counts.open %}{{ ui.hint('На листке ' ~ counts.open ~ ' ' ~ counts.open|plural('пара', 'пары', 'пар') ~ ' без назначенного преподавателя — они напечатаются с пометкой «замена уточняется».', icon='exclamation-triangle', tone='warning') }}{% endif %}
+</div>
+
+<div class="sch-sheets" data-sch-sheets>
+<section class="sch-sheet sch-sheet--{{ layout.density }}{{ ' sch-sheet--fill' if layout.fill and subs }}" style="--sch-row: {{ layout.row_mm }}mm" data-rows="{{ layout.rows }}" aria-label="Замены на {{ d.strftime('%d.%m.%Y') }}">
+    <div class="sch-sheet__page">
+        <header class="sch-sheet__head">
+            <img src="{{ static_url('img/logo.png') }}" alt="" width="44" height="44" class="sch-sheet__logo">
+            <div class="sch-sheet__headline">
+                <div class="sch-sheet__org">Caspian College · замены в расписании</div>
+                <h2 class="sch-sheet__title">Замены на {{ d.strftime('%d.%m.%Y') }}</h2>
+            </div>
+            <div class="sch-sheet__week"><span class="sch-sheet__week-type"><b>{{ day_name }}</b></span>
+                <span>{{ subs|length }} {{ subs|length|plural('пара', 'пары', 'пар') }}</span></div>
+        </header>
+        {% if subs %}
+        <table class="sch-sheet__table sub-sheet__table" data-no-wrap>
+            <colgroup><col class="sub-sheet__c-time"><col class="sub-sheet__c-group"><col><col class="sub-sheet__c-room"><col class="sub-sheet__c-who"></colgroup>
+            <thead><tr><th scope="col">Время</th><th scope="col">Группа</th><th scope="col">Дисциплина</th><th scope="col">Ауд.</th><th scope="col">Кто проведёт</th></tr></thead>
+            <tbody class="sch-sheet__dayrows">
+            {% for s in subs %}
+            <tr>
+                <td class="sch-sheet__time">{{ s.time_label }}</td>
+                <td class="sub-sheet__group">{{ s.group }}</td>
+                <td class="sch-sheet__lesson"><b class="sch-sheet__subject">{{ s.subject or '—' }}</b></td>
+                <td class="sch-sheet__room">{{ s.room }}</td>
+                <td class="sub-sheet__who">
+                    {% if s.status == 'assigned' %}<b class="sub-sheet__to">{{ s.to_name }}</b><span class="sch-sheet__who">вместо {{ short(s.from_name) }}</span>
+                    {% elif s.status == 'cancelled' %}<b class="sub-sheet__to">Пара снята</b><span class="sch-sheet__who">{{ short(s.from_name) }}</span>
+                    {% else %}<b class="sub-sheet__to sub-sheet__to--open">Замена уточняется</b><span class="sch-sheet__who">вместо {{ short(s.from_name) }}</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="sch-sheet__empty">На {{ d.strftime('%d.%m.%Y') }} замен нет.</p>
+        {% endif %}
+        <footer class="sch-sheet__foot">
+            <p class="sch-sheet__legend"><span>Остальные пары — по основному расписанию.</span></p>
+            <p class="sch-sheet__stamp">Сформировано {{ generated }}</p>
+        </footer>
+    </div>
+    <div class="sch-sheet__probe" aria-hidden="true"></div>
+</section>
+</div>
+{% endblock %}
