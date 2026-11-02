@@ -7,7 +7,7 @@
 from tests.base import CmsTestCase
 
 # Публичные (без входа) endpoint'ы
-PUBLIC_ENDPOINTS = {'login', 'logout', 'static', 'public_join', 'active_polls', 'poll_vote', 'poll_results'}
+PUBLIC_ENDPOINTS = {'login', 'logout', 'static', 'public_join', 'public_account_deletion', 'active_polls', 'poll_vote', 'poll_results'}
 
 # endpoint → kwargs для url_for (значения из tests/seed.py)
 PARAM_SAMPLES = {
